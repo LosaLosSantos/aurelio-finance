@@ -1,0 +1,29 @@
+[project]
+name = "backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.18.4",
+    "fastapi>=0.136.3",
+    "justetf-scraping",
+    "mcp>=2.2.0",
+    "mstarpy>=11.0.1",
+    "openai>=2.41.0",
+    "python-dotenv>=1.2.2",
+    "sqlalchemy>=2.0.50",
+    "uvicorn[standard]>=0.48.0",
+    "yfinance>=1.4.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Make the `app` package importable when running pytest from backend/.
+pythonpath = ["."]
+
+[tool.uv.sources]
+justetf-scraping = { git = "https://github.com/druzsan/justetf-scraping.git" }

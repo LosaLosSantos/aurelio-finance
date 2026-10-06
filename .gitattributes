@@ -1,0 +1,12 @@
+# frontend/src/api/schema.d.ts is written by `npm run gen:types`, which emits
+# LF. With core.autocrlf on, git would check it out as CRLF, the next build
+# would rewrite it as LF, and `git status` would then report it modified
+# forever with no content change — the kind of noise that teaches you to stop
+# reading `git status`. Pinning the ending also lets the generator's
+# "already matches" fast path work on a fresh clone, instead of rewriting the
+# file on the first build of every checkout.
+frontend/src/api/schema.d.ts text eol=lf
+
+# A shell script checked out with CRLF stops at its first line ("bash\r: No
+# such file or directory"), and Windows checkouts write CRLF by default.
+*.sh text eol=lf

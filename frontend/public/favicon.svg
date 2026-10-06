@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- The libella, on the app's own bone ground so the ink keeps its contrast
+       against both light and dark browser chrome. Inset to 0.8 so the beam
+       does not run into the rounded corners of the tab icon. -->
+  <rect width="200" height="200" rx="30" fill="#faf8f3"/>
+  <g transform="translate(20,20) scale(0.8)">
+    <g fill="#141413">
+      <rect x="0" y="0" width="200" height="24"/>
+      <rect x="84" y="112" width="32" height="83"/>
+    </g>
+    <g fill="none" stroke="#141413" stroke-width="17">
+      <circle cx="41" cy="81" r="25"/>
+      <circle cx="159" cy="81" r="25"/>
+    </g>
+    <polygon points="78,50 122,50 116,113 84,113" fill="#c0a06a"/>
+  </g>
+</svg>

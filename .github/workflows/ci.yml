@@ -1,0 +1,43 @@
+# CI: on every push/PR, run the backend test suite and build the frontend.
+# Two independent jobs -> they run in parallel and fail independently.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+      - name: Install dependencies (incl. dev)
+        run: uv sync --dev
+      - name: Run pytest
+        run: uv run pytest -q
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check & build
+        run: npm run build
+      # Node's own runner strips the types itself: no test framework to install.
+      - name: Unit tests
+        run: npm test

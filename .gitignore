@@ -1,0 +1,54 @@
+# ===== Secrets / environment variables =====
+.env
+.env.*
+!.env.example
+
+# ===== Database (SQLite) =====
+# Your records live in backend/data.db; the demo (python -m app.demo) in backend/demo.db.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data.db
+
+# ===== Python / backend (virtualenv uv & cache) =====
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ===== Node / frontend =====
+node_modules/
+frontend/dist/
+dist/
+*.log
+npm-debug.log*
+
+# ===== OS / editor cruft =====
+.DS_Store
+Thumbs.db
+
+# ===== Working notes: they stay local and are never published =====
+# The personal backlog and the working constraints serve whoever works in this
+# folder, not whoever uses the product. The product's documents are README.md
+# and docs/, and they are tracked.
+FutureIdeas.md
+SPEC.md
+ROADMAP.md
+
+# Database backups taken before a data migration: useful locally, never in the repo.
+*.db.bak-*
+
+# What justetf_scraping writes into its working directory (backend/ under
+# start.ps1) when justETF answers with an error: "<name>-error-page.html", or
+# "error-page.html" when no name is given. The app downloads the catalogue
+# unattended, so a failure must not leave an untracked file in the tree.
+*error-page.html
+
+# Prompt for a review run in a separate chat: local, not part of the product.
+CODE_REVIEW_PROMPT.md
+EXECUTION_PROMPTS.md
+prompts/
+review-aurelio.*
