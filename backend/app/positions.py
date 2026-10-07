@@ -207,8 +207,12 @@ class Position:
     # NOT `cost_basis is not None`: a blend of a recorded cost and a snapshot
     # value is not a known cost, and claiming it is makes the P/L lie.
     cost_known: bool
-    # True when that recorded cost was DERIVED (e.g. from a broker's reported
-    # % return) rather than read off a contract note.
+    # True when any unit behind that cost was not priced off a contract note:
+    # a photographed cost DERIVED from a broker's reported % return, or a buy
+    # still marked estimated, which is a plan's buy at the market close until
+    # the reader corrects it (`replay` carries it). It said "every unit came
+    # from a recorded fill" of every position born in the ledger, PAC buys
+    # included, until brief AI.
     cost_estimated: bool
     # The date this position was last CONFIRMED — the photo it sits in, or its
     # most recent ledger entry if it never appeared in one. Two different
@@ -268,6 +272,10 @@ class PositionState:
     # see the field of the same name on `Position` for why the distinction
     # cannot be recovered from the amounts alone.
     dividends_estimated: float
+    # Whether the units held include one whose price was estimated: a buy
+    # still marked estimated, or an opening the caller said was. Cleared when
+    # the walk empties the position, since no unit is left behind it.
+    cost_estimated: bool = False
 
 
 # --- The projection ---------------------------------------------------------
@@ -278,6 +286,7 @@ def replay(
     *,
     start_qty: float = 0.0,
     start_book: float = 0.0,
+    start_estimated: bool = False,
     until: str | None = None,
     amount_of: Callable[[models.Transaction], float] | None = None,
 ) -> PositionState:
@@ -301,6 +310,12 @@ def replay(
     wants everything. A boundary that turns on < against <= is not something a
     reader should have to recover by comparing three copies of a loop.
 
+    `start_estimated` says the opening's cost was itself estimated. A buy
+    still marked estimated (a plan's buy at the market close, until the
+    reader corrects it) makes the units held estimated too, whatever the
+    others cost: an average over them is no contract note's figure. A walk
+    that empties the position clears it.
+
     `amount_of` is how an entry's cash figure enters the book: the stored
     `amount` when left out, which is right only for a caller that reads units
     alone (the dividend path). An amount is in its entry's own `currency`, and
@@ -308,6 +323,7 @@ def replay(
     conversion — the projection passes its converter."""
     qty, book = start_qty, start_book
     realized = dividends = dividends_estimated = 0.0
+    estimated = start_estimated
     for t in sorted(entries, key=lambda t: (t.date, t.id)):
         if until is not None and t.date >= until:
             break
@@ -318,11 +334,14 @@ def replay(
             book -= sold * avg
             qty = max(qty - t.quantity, 0.0)
             realized += cash - sold * avg
+            if qty <= 0:
+                estimated = False
         elif t.kind == "close":
             # Everything goes at once. There are no units to price against an
             # average, so the basis is the entire book the entries built.
             realized += cash - book
             qty = book = 0.0
+            estimated = False
         elif t.kind == "dividend":
             dividends += cash
             # Split here and nowhere else. Three modules used to walk these
@@ -335,7 +354,9 @@ def replay(
         else:  # buy
             qty += t.quantity
             book += cash
-    return PositionState(qty, book, realized, dividends, dividends_estimated)
+            if t.estimated:
+                estimated = True
+    return PositionState(qty, book, realized, dividends, dividends_estimated, estimated)
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,7 +547,13 @@ def project(
                 # the row says so.
                 recorded = recorded_cost
                 opening = recorded if recorded is not None else from_photo
-                walked = replay(later, start_qty=h.quantity, start_book=opening, amount_of=cash)
+                walked = replay(
+                    later,
+                    start_qty=h.quantity,
+                    start_book=opening,
+                    start_estimated=recorded is not None and bool(h.cost_estimated),
+                    amount_of=cash,
+                )
                 quantity, book = walked.quantity, walked.book
                 realized, dividends = walked.realized_pl, walked.dividends
                 dividends_estimated = walked.dividends_estimated
@@ -553,7 +580,6 @@ def project(
                         later, start_qty=h.quantity, start_book=from_photo, amount_of=cash
                     ).book
                 )
-                cost_estimated = bool(h.cost_estimated) if recorded is not None else False
                 # True only when EVERY unit's basis is a price paid: either the
                 # cost was recorded, or the photograph contributed nothing and
                 # the whole position came from the ledger. One buy on top of a
@@ -563,6 +589,11 @@ def project(
                 cost_known = recorded is not None or (
                     from_photo == 0 and any(t.kind == "buy" for t in later)
                 )
+                # And estimated when any unit behind that cost is: the
+                # photograph's derived cost, or a plan's buy at the close on
+                # top of it. It read the photograph alone, so a recorded cost
+                # with plan buys added claimed a contract note for all of it.
+                cost_estimated = cost_known and walked.cost_estimated
 
             out.append(
                 Position(
@@ -646,7 +677,10 @@ def project(
                 dividends=divs,
                 dividends_estimated=walked.dividends_estimated,
                 cost_known=any(t.kind == "buy" for t in later),
-                cost_estimated=False,  # every unit came from a recorded fill
+                # Every unit came from a recorded buy, and a plan's buy is
+                # priced at the market close and marked estimated: the cost
+                # is estimated while one of those is behind the units held.
+                cost_estimated=walked.cost_estimated,
                 # Born from the ledger: its quantity was last confirmed by its
                 # most recent entry, not by any photograph.
                 observed_on=latest.date,

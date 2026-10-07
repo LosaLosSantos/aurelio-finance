@@ -38,6 +38,7 @@ import { prefillNote } from "./watchItem";
 import type { WatchlistItem } from "../api/watchlist";
 import { Row, RowsOrEmpty, Section, apiError, btnClass, cardClass, inputClass, locale, money, todayISO, CURRENCY_LIST } from "./ui";
 import { dividendWord } from "./dividendLine";
+import { avgCostTitle, plTitle } from "./costWords";
 import { marks, refusal, transaction } from "./required";
 import type { Focus } from "../nav";
 
@@ -503,13 +504,7 @@ export default function Portfolio({
                   <td className="px-4 py-2.5 text-right text-ink-soft">{r.quantity ?? "n/a"}</td>
                   <td
                     className="px-4 py-2.5 text-right text-ink-soft"
-                    title={
-                      !r.cost_known
-                        ? "No purchase price on record: this is the price the situation was recorded at, not what you paid"
-                        : r.cost_estimated
-                          ? "Average price paid, DERIVED from a reported return rather than read off a contract note"
-                          : "Average price actually paid, from recorded purchases"
-                    }
+                    title={avgCostTitle(r)}
                   >
                     {r.avg_cost == null ? (
                       "n/a"
@@ -565,13 +560,7 @@ export default function Portfolio({
                       "px-4 py-2.5 text-right font-medium " +
                       (r.cost_known ? toneClass(r.delta) : "text-ink-soft")
                     }
-                    title={
-                      !r.cost_known
-                        ? "Movement since the situation was recorded, NOT profit: no purchase price is on record"
-                        : r.cost_estimated
-                          ? "Profit or loss against a DERIVED purchase price: real, but not verified against a contract note"
-                          : "Profit or loss against the average price you paid"
-                    }
+                    title={plTitle(r)}
                   >
                     {r.delta != null ? (
                       <>

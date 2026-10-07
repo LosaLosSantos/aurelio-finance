@@ -202,8 +202,12 @@ def _position_caveats(r: dict) -> list[str]:
             "then, NOT profit"
         )
     elif r.get("cost_estimated"):
+        # Two sources since brief AI: a photographed cost derived from a
+        # reported return, and a plan's buy at the close, which this line
+        # used to misname as the first.
         notes.append(
-            "cost ESTIMATED — derived from a reported % return, not read off a "
+            "cost ESTIMATED: some or all of it is a plan's buy priced at a market "
+            "close, or a cost derived from a reported % return, not read off a "
             "contract note"
         )
     if r.get("currency_note"):
