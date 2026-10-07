@@ -53,15 +53,20 @@ export type Entry = {
   fx_as_of: string | null;
 };
 
-/* Half a cent: the point at which two figures round to different cents, which
-   is what "a different amount" means about money.
+/* Half a cent: as far as the backend's rounding can move a figure it works
+   out, the half cent itself included.
 
-   Not a cent, and the difference is the whole reason it is named rather than
-   written inline. The backend rounds to cents only when a RATE was used
-   (`crud._transaction_columns`), so a same-currency 10 x 30.05 is stored as
-   whatever the double came to — 300.49999999999994 is the same figure as
-   300.50 and must not read as a statement's, while 300.51 must. */
-const ROUNDS_TO_A_DIFFERENT_CENT = 0.005;
+   `crud._transaction_columns` stores every amount it works out in cents
+   (since brief AI; before, only when a rate was used), so a derived amount
+   is the row's own figure rounded to the cent, never more than half a cent
+   from it. At an exact tie it is exactly half a cent away: 1 x 0.125 is
+   stored as 0.12, and read as a statement's it would open pre-filled and
+   stop following its quantity. Rows stored before keep the double they came
+   to (10 x 30.05 as 300.49999999999994), well inside it. A figure further
+   than half a cent can only have come from a statement: 300.51 against
+   300.50. The hair is the double's own error at the edge. */
+const HALF_A_CENT = 0.005;
+const HAIR = 1e-9;
 
 /** What one entry costs or pays, from the figures beside it.
 
@@ -101,7 +106,8 @@ export function acrossCurrencies(
 
     Across currencies: the app stamps `fx_as_of` when it worked the figure out,
     so an empty one is the reader's own. In one currency: it is stated when it
-    is not what the row would derive.
+    is further from what the row would derive than the backend's rounding to
+    the cent can take it.
 
     A `close` is neither — its proceeds ARE the amount, typed into the box that
     holds them, and the form puts them back there itself. */
@@ -110,7 +116,7 @@ export function wasStated(entry: Entry): boolean {
   if (acrossCurrencies(entry.currency, entry.price_currency)) {
     return entry.fx_as_of == null;
   }
-  return Math.abs(entry.amount - derivedAmount(entry)) >= ROUNDS_TO_A_DIFFERENT_CENT;
+  return Math.abs(entry.amount - derivedAmount(entry)) > HALF_A_CENT + HAIR;
 }
 
 /** What the debit box opens with when an entry is edited: the stored figure

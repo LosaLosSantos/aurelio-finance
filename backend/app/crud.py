@@ -980,7 +980,8 @@ class LedgerRateUnknown(ValueError):
 def _transaction_columns(db: Session, row: dict, sent: Collection[str]) -> dict:
     """Ledger columns: ISO date, amount defaulted per kind — a buy costs
     quantity*price + fees; a sell/dividend nets quantity*price - fees
-    (proceeds after fees, floored at 0).
+    (proceeds after fees, floored at 0), worked out in cents. An amount the
+    reader states is kept as stated.
 
     quantity*price is in `price_currency` and the fees and the amount are in
     `currency`, so when the two differ the gross is converted first — at the
@@ -1011,9 +1012,15 @@ def _transaction_columns(db: Session, row: dict, sent: Collection[str]) -> dict:
                 "statement. That is the figure the account actually moved by."
             )
         fees = row["fees"] or 0.0
-        if fx_day is not None:
-            gross = round(gross, 2)  # an account is debited in cents
-        payload["amount"] = gross + fees if row["kind"] == "buy" else max(gross - fees, 0.0)
+        # An account is debited and credited in cents, whichever way the gross
+        # was reached: at a rate, from pence into pounds, or in the price's own
+        # currency. Only the first was rounded until brief AI, so a dividend of
+        # 30 x 0.352345 in the account's currency was stored as
+        # 10.570350000000001. Rounded again after the fees, which a float sum
+        # can leave a hair off a cent (0.1 + 0.2).
+        gross = round(gross, 2)
+        moved = gross + fees if row["kind"] == "buy" else max(gross - fees, 0.0)
+        payload["amount"] = round(moved, 2)
         payload["fx_as_of"] = fx_day
     elif "amount" in sent:
         payload["fx_as_of"] = None

@@ -50,10 +50,10 @@ test("a same-currency amount that is NOT what the row derives is the reader's", 
 });
 
 test("a figure a double cannot hold exactly is still not a statement's", () => {
-  // 10 x 30.05 is 300.49999999999994 as a double, and the backend stores it
-  // unrounded because no rate was used. Half a cent of tolerance — the point
-  // at which two figures round to different cents — or every such row would
-  // open pre-filled and then stop following its quantity.
+  // 10 x 30.05 is 300.49999999999994 as a double, and the backend stored it
+  // unrounded when no rate was used, until brief AI: those rows are still on
+  // record. Half a cent of tolerance, or every such row would open pre-filled
+  // and then stop following its quantity.
   const derived = entry({ unit_price: 30.05, amount: 10 * 30.05 });
   assert.equal(wasStated(derived), false);
   // And a figure that rounds to a different cent IS a statement's.
@@ -61,6 +61,18 @@ test("a figure a double cannot hold exactly is still not a statement's", () => {
   // The boundary itself, from both sides: 300.504 still rounds to 300.50.
   assert.equal(wasStated(entry({ unit_price: 30.05, amount: 300.504 })), false);
   assert.equal(wasStated(entry({ unit_price: 30.05, amount: 300.506 })), true);
+});
+
+test("an amount the backend rounded to the cent is still the derived one, at an exact tie too", () => {
+  // Since brief AI the backend stores every amount it works out in cents:
+  // 1 x 0.125 is stored as 0.12, an exact tie, exactly half a cent away.
+  const tie = entry({ kind: "dividend", quantity: 1, unit_price: 0.125, amount: 0.12 });
+  assert.equal(wasStated(tie), false);
+  assert.equal(debitOnEdit(tie), "");
+  // 30 x 0.352345 is stored as 10.57; a cent further is a statement's.
+  const dividend = { kind: "dividend", quantity: 30, unit_price: 0.352345 };
+  assert.equal(wasStated(entry({ ...dividend, amount: 10.57 })), false);
+  assert.equal(wasStated(entry({ ...dividend, amount: 10.58 })), true);
 });
 
 test("across two currencies the rate day answers instead", () => {
