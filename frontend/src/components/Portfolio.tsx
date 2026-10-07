@@ -39,6 +39,14 @@ import type { WatchlistItem } from "../api/watchlist";
 import { Row, RowsOrEmpty, Section, apiError, btnClass, cardClass, inputClass, locale, money, todayISO, CURRENCY_LIST } from "./ui";
 import { dividendWord } from "./dividendLine";
 import { avgCostTitle, plTitle } from "./costWords";
+import {
+  SHOWN,
+  correctingLine,
+  estimatedDividends,
+  movedOffItsDay,
+  offerLine,
+  olderLine,
+} from "./sameDividend";
 import { marks, refusal, transaction } from "./required";
 import type { Focus } from "../nav";
 
@@ -1042,6 +1050,9 @@ function BuysSection({
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState("");
   const [creatingInstitution, setCreatingInstitution] = useState(false);
+  // Set by "Correct this one" (brief AI): the form is correcting a dividend
+  // the app recorded, and remembers the date that was typed for a new one.
+  const [correcting, setCorrecting] = useState<{ id: number; typedDate: string } | null>(null);
   const formRef = useRef<HTMLDivElement | null>(null);
   const quantityRef = useRef<HTMLInputElement | null>(null);
   const newNameRef = useRef<HTMLInputElement | null>(null);
@@ -1093,6 +1104,7 @@ function BuysSection({
     // sentence about the ticker box hanging over an empty ticker box is a
     // note about nothing.
     setPickNote(null);
+    setCorrecting(null);
   }
 
   /* A watchlist row arriving. It fills the two things it can vouch for and
@@ -1131,6 +1143,7 @@ function BuysSection({
   }));
 
   function startEdit(t: Transaction) {
+    setCorrecting(null);
     setEditId(t.id);
     setKind(t.kind);
     setDate(t.date);
@@ -1161,6 +1174,27 @@ function BuysSection({
       // are not.
       setDebit(debitOnEdit(t));
     }
+  }
+
+  /* "Correct this one" (brief AI). A dividend typed on top of one the app
+     recorded was stored beside it and counted twice, so the form offers that
+     row instead, and this turns the form into its correction: what the reader
+     typed for the new one goes onto it, a box they left empty keeps the row's
+     figure, and the row keeps its own date, the ex-date the catch-up finds it
+     by. A price typed brings its currency with it; a per-share figure in
+     euros does not belong beside the row's dollars. */
+  function correctInstead(t: Transaction) {
+    const typed = { quantity, unitPrice, fees, debit, date, priceCurrency, currencyChoice };
+    startEdit(t);
+    if (typed.quantity) setQuantity(typed.quantity);
+    if (typed.unitPrice) {
+      setUnitPrice(typed.unitPrice);
+      setPriceCurrencyChoice(typed.priceCurrency);
+    }
+    if (typed.fees) setFees(typed.fees);
+    if (typed.debit) setDebit(typed.debit);
+    if (typed.currencyChoice) setCurrencyChoice(typed.currencyChoice);
+    setCorrecting({ id: t.id, typedDate: typed.date });
   }
 
   /* The first institution, made from inside the form that needs one.
@@ -1279,6 +1313,27 @@ function BuysSection({
     spend > purse.projected
       ? purse
       : null;
+
+  /* A new dividend that may already be on record (brief AI): the estimated
+     rows of the same account and ticker it could be, offered for correction.
+     Offered, never refused: a special dividend on the same day is a real
+     case, and "Add dividend" stays. */
+  const offered =
+    editId == null && kind === "dividend"
+      ? estimatedDividends(items, {
+          institutionId: institutionId ? Number(institutionId) : null,
+          symbol,
+          date,
+        })
+      : [];
+  const editing = editId != null ? items.find((t) => t.id === editId) : undefined;
+  const correctingNote =
+    correcting && editing && correcting.id === editing.id
+      ? correctingLine(editing.date, correcting.typedDate, fmtDate)
+      : null;
+  // Said, not refused: moved off its ex-date, a dividend the app recorded is
+  // recorded again at the next start.
+  const movedNote = editing ? movedOffItsDay(editing, date, fmtDate) : null;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -1589,6 +1644,30 @@ function BuysSection({
           </span>
         </div>
       )}
+      {offered.length > 0 && (
+        <div className="mt-2 rounded-sm border border-rule bg-tint p-2 text-xs text-ink-soft">
+          <p>{offerLine(symbol, instName(Number(institutionId)) ?? "this account")}</p>
+          <ul className="mt-1 space-y-1">
+            {offered.slice(0, SHOWN).map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center gap-2">
+                <span className="tnum text-ink">
+                  {fmtDate(t.date)} · {money(t.currency, "cents").format(t.amount)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => correctInstead(t)}
+                  className="rounded-sm border border-rule px-2 py-1 text-xs text-ink-soft transition hover:border-olive hover:text-olive"
+                >
+                  Correct this one
+                </button>
+              </li>
+            ))}
+          </ul>
+          {olderLine(offered.length) && <p className="mt-1">{olderLine(offered.length)}</p>}
+        </div>
+      )}
+      {correctingNote && <p className="mt-2 text-xs text-olive">{correctingNote}</p>}
+      {movedNote && <p className="mt-2 text-xs text-warn">{movedNote}</p>}
       {/* Shown, and then allowed through. The records being behind is the case
           the reader is here to correct, so this is a fact about the records,
           not a verdict on the entry. */}
