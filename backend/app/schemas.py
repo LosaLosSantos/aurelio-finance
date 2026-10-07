@@ -1356,11 +1356,31 @@ class ExpenseRead(ExpenseBase):
     created_at: str
 
 
-class CashFlowSummary(BaseModel):
-    """Monthly cash-flow summary (all values normalized to a monthly run-rate)."""
+class FlowNotCounted(BaseModel):
+    """An income or an expense the monthly figures leave out, with the dates
+    that say why: its first payment is after today, or it has ended. The Cash
+    flow page marks its own row by `side` and `id`."""
 
     model_config = API_OUT
 
+    side: Literal["income", "expense"]
+    id: int
+    name: str
+    frequency: str | None
+    start_date: datetime.date | None
+    end_date: datetime.date | None
+
+
+class CashFlowSummary(BaseModel):
+    """The income and expenses IN FORCE today as a monthly run-rate, one-offs
+    excluded, and the flows those figures leave out
+    (`analytics.compute_flows_in_force`, the analysis's own computation)."""
+
+    model_config = API_OUT
+
+    on: datetime.date = Field(..., description="The day the flows are in force on: today")
+    incomes_in_force: int = Field(..., description="So 'none in force' can be told from a sum of zero")
+    expenses_in_force: int
     monthly_income: float
     monthly_expenses: float
     monthly_net: float
@@ -1369,6 +1389,13 @@ class CashFlowSummary(BaseModel):
     passive_income: float
     essential_expenses: float
     discretionary_expenses: float
+    undated: int = Field(
+        ..., description="Flows with no start date, counted as in force: nothing says they have not started"
+    )
+    scheduled: list[FlowNotCounted] = Field(
+        ..., description="First payment after today: not counted until then"
+    )
+    ended: list[FlowNotCounted] = Field(..., description="Ended before today: no longer counted")
     base_currency: BaseCurrency
 
 

@@ -128,7 +128,7 @@ def test_cash_nobody_entered_is_not_cash_of_zero(client):
 # --- The flows ------------------------------------------------------------------
 
 
-def test_only_the_flows_in_force_today_are_counted_and_the_scheduled_ones_are_listed_apart(records):
+def test_only_the_flows_in_force_today_are_counted_and_the_others_are_listed_apart(records):
     with SessionLocal() as db:
         analyst = _analyst(db)
 
@@ -152,23 +152,31 @@ def test_only_the_flows_in_force_today_are_counted_and_the_scheduled_ones_are_li
     assert (
         f"  - expense: Auto nuova [discretionary/transport] 10000.00 EUR one_off, from {LATER}"
     ) in analyst
-    assert "Palestra" not in analyst, "an ended flow is neither counted nor listed"
+    # Listed apart since brief AI, so the figures can be explained, and still
+    # not in them; brief Z had dropped an ended flow altogether.
+    assert (
+        "- Ended before today, so NOT counted above:\n"
+        f"  - expense: Palestra [discretionary/leisure] 50.00 EUR monthly, since {LONG_AGO}, "
+        f"until {ENDED}"
+    ) in analyst
 
 
-def test_a_flow_reaches_the_analyst_as_the_chat_lists_it_plus_its_dates(records):
+def test_a_flow_reaches_the_analyst_and_the_chat_as_one_line_with_its_dates(records):
     with SessionLocal() as db:
         analyst, chat = _analyst(db), advisor.build_context(db)
-    line = "- Affitto [essential/housing] 1000.00 EUR monthly"
+    line = f"  - Affitto [essential/housing] 1000.00 EUR monthly, since {LONG_AGO}"
     assert line in chat.splitlines()
-    assert f"  {line}, since {LONG_AGO}" in analyst.splitlines()
+    assert line in analyst.splitlines()
 
 
-def test_the_run_rate_the_page_reads_is_left_as_it_is(records):
-    """The Cash flow page and the chat keep counting every flow whatever its
-    dates, until their own item: only the analysis was moved off it."""
-    with SessionLocal() as db:
-        flow = analytics.compute_cashflow(db)
-    assert flow["monthly_income"] == 7000.0  # the job that has not started, too
+def test_the_page_reads_the_figures_the_analysis_reads(records, client):
+    """The Cash flow page counted every flow whatever its dates, the job that
+    has not started included (7000.00 of income), until brief AI moved it onto
+    the analysis's own computation."""
+    flow = client.get("/api/dashboard/cashflow").json()
+    assert (flow["monthly_income"], flow["monthly_expenses"], flow["monthly_net"]) == (
+        3000.0, 1200.0, 1800.0,
+    )
 
 
 def test_no_flow_in_force_is_said_as_none_not_as_zero(client):

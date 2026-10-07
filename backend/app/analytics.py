@@ -1117,70 +1117,51 @@ def _monthly(amount: float, frequency: str | None) -> float:
     return amount * _MONTHLY_FACTOR.get(frequency or "monthly", 1.0)
 
 
-def compute_cashflow(db: Session) -> dict:
-    """Monthly cash-flow summary: income vs expenses, savings rate, and the
-    active/passive and essential/discretionary splits (all normalized monthly).
+def flow_status(flow, on: str) -> str:
+    """Where one income or expense stands on `on`: "ended" when its end date is
+    before that day, "scheduled" when its first payment is after it, and "in
+    force" otherwise. Both bounds count as in force, and a flow with no start
+    date is in force: nothing says it has not started.
 
-    This is a frequency-based run-rate (it ignores start/end dates); the dated
-    cash projection lives in ``compute_cash_position``."""
-    incomes = list(db.scalars(select(models.IncomeSource)))
-    expenses = list(db.scalars(select(models.Expense)))
-    conv = fx.Converter(db)
-
-    def monthly(item) -> float:
-        """One flow's monthly run-rate, in the base currency."""
-        return _monthly(conv.to_base_or_as_stored(item.amount, item.currency), item.frequency)
-
-    monthly_income = sum(monthly(i) for i in incomes)
-    monthly_expenses = sum(monthly(e) for e in expenses)
-    monthly_net = monthly_income - monthly_expenses
-
-    return {
-        "monthly_income": monthly_income,
-        "monthly_expenses": monthly_expenses,
-        "monthly_net": monthly_net,
-        "savings_rate": (monthly_net / monthly_income) if monthly_income > 0 else None,
-        "active_income": sum(monthly(i) for i in incomes if i.kind == "active"),
-        "passive_income": sum(monthly(i) for i in incomes if i.kind == "passive"),
-        "essential_expenses": sum(monthly(e) for e in expenses if e.nature == "essential"),
-        "discretionary_expenses": sum(
-            monthly(e) for e in expenses if e.nature == "discretionary"
-        ),
-        "base_currency": conv.base,
-    }
+    The one rule for every reader of the monthly figures. A flow whose end
+    comes before its start contradicts itself, and reads as ended."""
+    if flow.end_date is not None and flow.end_date < on:
+        return "ended"
+    if flow.start_date is not None and flow.start_date > on:
+        return "scheduled"
+    return "in force"
 
 
 def compute_flows_in_force(db: Session, on: str) -> dict:
     """The income and expenses IN FORCE on `on`, as a monthly run-rate in the
-    base currency, with the ones that have not started yet listed apart.
+    base currency, with the ones still to start and the ones that have ended
+    listed apart and never counted (`flow_status`).
 
-    `compute_cashflow` above is the run-rate the Cash flow page and the chat
-    read, and it ignores dates: a flow that starts next month counts there as
-    one running now, so an analysis handed that figure would judge a monthly
-    surplus that does not exist yet. This one is for the analysis; the page
-    and the chat keep theirs until their own item.
+    The one computation behind every monthly figure: the Cash flow page and
+    the Dashboard (`/api/dashboard/cashflow`), the chat's context and the
+    analyst's. The page and the chat used to read a run-rate that ignored the
+    dates, so a salary that starts next month was summed as one running now,
+    and a gym cancelled in the spring was still being paid, with nothing on
+    screen or in the chat to say either. Brief Z moved the analysis off it;
+    brief AI the rest.
 
-    In force on `on`: started on or before it and not ended before it, both
-    bounds inclusive. Beyond that filter, three cases had to be decided:
+    Beyond the filter, three cases had to be decided:
 
     - A flow with NO start date is counted as in force, and counted in
-      `undated` so the reader of the figure can be told. Nothing says it has
-      not started, and it is what the page and the chat count it as. The cash
-      register makes the opposite choice for its own reason: a projection
-      cannot place an undated occurrence in time, so it adds nothing for it.
-    - A one-off adds nothing a month, as in the run-rate. One still to come is
-      listed with the scheduled flows: it is money that will move.
-    - A flow that has ENDED is neither counted nor listed.
+      `undated` so the reader of the figure can be told. The cash register
+      makes the opposite choice for its own reason: a projection cannot place
+      an undated occurrence in time, so it adds nothing for it.
+    - A one-off adds nothing a month. One still to come is listed with the
+      scheduled flows: it is money that will move.
+    - A flow that has ENDED is listed apart, so whoever reads the figures can
+      say why it is not in them.
 
-    `in_force` and `scheduled` list each flow as the chat's lists print it,
-    with the name the reader gave it and how it is classified, and never its
-    notes, which the chat does not read either (the reader's choice,
-    2026-10-02, for the analyst to read the records as the chat does)."""
+    `in_force`, `scheduled` and `ended` list each flow as the chat prints it,
+    with the name the reader gave it, how it is classified and its id (for
+    the page, which marks its own rows), and never its notes, which the chat
+    does not read either (the reader's choice, 2026-10-02, for the analyst to
+    read the records as the chat does)."""
     conv = fx.Converter(db)
-
-    def in_force(flow) -> bool:
-        started = flow.start_date is None or flow.start_date <= on
-        return started and (flow.end_date is None or flow.end_date >= on)
 
     def monthly(flow) -> float:
         return _monthly(conv.to_base_or_as_stored(flow.amount, flow.currency), flow.frequency)
@@ -1188,6 +1169,7 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
     def described(flow, side: str, classified: str | None) -> dict:
         return {
             "side": side,
+            "id": flow.id,
             "name": flow.name,
             "classified": classified,
             "category": flow.category,
@@ -1198,14 +1180,22 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
             "end_date": flow.end_date,
         }
 
-    incomes = list(db.scalars(select(models.IncomeSource)))
-    expenses = list(db.scalars(select(models.Expense)))
-    running_in = [i for i in incomes if in_force(i)]
-    running_out = [e for e in expenses if in_force(e)]
+    flows = [
+        (described(i, "income", i.kind), i)
+        for i in db.scalars(select(models.IncomeSource).order_by(models.IncomeSource.id))
+    ] + [
+        (described(e, "expense", e.nature), e)
+        for e in db.scalars(select(models.Expense).order_by(models.Expense.id))
+    ]
+    by_status: dict[str, list[tuple[dict, object]]] = {"in force": [], "scheduled": [], "ended": []}
+    for shown, flow in flows:
+        by_status[flow_status(flow, on)].append((shown, flow))
+    running = by_status["in force"]
+    running_in = [flow for shown, flow in running if shown["side"] == "income"]
+    running_out = [flow for shown, flow in running if shown["side"] == "expense"]
     monthly_income = sum(monthly(i) for i in running_in)
     monthly_expenses = sum(monthly(e) for e in running_out)
-    later = [described(i, "income", i.kind) for i in incomes if i.start_date and i.start_date > on]
-    later += [described(e, "expense", e.nature) for e in expenses if e.start_date and e.start_date > on]
+    monthly_net = monthly_income - monthly_expenses
 
     return {
         "on": on,
@@ -1214,14 +1204,23 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
         "expenses_in_force": len(running_out),
         "monthly_income": monthly_income,
         "monthly_expenses": monthly_expenses,
-        "monthly_net": monthly_income - monthly_expenses,
+        "monthly_net": monthly_net,
+        "savings_rate": (monthly_net / monthly_income) if monthly_income > 0 else None,
+        "active_income": sum(monthly(i) for i in running_in if i.kind == "active"),
+        "passive_income": sum(monthly(i) for i in running_in if i.kind == "passive"),
         "essential_expenses": sum(monthly(e) for e in running_out if e.nature == "essential"),
         "discretionary_expenses": sum(
             monthly(e) for e in running_out if e.nature == "discretionary"
         ),
         "undated": sum(1 for f in running_in + running_out if f.start_date is None),
-        "in_force": [described(i, "income", i.kind) for i in running_in]
-        + [described(e, "expense", e.nature) for e in running_out],
-        "scheduled": sorted(later, key=lambda f: (f["start_date"], f["side"])),
+        "in_force": [shown for shown, _ in running],
+        "scheduled": sorted(
+            (shown for shown, _ in by_status["scheduled"]),
+            key=lambda f: (f["start_date"], f["side"]),
+        ),
+        "ended": sorted(
+            (shown for shown, _ in by_status["ended"]),
+            key=lambda f: (f["end_date"], f["side"]),
+        ),
         "base_currency": conv.base,
     }

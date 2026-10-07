@@ -354,7 +354,9 @@ export interface paths {
         };
         /**
          * Get Cashflow
-         * @description Monthly cash-flow summary: income vs expenses, savings rate, splits.
+         * @description The income and expenses in force today as a monthly run-rate, the
+         *     savings rate and the splits, and the flows left out: the ones still to
+         *     start and the ones that have ended.
          */
         get: operations["get_cashflow_api_dashboard_cashflow_get"];
         put?: never;
@@ -1830,7 +1832,9 @@ export interface components {
         };
         /**
          * CashFlowSummary
-         * @description Monthly cash-flow summary (all values normalized to a monthly run-rate).
+         * @description The income and expenses IN FORCE today as a monthly run-rate, one-offs
+         *     excluded, and the flows those figures leave out
+         *     (`analytics.compute_flows_in_force`, the analysis's own computation).
          */
         CashFlowSummary: {
             /** Active Income */
@@ -1842,18 +1846,46 @@ export interface components {
             base_currency: string;
             /** Discretionary Expenses */
             discretionary_expenses: number;
+            /**
+             * Ended
+             * @description Ended before today: no longer counted
+             */
+            ended: components["schemas"]["FlowNotCounted"][];
             /** Essential Expenses */
             essential_expenses: number;
+            /** Expenses In Force */
+            expenses_in_force: number;
+            /**
+             * Incomes In Force
+             * @description So 'none in force' can be told from a sum of zero
+             */
+            incomes_in_force: number;
             /** Monthly Expenses */
             monthly_expenses: number;
             /** Monthly Income */
             monthly_income: number;
             /** Monthly Net */
             monthly_net: number;
+            /**
+             * On
+             * Format: date
+             * @description The day the flows are in force on: today
+             */
+            on: string;
             /** Passive Income */
             passive_income: number;
             /** Savings Rate */
             savings_rate: number | null;
+            /**
+             * Scheduled
+             * @description First payment after today: not counted until then
+             */
+            scheduled: components["schemas"]["FlowNotCounted"][];
+            /**
+             * Undated
+             * @description Flows with no start date, counted as in force: nothing says they have not started
+             */
+            undated: number;
         };
         /**
          * CashPosition
@@ -2939,6 +2971,29 @@ export interface components {
              * Start Date
              * @description First occurrence / one-off date (YYYY-MM-DD)
              */
+            start_date: string | null;
+        };
+        /**
+         * FlowNotCounted
+         * @description An income or an expense the monthly figures leave out, with the dates
+         *     that say why: its first payment is after today, or it has ended. The Cash
+         *     flow page marks its own row by `side` and `id`.
+         */
+        FlowNotCounted: {
+            /** End Date */
+            end_date: string | null;
+            /** Frequency */
+            frequency: string | null;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "income" | "expense";
+            /** Start Date */
             start_date: string | null;
         };
         /**

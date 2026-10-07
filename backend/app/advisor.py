@@ -602,10 +602,10 @@ def _render_real_assets(db: Session) -> list[str]:
 
 
 def _flow_text(name, classified, category, amount, currency, frequency) -> str:
-    """One income source or expense as the chat's lists print it: the name, how
-    it is classified (active or passive, essential or discretionary), its
-    category, the amount in its own currency and how often. Its notes are not
-    here, for the chat or the analyst. The analyst's lines add the dates."""
+    """One income source or expense as the chat and the analyst read it: the
+    name, how it is classified (active or passive, essential or discretionary),
+    its category, the amount in its own currency and how often. Its notes are
+    not here, for either of them. `_flow_line` adds the dates."""
     return (
         f"{name} [{classified or 'n/a'}/{category or 'n/a'}] "
         f"{amount:.2f} {currency} {frequency or ''}"
@@ -616,7 +616,7 @@ def build_context(db: Session) -> str:
     """Assemble the full financial picture as a structured text for the LLM."""
     summary = analytics.compute_summary(db)
     allocation = analytics.compute_allocation(db)
-    cashflow = analytics.compute_cashflow(db)
+    flows = analytics.compute_flows_in_force(db, dated.today())
 
     lines: list[str] = [
         "# User financial situation",
@@ -660,20 +660,11 @@ def build_context(db: Session) -> str:
         lines.append(f"- [real] {s['category']}: {s['value']:.2f}")
     lines.append("")
 
-    lines.append("## Monthly cash flow (run-rate)")
-    lines.append(
-        f"- Income: {cashflow['monthly_income']:.2f} "
-        f"(active {cashflow['active_income']:.2f}, passive {cashflow['passive_income']:.2f})"
-    )
-    lines.append(
-        f"- Expenses: {cashflow['monthly_expenses']:.2f} "
-        f"(essential {cashflow['essential_expenses']:.2f}, "
-        f"discretionary {cashflow['discretionary_expenses']:.2f})"
-    )
-    lines.append(
-        f"- Net: {cashflow['monthly_net']:.2f}; savings rate: {cashflow['savings_rate']}"
-    )
-    lines.append("")
+    # The analyst's block, from the same renderer: every flow with its dates,
+    # the ones in force counted, the ones still to start and the ones that
+    # have ended listed apart. A run-rate and two dateless lists stood here,
+    # and they counted and printed a salary starting next month as running.
+    lines.extend(_render_flows_in_force(flows))
 
     lines.append("## Investment positions (latest situation + recorded buys/sells)")
     portfolio = analytics.compute_portfolio(db)  # cached prices only, no network
@@ -722,18 +713,6 @@ def build_context(db: Session) -> str:
     if summary["liabilities_total"] > 0 and assets_total > 0:
         ratio = summary["liabilities_total"] / assets_total
         lines.append(f"- Debt-to-asset ratio: {ratio * 100:.1f}%")
-    lines.append("")
-
-    lines.append("## Income sources")
-    for i in crud.get_income_sources(db):
-        lines.append(f"- {_flow_text(i.name, i.kind, i.category, i.amount, i.currency, i.frequency)}")
-    lines.append("")
-
-    lines.append("## Expenses")
-    for e in crud.get_expenses(db):
-        lines.append(
-            f"- {_flow_text(e.name, e.nature, e.category, e.amount, e.currency, e.frequency)}"
-        )
 
     plans = crud.get_accumulation_plans(db)
     if plans:
@@ -803,7 +782,8 @@ def build_portfolio_context(db: Session) -> str:
     composition (countries, sectors, overlap), accumulation plans and a ledger
     digest. Beside them, since brief Z (2026-10-02): the cash on each account
     projected to today, the income and expenses in force today with the ones
-    still to start listed apart, the real assets, the debts, and the wholes
+    still to start and the ones that have ended listed apart (the chat's own
+    block since brief AI), the real assets, the debts, and the wholes
     every share is taken from. Run 1 had only the first half: it called a share
     of the investments "at risk" as if it were a share of everything, and
     asked the reader how much cash they could reach tomorrow.
@@ -980,9 +960,10 @@ def _render_cash_beside(positions: list[dict], summary: dict) -> list[str]:
 
 
 def _flow_line(flow: dict, *, scheduled: bool) -> str:
-    """One flow from `compute_flows_in_force`, as the chat's lists print it,
-    with its dates: when it started (or that nobody said) for one in force,
-    when it starts for one still to come, and when it ends if it does."""
+    """One flow from `compute_flows_in_force`, as `_flow_text` prints it, with
+    its dates: when it started (or that nobody said) for one in force or
+    ended, when it starts for one still to come, and when it ends if it
+    does."""
     text = _flow_text(
         flow["name"], flow["classified"], flow["category"],
         flow["amount"], flow["currency"], flow["frequency"],
@@ -998,19 +979,35 @@ def _flow_line(flow: dict, *, scheduled: bool) -> str:
 
 def _render_flows_in_force(flows: dict) -> list[str]:
     """The income and expenses running today, as `compute_flows_in_force`
-    counts them: the totals first, then each flow as the chat's lists print
-    it, with its dates, then the ones that have not started, listed apart
-    and outside every figure."""
-    expenses = (
-        f"- Expenses: {flows['monthly_expenses']:.2f} a month "
-        f"(essential {flows['essential_expenses']:.2f}, "
-        f"discretionary {flows['discretionary_expenses']:.2f}"
+    counts them: the totals first, then each flow as the chat used to list
+    it, with its dates, then the ones that have not started and the ones that
+    have ended, each listed apart and outside every figure.
+
+    One renderer for the chat and the analyst (brief AI). The chat had a
+    run-rate of its own and two lists with no dates, so a salary starting
+    next month was counted and printed as running, and an ended expense as
+    still paid."""
+
+    def split(total: float, **parts: float) -> str:
+        """" (active 1.00, passive 2.00)", with what no part claims named."""
+        text = ", ".join(f"{name} {amount:.2f}" for name, amount in parts.items())
+        unclassified = total - sum(parts.values())
+        if unclassified >= 0.005:
+            text += f", not classified {unclassified:.2f}"
+        return f" ({text})"
+
+    income = f"- Income: {flows['monthly_income']:.2f} a month" + split(
+        flows["monthly_income"], active=flows["active_income"], passive=flows["passive_income"]
     )
-    unclassified = (
-        flows["monthly_expenses"] - flows["essential_expenses"] - flows["discretionary_expenses"]
+    expenses = f"- Expenses: {flows['monthly_expenses']:.2f} a month" + split(
+        flows["monthly_expenses"],
+        essential=flows["essential_expenses"],
+        discretionary=flows["discretionary_expenses"],
     )
-    if unclassified >= 0.005:
-        expenses += f", not classified {unclassified:.2f}"
+    rate = flows["savings_rate"]
+    left = f"- Left each month (income minus expenses): {flows['monthly_net']:.2f}" + (
+        f", a savings rate of {rate * 100:.1f}%" if rate is not None else ""
+    )
     # "None in force" and a sum of zero are different claims: a reader who
     # has recorded no income has not said they earn nothing, and a monthly net
     # computed against nothing would read as a loss they never stated.
@@ -1018,11 +1015,9 @@ def _render_flows_in_force(flows: dict) -> list[str]:
     missing = [side for side, n in (("income", earning), ("expense", spending)) if not n]
     lines = [
         f"## Income and expenses in force today ({flows['on']}), as a monthly run-rate",
-        f"- Income: {flows['monthly_income']:.2f} a month"
-        if earning
-        else "- Income: none in force today",
-        expenses + ")" if spending else "- Expenses: none in force today",
-        f"- Left each month (income minus expenses): {flows['monthly_net']:.2f}"
+        income if earning else "- Income: none in force today",
+        expenses if spending else "- Expenses: none in force today",
+        left
         if not missing
         else f"- What is left each month cannot be said: no {' and no '.join(missing)} "
         "is in force today.",
@@ -1044,6 +1039,11 @@ def _render_flows_in_force(flows: dict) -> list[str]:
         lines.append("- Starting after today, so NOT counted above:")
         lines.extend(
             f"  - {f['side']}: {_flow_line(f, scheduled=True)}" for f in flows["scheduled"]
+        )
+    if flows["ended"]:
+        lines.append("- Ended before today, so NOT counted above:")
+        lines.extend(
+            f"  - {f['side']}: {_flow_line(f, scheduled=False)}" for f in flows["ended"]
         )
     return [*lines, ""]
 

@@ -49,6 +49,7 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { useListEditor, type Draft } from "./listEditor";
+import { IN_FORCE, leftOutLine, notCounted, undatedLine } from "./inForce";
 import { EXPENSE as EXPENSE_NEEDS, INCOME as INCOME_NEEDS, PLAN, TRANSFER, marks, refusal, type Need } from "./required";
 import {
   FIRST_PAYMENT_NOTE,
@@ -178,6 +179,10 @@ export default function CashFlow({
   // The base the reader chose, as the summary was computed in: what a new row
   // with no account to ask is proposed in.
   const base = summary?.base_currency ?? "";
+  // What the four figures leave out, said under them; each left-out row says
+  // its own reason in the lists below.
+  const leftOut = summary ? notCounted(summary) : null;
+  const undated = summary ? undatedLine(summary.undated) : null;
 
   return (
     <div className="space-y-8">
@@ -197,17 +202,21 @@ export default function CashFlow({
             Income: active {money(summary.base_currency).format(summary.active_income)} · passive{" "}
             {money(summary.base_currency).format(summary.passive_income)}. Expenses: essential{" "}
             {money(summary.base_currency).format(summary.essential_expenses)} · discretionary{" "}
-            {money(summary.base_currency).format(summary.discretionary_expenses)}. (Monthly run-rate; one-off items
-            excluded.)
+            {money(summary.base_currency).format(summary.discretionary_expenses)}. {IN_FORCE}
           </p>
+          {(leftOut || undated) && (
+            <p className="mt-1 text-sm text-ink-soft">
+              {[leftOut && `Not counted: ${leftOut} (marked below).`, undated].filter(Boolean).join(" ")}
+            </p>
+          )}
         </div>
       )}
 
       <div ref={incomeRef} className="scroll-mt-6">
-        <CashFlowSection spec={INCOME} items={incomes} institutions={institutions} anchors={anchors} base={base} instName={instName} onChanged={loadAll} />
+        <CashFlowSection spec={INCOME} items={incomes} summary={summary} institutions={institutions} anchors={anchors} base={base} instName={instName} onChanged={loadAll} />
       </div>
       <div ref={expenseRef} className="scroll-mt-6">
-        <CashFlowSection spec={EXPENSE} items={expenses} institutions={institutions} anchors={anchors} base={base} instName={instName} onChanged={loadAll} />
+        <CashFlowSection spec={EXPENSE} items={expenses} summary={summary} institutions={institutions} anchors={anchors} base={base} instName={instName} onChanged={loadAll} />
       </div>
       <PlanSection
         items={plans}
@@ -321,6 +330,8 @@ type CashFlowRow = {
 type CashFlowBase = Omit<CashFlowRow, "id" | "notes">;
 
 type CashFlowSpec<T extends CashFlowRow, P> = {
+  /** Which side of the summary's left-out lists a row of this kind is on. */
+  side: "income" | "expense";
   title: string;
   hint: string;
   /** What a row of this kind cannot be saved without. */
@@ -345,6 +356,7 @@ type CashFlowSpec<T extends CashFlowRow, P> = {
 function CashFlowSection<T extends CashFlowRow, P>({
   spec,
   items,
+  summary,
   institutions,
   anchors,
   base,
@@ -353,6 +365,9 @@ function CashFlowSection<T extends CashFlowRow, P>({
 }: {
   spec: CashFlowSpec<T, P>;
   items: T[];
+  /** The figures above, which list the rows they leave out: a row still to
+      start or ended says so on its own line. */
+  summary: CashFlowSummary | null;
   /** The base the reader chose: what a flow with no account is proposed in. */
   base: string;
   /** Every account's cash anchors: the currency box proposes the linked
@@ -457,6 +472,7 @@ function CashFlowSection<T extends CashFlowRow, P>({
             title={i.name}
             badge={spec.tagOf(i)}
             subtitle={subtitle([i.category, i.frequency, instName(i.institution_id), dateRange(i.start_date, i.end_date)])}
+            detail={summary ? leftOutLine(summary, spec.side, i.id) : undefined}
             note={i.notes}
             value={money(i.currency).format(i.amount)}
           />
@@ -467,6 +483,7 @@ function CashFlowSection<T extends CashFlowRow, P>({
 }
 
 const INCOME: CashFlowSpec<IncomeSource, IncomeSourceCreate> = {
+  side: "income",
   title: "Income",
   hint: "Institution = where it's credited (its cash).",
   needs: INCOME_NEEDS,
@@ -483,6 +500,7 @@ const INCOME: CashFlowSpec<IncomeSource, IncomeSourceCreate> = {
 };
 
 const EXPENSE: CashFlowSpec<Expense, ExpenseCreate> = {
+  side: "expense",
   title: "Expenses",
   hint: "Institution = where it's paid from (its cash).",
   needs: EXPENSE_NEEDS,

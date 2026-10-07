@@ -393,7 +393,7 @@ def test_the_model_reads_the_whole_picture_rebuilt_on_every_turn(client, monkeyp
     cid = _events(_ask(client, "what do I own?"))[0]["conversation_id"]
     first = seen[0]["messages"][0]["content"]
     assert "# Today is " + datetime.date.today().isoformat() in first
-    assert "## Net worth" in first and "## Expenses" in first
+    assert "## Net worth" in first and "## Income and expenses in force today" in first
     assert "(no investment positions)" in first
 
     iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]

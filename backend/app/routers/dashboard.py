@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app import analytics, composition, schemas
+from app import analytics, composition, dated, schemas
 from app.database import get_db
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -35,8 +35,10 @@ def get_net_worth_series(db: Session = Depends(get_db)) -> list[schemas.NetWorth
 
 @router.get("/cashflow", response_model=schemas.CashFlowSummary)
 def get_cashflow(db: Session = Depends(get_db)) -> schemas.CashFlowSummary:
-    """Monthly cash-flow summary: income vs expenses, savings rate, splits."""
-    return analytics.compute_cashflow(db)
+    """The income and expenses in force today as a monthly run-rate, the
+    savings rate and the splits, and the flows left out: the ones still to
+    start and the ones that have ended."""
+    return analytics.compute_flows_in_force(db, dated.today())
 
 
 @router.get("/portfolio", response_model=schemas.Portfolio)

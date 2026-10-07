@@ -19,6 +19,7 @@ import {
 } from "../api/dashboard";
 import { getCashFlowSummary, type CashFlowSummary } from "../api/cashflow";
 import { EmptyState } from "./Emblem";
+import { IN_FORCE, notCounted, undatedLine } from "./inForce";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import { Explainer, SAVINGS_RATE, StatCard, apiError, cardClass, locale, money, statLabelClass } from "./ui";
@@ -498,8 +499,9 @@ export default function Dashboard() {
                 Income: active {money(cash.base_currency).format(cash.active_income)} · passive{" "}
                 {money(cash.base_currency).format(cash.passive_income)}. Expenses: essential{" "}
                 {money(cash.base_currency).format(cash.essential_expenses)} · discretionary{" "}
-                {money(cash.base_currency).format(cash.discretionary_expenses)}. Monthly run-rate; one-off items
-                excluded.
+                {money(cash.base_currency).format(cash.discretionary_expenses)}. {IN_FORCE}
+                {notCounted(cash) && ` Not counted: ${notCounted(cash)}, as Records → Cash flow shows.`}
+                {undatedLine(cash.undated) && ` ${undatedLine(cash.undated)}`}
               </p>
             </div>
           </Panel>
