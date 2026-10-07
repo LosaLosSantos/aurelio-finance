@@ -539,7 +539,12 @@ def _render_cash(positions: list[dict]) -> list[str]:
     two copies of one block drift, and the analyst was the reader that had no
     copy at all. Run 1 asked the reader how much cash they could reach
     tomorrow, with the answer on this list. The heading and any total stay
-    with each caller."""
+    with each caller.
+
+    Every term of the projection is on the line, so its parts add up to the
+    figure in front of them. The ledger's two were missing until brief AI:
+    with a buy or a dividend after the anchor, the line printed parts that
+    did not make its own total."""
     if not positions:
         return ["- (no institutions)"]
     lines: list[str] = []
@@ -551,7 +556,8 @@ def _render_cash(positions: list[dict]) -> list[str]:
                 f"- {p['institution_name']}: {p['projected']:.2f} "
                 f"(anchor {p['anchor_amount']:.2f} on {p['anchor_date']}; "
                 f"+income {p['income']:.2f} −expenses {p['expenses']:.2f}; "
-                f"transfers +{p['transfers_in']:.2f}/−{p['transfers_out']:.2f})"
+                f"transfers +{p['transfers_in']:.2f}/−{p['transfers_out']:.2f}; "
+                f"−buys {p['buys']:.2f} +sells, dividends and closes {p['sells']:.2f})"
             )
     return lines
 
