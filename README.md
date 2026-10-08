@@ -7,6 +7,10 @@ own computer, with an AI advisor you can talk to. Your records are kept on your
 machine. The AI part is optional: it goes through
 [OpenRouter](https://openrouter.ai) with your own key.
 
+https://github.com/user-attachments/assets/01c67b4d-383e-4d5c-a767-f29535390a4c
+
+On invented demo data.
+
 ## Try it on invented data
 
 You need [Git](https://git-scm.com), [Node.js](https://nodejs.org) 22 or later
@@ -43,15 +47,6 @@ Start without the flag to use your own data.
 
 Your records live in `backend/data.db`. Before an update changes its format,
 the app saves a copy next to it.
-
-## Screenshots
-
-On invented demo data.
-
-| | |
-|---|---|
-| ![The Portfolio](docs/screenshots/portfolio.png)<br>*Positions priced from the market* | ![The look-through](docs/screenshots/look-through.png)<br>*The look-through: what the funds hold* |
-| ![A situation in Records](docs/screenshots/situation.png)<br>*A dated situation of one account* | ![A card the chat proposes](docs/screenshots/chat-card.png)<br>*The chat proposes; you confirm or reject* |
 
 ## What it does
 

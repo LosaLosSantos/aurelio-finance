@@ -1,6 +1,6 @@
 """The demo: an invented household, built through the app's own API.
 
-It is what a stranger opens first and what the README's screenshots show, so it
+It is what a stranger opens first and what the README's video shows, so it
 must need nothing of anyone's, build with no network, and never write into a
 database that already exists, least of all `data.db`.
 """
