@@ -37,6 +37,7 @@ import {
 } from "./followStream";
 import { linkOf, withSource, type Link, type WebPage } from "./webSources";
 import { withDecided } from "./cardDecided";
+import { lineText } from "./cardFields";
 
 /* The chat that reads.
 
@@ -304,12 +305,13 @@ function Card({
 }) {
   const pending = block.outcome !== "confirmed" && block.outcome !== "rejected";
   const diff = block.diff ?? [];
-  // A tool declares every field it CAN take and a proposal fills the few the
-  // reader actually said; the rest arrive null. Printing them would put
-  // "category: null" on a card whose whole job is to say precisely what would
-  // happen — the same mistake as "As of: None", where a model or a reader
-  // takes an absence for a stated value. What was not said is not shown.
-  const args = Object.entries(block.arguments ?? {}).filter(([, v]) => v !== null && v !== "");
+  // The proposal's arguments and, once confirmed, what was written, both as
+  // the server words them (`tools.present`): a label of the reader's for each,
+  // nothing absent, no row id, no timestamp. Until brief AJ this printed the
+  // arguments and the result raw, by their schema names, and a model's word
+  // for nothing ("symbol null") passed for a value.
+  const fields = block.fields ?? [];
+  const receipt = block.receipt ?? [];
   // Only the one still waiting on the reader carries the accent. A settled
   // card is a record and should read as one; "Rejected" in the colour the app
   // uses for its own voice looked like approval of the opposite thing.
@@ -317,7 +319,7 @@ function Card({
   return (
     <div className="my-3 rounded-sm border border-rule bg-surface p-3">
       <p className={"text-[0.65rem] font-medium uppercase tracking-[0.14em] " + tone}>
-        {pending ? "Proposed" : block.outcome === "confirmed" ? "Recorded" : "Rejected"}
+        {pending ? "Proposed" : block.outcome === "confirmed" ? block.done || "Recorded" : "Rejected"}
       </p>
       <p className="mt-1 text-sm text-ink">{block.title}</p>
       {/* What confirming COSTS that the fields do not show, in the proposing
@@ -361,7 +363,7 @@ function Card({
           </table>
         </div>
       ) : (
-        args.length > 0 && <Fields rows={args.map(([k, v]) => [k, String(v)])} />
+        fields.length > 0 && <Fields rows={fields.map((f) => [f.label, lineText(f, locale)])} />
       )}
 
       {block.result && (
@@ -384,16 +386,13 @@ function Card({
               Read it in full ›
             </button>
           )}
-          {/* Nulls are KEPT here and shown as "not set", unlike the arguments
-              above: a field the write produced is a field the row has, and
-              "no institution" is something it says rather than something
-              nobody mentioned. */}
-          <Fields
-            rows={Object.entries(block.result).map(([k, v]) => [
-              k,
-              v === null || v === "" ? "not set" : String(v),
-            ])}
-          />
+          {/* The receipt the tool words: what was written that the card's own
+              lines cannot show (the amount worked out, the day of its rate,
+              the day it joined the watchlist). The result itself stays on the
+              block, raw, for the model and for the link above. */}
+          {receipt.length > 0 && (
+            <Fields rows={receipt.map((f) => [f.label, lineText(f, locale)])} />
+          )}
         </div>
       )}
 

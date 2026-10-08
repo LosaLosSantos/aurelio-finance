@@ -77,3 +77,22 @@ test("nothing that is not a web address becomes a link", () => {
     assert.equal(linkOf({ url, title: "x" }), null, url);
   }
 });
+
+test("a title that names nothing gives way to a name read off the address", () => {
+  // Brief AJ: in the reader's round a source was listed as "Document".
+  assert.equal(
+    linkOf({ url: "https://www.issuer.example/docs/example-fund-factsheet.pdf", title: "Document" })?.label,
+    "example fund factsheet",
+  );
+  assert.equal(linkOf({ url: "https://issuer.example/kid_EXAMPLE%20FUND.pdf", title: "PDF" })?.label, "kid EXAMPLE FUND");
+  assert.equal(linkOf({ url: "https://www.news.example/a/b/etf-costs", title: "www.news.example" })?.label, "etf costs");
+  assert.equal(linkOf({ url: "https://news.example/2026/10/08", title: "untitled" })?.label, "news.example");
+  assert.equal(linkOf({ url: "https://bad.example/%E0%A4%A", title: "" })?.label, "bad.example");
+});
+
+test("a title that names its page is kept, whatever the address says", () => {
+  assert.equal(
+    linkOf({ url: "https://issuer.example/document.pdf", title: "Example Fund: key information" })?.label,
+    "Example Fund: key information",
+  );
+});

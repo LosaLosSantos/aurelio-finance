@@ -81,7 +81,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
-from app import advisor, catalogue, chain, composition, crud, fx, models, positions, prices, schemas
+from app import advisor, catalogue, chain, composition, crud, dated, fx, models, positions, prices, schemas
 from app.database import unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -223,6 +223,17 @@ class Tool:
     run: Callable[[Session, BaseModel], dict] | None = None
     walk: Callable[[Session, BaseModel], Iterator[Working]] | None = None
     propose: Callable[[Session, BaseModel], Proposal] | None = None
+    # What a card calls each argument, for the reader: the name is the
+    # model's, the label is theirs ("based_on" was on the reader's cards,
+    # 2026-10-08). Every argument of a tool that writes has one (a test), so a
+    # new field cannot reach a card under its schema name.
+    labels: dict[str, str] = field(default_factory=dict)
+    # What was written, in words, from the tool's result: rows of (label,
+    # value, kind), kind "date" for a day the panel writes in the reader's
+    # language. The result itself stays as it is, for the model.
+    receipt: Callable[[dict], list[tuple[str, str, str]]] | None = None
+    # What a confirmed card says it is now.
+    done: str = "Recorded"
 
     def __post_init__(self) -> None:
         if (self.run is None) == (self.walk is None):
@@ -674,6 +685,26 @@ def _add_real_asset(db: Session, args: AddRealAssetArgs) -> dict:
     }
 
 
+# What its card calls each argument, and what it says was written.
+_REAL_ASSET_LABELS = {
+    "name": "Asset",
+    "value": "Worth",
+    "valued_on": "Valued on",
+    "category": "Kind",
+    "currency": "Currency",
+    "acquisition_date": "Acquired on",
+    "acquisition_value": "Paid",
+    "notes": "Notes",
+}
+
+
+def _real_asset_receipt(result: dict) -> list[tuple]:
+    return [
+        ("Worth", result.get("value"), "amount", result.get("currency")),
+        ("Valued on", result.get("valued_on"), "date"),
+    ]
+
+
 # --- record_transaction ------------------------------------------------------
 
 
@@ -1031,6 +1062,35 @@ def _record_transaction(db: Session, args: RecordTransactionArgs) -> dict:
     }
 
 
+_TRANSACTION_LABELS = {
+    "kind": "Entry",
+    "date": "Date",
+    "asset_name": "Asset",
+    "symbol": "Ticker",
+    "isin": "ISIN",
+    "asset_class": "Class",
+    "quantity": "Units",
+    "unit_price": "Price",
+    "fees": "Fees",
+    "currency": "Cash in",
+    "price_currency": "Price in",
+    "amount": "Amount",
+    "institution": "Held at",
+    "cash_institution": "Cash from",
+    "note": "Note",
+}
+
+
+def _transaction_receipt(result: dict) -> list[tuple]:
+    """The amount the app worked out and the day of the rate it took, which
+    the card's own fields cannot show."""
+    return [
+        ("Amount", result.get("amount"), "amount", result.get("currency")),
+        ("At the ECB rate of", result.get("fx_as_of"), "date"),
+        ("Held at", result.get("institution"), "text"),
+    ]
+
+
 # --- update_profile ----------------------------------------------------------
 
 
@@ -1175,6 +1235,22 @@ def _update_profile(db: Session, args: UpdateProfileArgs) -> dict:
         "answer": saved.answer,
         "replaced": replaced,
     }
+
+
+_PROFILE_LABELS = {
+    "question": "Question",
+    "answer": "Answer",
+    "topic": "Topic",
+    # The app's key for a question, not a word of the reader's: not shown.
+    "question_key": "",
+}
+
+
+def _profile_receipt(result: dict) -> list[tuple]:
+    return [
+        ("Answer now", result.get("answer"), "text"),
+        ("It replaced", result.get("replaced") or "nothing, it is a new answer", "text"),
+    ]
 
 
 # --- suggest_instrument -------------------------------------------------------
@@ -1526,6 +1602,22 @@ def _suggest_instrument(db: Session, args: SuggestInstrumentArgs) -> dict:
     }
 
 
+_SUGGESTION_LABELS = {
+    "isin": "ISIN",
+    "symbol": "Ticker",
+    "reason": "Why this one",
+    "based_on": "Rests on",
+    "unknowns": "Not known",
+}
+
+
+def _suggestion_receipt(result: dict) -> list[tuple]:
+    return [
+        ("On your watchlist since", result.get("added_at"), "date"),
+        ("Ticker", result.get("symbol"), "text"),
+    ]
+
+
 # --- The analysis, run as sub-agents and read back ----------------------------
 #
 # The chat is the ORCHESTRATOR of the chain now, and the rule it orchestrates
@@ -1653,6 +1745,16 @@ def _walk_analysis(db: Session, args: RunAnalysisArgs) -> Iterator[Working]:
             f"run_id={run.id} for the whole verdict."
         ),
     }
+
+
+def _analysis_receipt(result: dict) -> list[tuple]:
+    """How deep, how long and how much: the verdict itself is a link away."""
+    seconds = result.get("seconds")
+    return [
+        ("Steps", result.get("steps"), "number"),
+        ("Took", f"{seconds} s" if seconds is not None else None, "text"),
+        ("Cost", result.get("cost_usd"), "amount", "USD"),
+    ]
 
 
 # How much of a verdict travels as its digest. Enough for the opening claim of
@@ -1806,6 +1908,8 @@ REGISTRY: dict[str, Tool] = {
             arguments=AddRealAssetArgs,
             run=_add_real_asset,
             propose=_propose_real_asset,
+            labels=_REAL_ASSET_LABELS,
+            receipt=_real_asset_receipt,
         ),
         Tool(
             name="record_transaction",
@@ -1822,6 +1926,8 @@ REGISTRY: dict[str, Tool] = {
             arguments=RecordTransactionArgs,
             run=_record_transaction,
             propose=_propose_transaction,
+            labels=_TRANSACTION_LABELS,
+            receipt=_transaction_receipt,
         ),
         Tool(
             name="update_profile",
@@ -1841,6 +1947,8 @@ REGISTRY: dict[str, Tool] = {
             arguments=UpdateProfileArgs,
             run=_update_profile,
             propose=_propose_profile,
+            labels=_PROFILE_LABELS,
+            receipt=_profile_receipt,
         ),
         Tool(
             name="suggest_instrument",
@@ -1873,6 +1981,9 @@ REGISTRY: dict[str, Tool] = {
             arguments=SuggestInstrumentArgs,
             run=_suggest_instrument,
             propose=_propose_suggestion,
+            labels=_SUGGESTION_LABELS,
+            receipt=_suggestion_receipt,
+            done="Added to your watchlist",
         ),
         Tool(
             name="run_analysis",
@@ -1898,6 +2009,7 @@ REGISTRY: dict[str, Tool] = {
             arguments=RunAnalysisArgs,
             walk=_walk_analysis,
             propose=_propose_analysis,
+            receipt=_analysis_receipt,
         ),
         Tool(
             name="read_analysis",
@@ -1974,6 +2086,91 @@ def web_search(model: str) -> list[dict]:
     return [WEB_SEARCH] if model.removeprefix("~").startswith("anthropic/") else []
 
 
+# --- A card, in the reader's words -------------------------------------------
+
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_INSTANT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?([+-]\d{2}:\d{2}|Z)?")
+
+
+def _humanized(name: str) -> str:
+    """A field name as words, for a tool that names no label: only a tool the
+    registry does not hold (a test's) ever needs it."""
+    return name.replace("_", " ").strip().capitalize()
+
+
+def _card_field(label: str, value, kind: str = "text", currency: str | None = None) -> dict | None:
+    """One line of a card, or None for a value that says nothing: absent, or
+    one of the words for nothing (`_ABSENT`). A day stays a day and a moment
+    becomes the reader's day (`dated.local_day`), so no timestamp reaches a
+    card; a number is left for the panel to write in the reader's language."""
+    value = _absent_is_none(value)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return {"label": label, "value": "yes" if value else "no", "kind": "text"}
+    if isinstance(value, (int, float)):
+        if kind == "amount" and currency:
+            return {"label": label, "value": str(value), "kind": "amount", "currency": currency}
+        return {"label": label, "value": str(value), "kind": "number"}
+    if not isinstance(value, str):
+        value = json.dumps(value, ensure_ascii=False)
+    text = value.strip()
+    if _INSTANT.fullmatch(text):
+        try:
+            return {"label": label, "value": dated.local_day(text), "kind": "date"}
+        except ValueError:
+            pass
+    if _DAY.fullmatch(text):
+        return {"label": label, "value": text, "kind": "date"}
+    return {"label": label, "value": text, "kind": "text"}
+
+
+def present(card: dict) -> dict:
+    """`card` as the reader reads it: with `fields`, its arguments under its
+    tool's labels (`Tool.labels`), the absent ones left out; `receipt`, what a
+    confirmed card wrote, in words (`Tool.receipt`); and `done`, what it is
+    called once confirmed.
+
+    Worked out whenever a card is sent or read back, and never stored, so the
+    cards of a conversation kept since before this read the same way, and the
+    model goes on reading the stored arguments and result as they are (the
+    run's id, which `read_analysis` takes, is in the result and on no card).
+    Brief AJ: the reader's cards showed "based_on", "unknowns", "symbol null",
+    and after a confirmation the row's id and an ISO timestamp under
+    "added_at"."""
+    tool = REGISTRY.get(card.get("tool") or "")
+    arguments = card.get("arguments") or {}
+    labels = tool.labels if tool is not None else {}
+    order = list(tool.arguments.model_fields) if tool is not None else []
+    order += [name for name in arguments if name not in order]
+    fields = []
+    for name in order:
+        if name not in arguments:
+            continue
+        label = labels.get(name, _humanized(name))
+        line = _card_field(label, arguments[name]) if label else None
+        if line is not None:
+            fields.append(line)
+    receipt = []
+    result = card.get("result")
+    if card.get("outcome") == "confirmed" and isinstance(result, dict):
+        if tool is not None and tool.receipt is not None:
+            rows = tool.receipt(result)
+        else:
+            rows = [
+                (_humanized(name), value)
+                for name, value in result.items()
+                if name != "id" and not name.endswith("_id")
+            ]
+        receipt = [line for line in (_card_field(*row) for row in rows) if line is not None]
+    return {
+        **card,
+        "fields": fields,
+        "receipt": receipt,
+        "done": tool.done if tool is not None else "Recorded",
+    }
+
+
 def answer(db: Session, call: advisor.ToolCall) -> dict:
     """What one tool call becomes: a card to be confirmed, or a result to feed
     straight back to the model.
@@ -2023,7 +2220,9 @@ def answer(db: Session, call: advisor.ToolCall) -> dict:
         # made once. Refused at the boundary the mistake enters instead.
         logger.exception("%s drew a card that could not be stored", call.name)
         return {"ok": False, "error": f"{call.name} drew a card that cannot be stored: {exc}"}
-    return {"card": card.model_dump(mode="json")}
+    # Stored without the reader's words, which `present` works out each time
+    # the card is shown.
+    return {"card": card.model_dump(mode="json", exclude={"fields", "receipt", "done"})}
 
 
 _STALE = (

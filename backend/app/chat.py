@@ -1355,11 +1355,11 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
     allowed = MAX_COMPLETIONS_PER_TURN if turn.decision is None else DECISION_ROUNDS
     try:
         if turn.decided is not None:
-            yield schemas.ChatDecided(card=schemas.ChatCardBlock(**turn.decided))
+            yield schemas.ChatDecided(card=schemas.ChatCardBlock(**tools.present(turn.decided)))
         if turn.pending is not None:
             messages, decided = yield from _work(turn.pending, turn.conversation_id)
             settled = True
-            yield schemas.ChatDecided(card=schemas.ChatCardBlock(**decided))
+            yield schemas.ChatDecided(card=schemas.ChatCardBlock(**tools.present(decided)))
         declared = tools.declarations()
         web = tools.web_search(turn.model)
         # Worked out once, on the conversation as it stands before any tool is
@@ -1447,7 +1447,7 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     if named is not None:
                         drawn.append(named)
                     blocks.append(card)
-                    yield schemas.ChatCard(card=schemas.ChatCardBlock(**card))
+                    yield schemas.ChatCard(card=schemas.ChatCardBlock(**tools.present(card)))
                     continue
                 # A failure's reason travels with the event, so the live answer
                 # shows what the stored block will (see `schemas.ChatTool`).

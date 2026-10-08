@@ -2220,6 +2220,20 @@ class ChatCardChange(BaseModel):
     proposed: str | None = None
 
 
+class ChatCardField(BaseModel):
+    """One line of a card as the reader reads it: a label in their words and a
+    value, never a schema name, a row id or a timestamp (brief AJ: the
+    reader's cards said "based_on", "symbol null", a row's id, and an ISO
+    timestamp under "added_at"). `kind` says how the panel writes
+    the value in the reader's language: a day ("date", YYYY-MM-DD), a number,
+    or an amount in `currency`."""
+
+    label: str
+    value: str
+    kind: Literal["text", "date", "number", "amount"] = "text"
+    currency: str | None = None
+
+
 class ChatCardBlock(BaseModel):
     """A write the model PROPOSED, and what became of it.
 
@@ -2302,6 +2316,21 @@ class ChatCardBlock(BaseModel):
             "Rendered to a string here it would have to be parsed back for "
             "one of them."
         ),
+    )
+    # The card in the reader's words, worked out by `tools.present` whenever a
+    # card is sent or read back, and never stored: the cards of a conversation
+    # held since before these existed read the same way.
+    fields: list[ChatCardField] = Field(
+        default_factory=list,
+        description="The proposal's arguments in the reader's words, the absent ones left out",
+    )
+    receipt: list[ChatCardField] = Field(
+        default_factory=list,
+        description="What a confirmed card wrote, in the reader's words; empty until then",
+    )
+    done: str = Field(
+        default="",
+        description="What a confirmed card says it is now: 'Recorded', 'Added to your watchlist'",
     )
 
 

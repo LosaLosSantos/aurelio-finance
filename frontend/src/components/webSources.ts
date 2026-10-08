@@ -51,9 +51,44 @@ export interface Link {
   host: string;
 }
 
+/* Titles that name no page: what a search hands over for a file whose own
+   title says nothing. In the reader's round (2026-10-08) a source was listed
+   as "Document". Matched whole, in any case. */
+const SAYS_NOTHING = new Set([
+  "document",
+  "untitled",
+  "untitled document",
+  "pdf",
+  "file",
+  "download",
+  "home",
+  "index",
+  "page",
+  "null",
+]);
+
+/** A name for a page out of its address: the last part of its path, made
+    readable ("example-fund-factsheet.pdf" reads "example fund factsheet"),
+    or the site when that part holds no word of three letters or more (a
+    number, a code, "a"). */
+function fromAddress(url: URL, host: string): string {
+  let last = url.pathname.split("/").filter(Boolean).pop() ?? "";
+  try {
+    last = decodeURIComponent(last);
+  } catch {
+    /* a malformed escape: the part as it is */
+  }
+  const words = last
+    .replace(/\.[a-z0-9]{1,5}$/i, "")
+    .replace(/[-_+.]+/g, " ")
+    .trim();
+  return /\p{L}{3,}/u.test(words) ? words : host;
+}
+
 /** The link for `page`, or null when its address is not http or https: a
     `javascript:` address would run in the page, and nothing else is a web
-    page. With no title, the site's name is the label. */
+    page. A title that names nothing (none, a word like "Document", the bare
+    site) gives way to a name read off the address. */
 export function linkOf(page: WebPage): Link | null {
   let parsed: URL;
   try {
@@ -63,5 +98,8 @@ export function linkOf(page: WebPage): Link | null {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   const host = parsed.hostname.replace(/^www\./, "");
-  return { href: parsed.href, label: page.title.trim() || host, host };
+  const title = page.title.trim();
+  const bare = title.toLowerCase().replace(/^www\./, "");
+  const named = title !== "" && !SAYS_NOTHING.has(bare) && bare !== host;
+  return { href: parsed.href, label: named ? title : fromAddress(parsed, host), host };
 }

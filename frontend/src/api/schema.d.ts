@@ -293,7 +293,8 @@ export interface paths {
         };
         /**
          * Get Conversation
-         * @description One conversation with every turn, oldest first.
+         * @description One conversation with every turn, oldest first, each card in the
+         *     reader's words (`tools.present`), as the stream sends it.
          */
         get: operations["get_conversation_api_chat_conversations__conversation_id__get"];
         put?: never;
@@ -2155,6 +2156,17 @@ export interface components {
             /** Diff */
             diff?: components["schemas"]["ChatCardChange"][];
             /**
+             * Done
+             * @description What a confirmed card says it is now: 'Recorded', 'Added to your watchlist'
+             * @default
+             */
+            done?: string;
+            /**
+             * Fields
+             * @description The proposal's arguments in the reader's words, the absent ones left out
+             */
+            fields?: components["schemas"]["ChatCardField"][];
+            /**
              * Fingerprint
              * @default
              */
@@ -2170,6 +2182,11 @@ export interface components {
              * @enum {string}
              */
             outcome?: "pending" | "confirmed" | "rejected";
+            /**
+             * Receipt
+             * @description What a confirmed card wrote, in the reader's words; empty until then
+             */
+            receipt?: components["schemas"]["ChatCardField"][];
             /**
              * Result
              * @description What the write produced, once it ran — the fields as the tool returned them, not a sentence about them. Two readers want this and they want it in the same shape: the model, which is handed it back as the answer to its call, and the card, which shows it under the diff in the same field-by-field form the diff used. Rendered to a string here it would have to be parsed back for one of them.
@@ -2243,6 +2260,29 @@ export interface components {
              * @description OpenRouter slug for the follow-up; empty means the chat default
              */
             model?: string | null;
+        };
+        /**
+         * ChatCardField
+         * @description One line of a card as the reader reads it: a label in their words and a
+         *     value, never a schema name, a row id or a timestamp (brief AJ: the
+         *     reader's cards said "based_on", "symbol null", a row's id, and an ISO
+         *     timestamp under "added_at"). `kind` says how the panel writes
+         *     the value in the reader's language: a day ("date", YYYY-MM-DD), a number,
+         *     or an amount in `currency`.
+         */
+        ChatCardField: {
+            /** Currency */
+            currency?: string | null;
+            /**
+             * Kind
+             * @default text
+             * @enum {string}
+             */
+            kind?: "text" | "date" | "number" | "amount";
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
         };
         /**
          * ChatConversationDetail

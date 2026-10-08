@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app import chat, crud, models, schemas
+from app import chat, crud, models, schemas, tools
 from app.database import get_db
 from app.routers.deps import get_or_404
 
@@ -60,9 +60,20 @@ def list_conversations(db: Session = Depends(get_db)) -> list[models.ChatConvers
 @router.get("/conversations/{conversation_id}", response_model=schemas.ChatConversationDetail)
 def get_conversation(
     conversation_id: int, db: Session = Depends(get_db)
-) -> models.ChatConversation:
-    """One conversation with every turn, oldest first."""
-    return get_or_404(db, models.ChatConversation, conversation_id)
+) -> schemas.ChatConversationDetail:
+    """One conversation with every turn, oldest first, each card in the
+    reader's words (`tools.present`), as the stream sends it."""
+    detail = schemas.ChatConversationDetail.model_validate(
+        get_or_404(db, models.ChatConversation, conversation_id)
+    )
+    for message in detail.messages:
+        message.blocks = [
+            schemas.ChatCardBlock(**tools.present(block.model_dump(mode="json")))
+            if isinstance(block, schemas.ChatCardBlock)
+            else block
+            for block in message.blocks
+        ]
+    return detail
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
