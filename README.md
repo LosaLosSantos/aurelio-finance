@@ -7,9 +7,9 @@ own computer, with an AI advisor you can talk to. Your records are kept on your
 machine. The AI part is optional: it goes through
 [OpenRouter](https://openrouter.ai) with your own key.
 
-https://github.com/user-attachments/assets/01c67b4d-383e-4d5c-a767-f29535390a4c
+![Aurelio on invented demo data: the net worth, what the funds really hold, and the chat answering from the records with a card to confirm](docs/demo.gif)
 
-On invented demo data.
+On invented demo data. [Watch the 30-second video](https://github.com/LosaLosSantos/aurelio-finance/issues/2).
 
 ## Try it on invented data
 
