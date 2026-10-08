@@ -439,12 +439,22 @@ def get_quotes(symbols: list[str]) -> dict[str, dict]:
 
 
 def _fetch_currency(symbol: str) -> str | None:
-    """The listing's trading currency from Yahoo, or None. Network call."""
+    """The listing's trading currency as Yahoo spells it, or None when Yahoo
+    names no three-letter code. Network call.
+
+    As Yahoo spells it, because the case is the unit: London quotes some
+    listings in pence, "GBp", and others in pounds, "GBP" (`fx._MINOR_EXACT`),
+    and a dividend Yahoo names is read the same way (`_read_dividend`). This
+    upper-cased it until brief AK: measured 2026-10-08, Yahoo names VOD.L and
+    ISF.L "GBp" and this returned "GBP" for both, so a pence listing whose
+    currency the cache learnt here would be converted as pounds."""
     import yfinance as yf
 
     fast = yf.Ticker(symbol).fast_info
     cur = fast.get("currency") if hasattr(fast, "get") else getattr(fast, "currency", None)
-    return cur.upper() if cur else None
+    if isinstance(cur, str) and _CURRENCY_CODE.fullmatch(cur.strip()):
+        return cur.strip()
+    return None
 
 
 def get_currencies(symbols: list[str]) -> dict[str, str]:
