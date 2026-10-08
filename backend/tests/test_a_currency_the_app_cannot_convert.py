@@ -392,7 +392,11 @@ def test_a_legacy_code_on_the_dividend_path_is_skipped_not_a_500(client, monkeyp
     """
     from app import prices
 
-    monkeypatch.setattr(prices, "_fetch_dividends", lambda symbol, period="max": [{"date": EX_DATE, "dps": 0.5}])
+    monkeypatch.setattr(
+        prices,
+        "_fetch_dividends",
+        lambda symbol, period="max": prices.DividendWindow(answered=True, dividends=[{"date": EX_DATE, "dps": 0.5}]),
+    )
     monkeypatch.setattr(prices, "_fetch_probe", lambda *a, **k: True)
     _dist_position(client, anchor_currency="EUR")
     _write_past_the_schema(models.CashAnchor, currency="Doll")

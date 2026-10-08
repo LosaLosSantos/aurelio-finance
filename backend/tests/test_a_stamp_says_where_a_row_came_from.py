@@ -61,7 +61,9 @@ def _auto_recorded_dividend(client, monkeypatch, *, symbol, held_in, listed_in, 
                 db, {symbol: {"price": 100.0, "as_of": "2026-03-01", "currency": listed_in}}
             )
     monkeypatch.setattr(
-        prices, "get_dividends_since", lambda sym, since: [{"date": EX_DATE, "dps": dps}]
+        prices,
+        "get_dividends_since",
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": EX_DATE, "dps": dps}]),
     )
     assert client.post("/api/transactions/catch-up").status_code == 200
     rows = [t for t in client.get("/api/transactions").json() if t["kind"] == "dividend"]

@@ -47,8 +47,9 @@ REAL_FETCH_DIVIDENDS = prices._fetch_dividends
 class Yahoo:
     """What `prices._fetch_dividends` gets back, per ticker: a list of
     (ex_date, per_share) for an answer, None for an answer that never came, an
-    exception for a fetch that failed. Every ask is recorded, whatever range it
-    asked for (brief AF's window is that file's question, not this one's)."""
+    exception for a fetch that failed, each given back as the window it is.
+    Every ask is recorded, whatever range it asked for (brief AF's window is
+    that file's question, not this one's)."""
 
     def __init__(self) -> None:
         self.answers: dict[str, object] = {}
@@ -60,8 +61,10 @@ class Yahoo:
         if isinstance(answer, Exception):
             raise answer
         if answer is None:
-            return None
-        return [{"date": day, "dps": dps} for day, dps in answer]
+            return prices.DividendWindow(answered=False)
+        return prices.DividendWindow(
+            answered=True, dividends=[{"date": day, "dps": dps} for day, dps in answer]
+        )
 
 
 @pytest.fixture()
@@ -390,7 +393,7 @@ def test_two_catch_ups_at_once_both_answer_and_the_answer_is_kept(client, monkey
             held = len(asked) <= 2
         if held:
             everyone_in.wait()
-        return [{"date": EX, "dps": 0.5}]
+        return prices.DividendWindow(answered=True, dividends=[{"date": EX, "dps": 0.5}])
 
     monkeypatch.setattr(prices, "_fetch_dividends", fetch)
     statuses: list[int] = []
@@ -416,15 +419,13 @@ def test_two_catch_ups_at_once_both_answer_and_the_answer_is_kept(client, monkey
 # --- The distinction, where yfinance makes it -----------------------------------
 
 
-@pytest.mark.parametrize(
-    "case, expected",
-    [("no answer", None), ("no dividend", []), ("paid", [{"date": EX, "dps": 0.5}])],
-)
-def test_no_answer_is_told_apart_from_a_fund_that_pays_nothing(monkeypatch, case, expected):
+@pytest.mark.parametrize("case", ["no answer", "no dividend", "paid"])
+def test_no_answer_is_told_apart_from_a_fund_that_pays_nothing(monkeypatch, case):
     """What the rule rests on, one level down. Measured 2026-09-30 on yfinance
     1.4.1 with the network refused: no answer leaves `.dividends` as None, and
     an answer listing no dividend is an empty Series. `_fetch_dividends` used
-    to return `[]` for both, so an outage read as a fund that pays nothing.
+    to return `[]` for both, so an outage read as a fund that pays nothing;
+    then None for the first, and since brief AK it says which in `answered`.
     Run against a faked yfinance, the way test_issuers.py runs the real
     adapters against a faked httpx. Asked by range since brief AF
     (`get_dividends(period)`, which `.dividends` is with "max")."""
@@ -440,5 +441,10 @@ def test_no_answer_is_told_apart_from_a_fund_that_pays_nothing(monkeypatch, case
     monkeypatch.setattr(
         yfinance, "Ticker", lambda symbol: types.SimpleNamespace(get_dividends=lambda period="max": dividends)
     )
+    expected = {
+        "no answer": prices.DividendWindow(answered=False),
+        "no dividend": prices.DividendWindow(answered=True),
+        "paid": prices.DividendWindow(answered=True, dividends=[{"date": EX, "dps": 0.5}]),
+    }[case]
 
     assert REAL_FETCH_DIVIDENDS(TICKER) == expected

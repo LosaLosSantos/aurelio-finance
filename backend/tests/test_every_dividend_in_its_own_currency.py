@@ -64,8 +64,9 @@ NEXT_DAY = "2026-04-02"
 
 class Yahoo:
     """What `prices._fetch_dividends` answers, per ticker: a list of dividends,
-    None for an answer that never came, an exception for a fetch that failed.
-    Every ask is recorded with the range it asked for."""
+    None for an answer that never came, an exception for a fetch that failed,
+    each given back as the window it is. Every ask is recorded with the range
+    it asked for."""
 
     def __init__(self) -> None:
         self.answers: dict[str, object] = {}
@@ -76,7 +77,9 @@ class Yahoo:
         answer = self.answers.get(symbol, [])
         if isinstance(answer, Exception):
             raise answer
-        return answer
+        if answer is None:
+            return prices.DividendWindow(answered=False)
+        return prices.DividendWindow(answered=True, dividends=answer)
 
 
 @pytest.fixture()
@@ -324,7 +327,7 @@ def test_what_a_dividend_names_is_read_as_it_is_written(monkeypatch, named, expe
     frame = _two_columns(("2026-03-20", 0.5, named), ("2026-06-20", 0.6, "EUR"))
     monkeypatch.setattr(yfinance, "Ticker", lambda symbol: _Ticker(frame, []))
 
-    first, _ = REAL_FETCH_DIVIDENDS("ADRX")
+    first, _ = REAL_FETCH_DIVIDENDS("ADRX").dividends
 
     assert first == ({"date": "2026-03-20", "dps": 0.5} | ({"currency": expected} if expected else {}))
 

@@ -230,7 +230,9 @@ def _dollar_dividend(client, monkeypatch) -> int:
         db.merge(models.PriceCache(symbol="VYM", price=120.0, currency="USD", as_of=TODAY.isoformat()))
         db.commit()
     monkeypatch.setattr(
-        prices, "get_dividends_since", lambda sym, since: [{"date": EX_DAY, "dps": 1.0}]
+        prices,
+        "get_dividends_since",
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": EX_DAY, "dps": 1.0}]),
     )
     return iid
 

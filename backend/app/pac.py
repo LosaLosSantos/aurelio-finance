@@ -690,8 +690,8 @@ def _dividend_history(
     symbol: str,
     today: str,
     need: str,
-    answers: dict[str, list[dict] | None | prices.PriceError],
-) -> list[dict] | None:
+    answers: dict[str, prices.DividendWindow | prices.PriceError],
+) -> prices.DividendWindow:
     """Every dividend Yahoo lists for `symbol` after `need`, the earliest
     situation among the holdings that follow it, asked for until Yahoo answers
     and then not again that day.
@@ -701,8 +701,8 @@ def _dividend_history(
     first time a ticker is followed, which is what tells its line when it last
     paid; after that a window from `need`, or from the day of the answer before
     when that is earlier, so the last dividend stays known. Only an answer is
-    kept: None (nobody answered, which yfinance reports without raising) and a
-    `PriceError` (the fetch failed) are not, so the next catch-up asks again.
+    kept: a window nobody answered (which yfinance reports without raising) and
+    a `PriceError` (the fetch failed) are not, so the next catch-up asks again.
     Within one catch-up the outcome, whichever it is, is reused from
     `answers`, so a fund held at two accounts is asked about once: `need` is
     the earliest of their situations.
@@ -712,7 +712,8 @@ def _dividend_history(
     if symbol not in answers:
         kept = _kept(db, symbol)
         if kept is not None and kept["on"] == today and (kept.get("since") is None or kept["since"] <= need):
-            answer = kept["dividends"]
+            # Yahoo's answer of today, as it was kept.
+            answer = prices.DividendWindow(answered=True, dividends=kept["dividends"])
         else:
             since = (
                 datetime.date.min
@@ -724,11 +725,11 @@ def _dividend_history(
             except prices.PriceError as exc:
                 answers[symbol] = exc
                 raise
-            if answer is not None:
-                seen = [d["date"] for d in answer if d["date"] <= today]
+            if answer.answered:
+                seen = [d["date"] for d in answer.dividends if d["date"] <= today]
                 last = max([*seen, *filter(None, [_last_known(kept)])], default=None)
                 reach = None if since == datetime.date.min else since.isoformat()
-                _keep_answer(db, symbol, today, answer, reach, last)
+                _keep_answer(db, symbol, today, list(answer.dividends), reach, last)
         answers[symbol] = answer
     outcome = answers[symbol]
     if isinstance(outcome, prices.PriceError):
@@ -776,7 +777,7 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
 
     created: list[models.Transaction] = []
     skipped: list[dict] = []
-    answers: dict[str, list[dict] | None | prices.PriceError] = {}
+    answers: dict[str, prices.DividendWindow | prices.PriceError] = {}
     all_txs = list(db.scalars(select(models.Transaction)))
     # The photograph in force at `as_of` — the same date the ex-dates below are
     # filtered by. One anchor for one question: a snapshot dated after the day
@@ -806,17 +807,17 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
             if not _follows_dividends(h):
                 continue
             try:
-                history = _dividend_history(db, h.symbol, today, need[h.symbol], answers)
+                window = _dividend_history(db, h.symbol, today, need[h.symbol], answers)
             except prices.PriceError as exc:
                 skipped.append({"label": h.symbol, "occurrence": None, "reason": str(exc)})
                 continue
-            if history is None:
+            if not window.answered:
                 # Nobody answered. Not kept, so the next catch-up asks again,
                 # and said nowhere, as before: the next start retries by itself.
                 continue
             # Strictly after the anchor, the cut `get_dividends_since` makes:
             # the situation already accounts for its own day.
-            divs = [d for d in history if d["date"] > snap.date]
+            divs = [d for d in window.dividends if d["date"] > snap.date]
             done = crud.get_dividend_dates_recorded(db, inst_id, h.symbol)
             position_txs = dated.events_after(
                 snap,
@@ -910,9 +911,7 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 written = _record_dividend(db, inst_id, h.symbol, d["date"], columns)
                 if written is not None:
                     created.append(written)
-    # `answers` too, for `refresh_prices`: what each ticker's window brought
-    # this run, its price included.
-    return {"created": created, "skipped": skipped, "answers": answers}
+    return {"created": created, "skipped": skipped}
 
 
 def _record_dividend(
@@ -943,16 +942,9 @@ def _record_dividend(
 _UNPRICED: dict[str, str] = {}
 
 
-def _window_failed(answer) -> bool:
-    """Whether this catch-up asked Yahoo about the ticker's dividends and got
-    nothing back: silence, or a failure. Asking again for its price, in the
-    same second, would most likely meet the same."""
-    return answer is None or isinstance(answer, prices.PriceError)
-
-
-def refresh_prices(db: Session, answers: dict) -> dict[str, dict]:
+def refresh_prices(db: Session) -> dict[str, dict]:
     """Bring the price cache to the latest close, once a day for each symbol
-    the positions are priced by, asking Yahoo about none of them twice.
+    the positions are priced by.
 
     In the reader's test round (2026-10-08) the cached closes were days old, and
     the chat said so: nothing but the "Refresh market prices" button and the
@@ -960,15 +952,19 @@ def refresh_prices(db: Session, answers: dict) -> dict[str, dict]:
     every page load does it, for every symbol whose cached price was not
     fetched today.
 
-    A ticker whose dividends this catch-up asked about is priced from that same
-    answer (`prices.Dividends.close`), with no request of its own; one Yahoo was
-    silent about, or that failed, is not asked again by this run. Every other
-    one (an accumulating fund, a coin, a ticker whose dividend answer was kept
-    from earlier in the day, one whose answer carried no price) is asked once,
-    all of them in one batch, as the button asks, with a request for its
-    currency only when the cache has never learnt it. One that does not answer
-    keeps the price it had, with its date, which the picture and the pages
-    show. Returns what was written."""
+    All of them in one batch, the one the button asks, a ticker whose
+    dividends were asked a moment before included. Brief AJ priced that one
+    from its dividend answer by reading yfinance's internals; through
+    yfinance's public calls one request gives the dividends exactly or the
+    dividends with a close, not both (brief AK, `prices._fetch_dividends`).
+    So a followed ticker costs two requests a day, its dividends and its
+    price, and the second waits on nothing: the batch runs its requests in
+    threads (measured 2026-10-08, 18 symbols in 1.24 s).
+
+    A listing's currency is the cache's; one it never learnt is asked once
+    (`get_currencies`). A symbol that does not answer keeps the price it had,
+    with its date, which the picture and the pages show. Returns what was
+    written."""
     held = sorted({p.symbol for p in project(db) if p.symbol and p.quantity is not None})
     if not held:
         return {}
@@ -983,36 +979,22 @@ def refresh_prices(db: Session, answers: dict) -> dict[str, dict]:
         if (s not in cached or dated.local_day(cached[s].fetched_at) != today)
         and _UNPRICED.get(s) != today
     ]
+    if not due:
+        return {}
     known = {s: cached[s].currency for s in due if s in cached and cached[s].currency}
-
-    quotes: dict[str, dict] = {}
-    for symbol in due:
-        answer = answers.get(symbol)
-        close = getattr(answer, "close", None)
-        if close is not None:
-            day, price = close
-            quotes[symbol] = {
-                "symbol": symbol,
-                "price": round(price, 4),
-                "as_of": day,
-                "currency": known.get(symbol) or getattr(answer, "currency", None),
-            }
-    rest = [s for s in due if s not in quotes and not (s in answers and _window_failed(answers[s]))]
-    if rest:
-        try:
-            batch = prices.get_quotes(rest)
-        except prices.PriceError as exc:
-            logger.warning("The daily price refresh could not reach the market: %s", exc)
-            batch = {}
-        if batch:
-            for symbol in rest:
-                if symbol not in batch:
-                    _UNPRICED[symbol] = today
-        unknown = [s for s in batch if s not in known]
-        found = prices.get_currencies(unknown) if unknown else {}
-        for symbol, quote in batch.items():
-            quote["currency"] = known.get(symbol) or found.get(symbol)
-        quotes.update(batch)
+    try:
+        quotes = prices.get_quotes(due)
+    except prices.PriceError as exc:
+        logger.warning("The daily price refresh could not reach the market: %s", exc)
+        return {}
+    if quotes:
+        for symbol in due:
+            if symbol not in quotes:
+                _UNPRICED[symbol] = today
+    unknown = [s for s in quotes if s not in known]
+    found = prices.get_currencies(unknown) if unknown else {}
+    for symbol, quote in quotes.items():
+        quote["currency"] = known.get(symbol) or found.get(symbol)
     if quotes:
         crud.upsert_price_caches(db, quotes)
     return quotes
@@ -1026,7 +1008,7 @@ def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:
     pacs = execute_due(db, as_of)
     divs = execute_dividends(db, as_of)
     try:
-        refresh_prices(db, divs["answers"])
+        refresh_prices(db)
     except Exception:
         # A route the app calls at every start: a price it could not refresh
         # stays the one it was, with its date, and the ledger above stands.

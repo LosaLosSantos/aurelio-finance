@@ -326,7 +326,11 @@ def test_two_catch_ups_record_a_dividend_once(client, monkeypatch):
     recorded?" and the write. Before: two rows of 5.00, both tabs 200."""
     iid = _account(client)
     _distributing(client, iid)
-    monkeypatch.setattr(prices, "_fetch_dividends", lambda symbol, period="max": [{"date": EX, "dps": 0.5}])
+    monkeypatch.setattr(
+        prices,
+        "_fetch_dividends",
+        lambda symbol, period="max": prices.DividendWindow(answered=True, dividends=[{"date": EX, "dps": 0.5}]),
+    )
     _today(monkeypatch, "2026-04-01")
     everyone_in = threading.Barrier(2, timeout=10)
     lock = threading.Lock()
@@ -383,7 +387,12 @@ def test_the_write_lock_is_held_to_ask_again_and_never_while_the_network_is_aske
     monkeypatch.setattr(prices, "get_price_on", at("yahoo close", lambda s, on: _close(s, on.isoformat(), 50.0)))
     monkeypatch.setattr(prices, "_fetch_currency", at("yahoo currency", lambda s: "USD"))
     monkeypatch.setattr(
-        prices, "_fetch_dividends", at("yahoo dividends", lambda s, period="max": [{"date": feb_20, "dps": 0.5}])
+        prices,
+        "_fetch_dividends",
+        at(
+            "yahoo dividends",
+            lambda s, period="max": prices.DividendWindow(answered=True, dividends=[{"date": feb_20, "dps": 0.5}]),
+        ),
     )
     monkeypatch.setattr(fx, "_fetch_rates", at("frankfurter", lambda base, start, end=None: {start: {"USD": 1.08}}))
     monkeypatch.setattr(crud, "get_plan_occurrences_settled", at("settled?", crud.get_plan_occurrences_settled))

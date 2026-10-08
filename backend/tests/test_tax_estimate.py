@@ -78,10 +78,13 @@ def test_auto_recorded_dividends_are_gross_and_a_correction_clears_the_flag(
     monkeypatch.setattr(
         prices,
         "get_dividends_since",
-        lambda sym, since: [
-            {"date": "2026-03-20", "dps": 1.0},
-            {"date": "2026-06-20", "dps": 2.0},
-        ],
+        lambda sym, since: prices.DividendWindow(
+            answered=True,
+            dividends=[
+                {"date": "2026-03-20", "dps": 1.0},
+                {"date": "2026-06-20", "dps": 2.0},
+            ],
+        ),
     )
     created = client.post("/api/transactions/catch-up").json()["created"]
     assert [(t["amount"], t["estimated"]) for t in created] == [
@@ -121,10 +124,13 @@ def test_withholding_skips_the_dividends_the_reader_corrected(client, monkeypatc
     monkeypatch.setattr(
         prices,
         "get_dividends_since",
-        lambda sym, since: [
-            {"date": "2026-03-20", "dps": 1.0},
-            {"date": "2026-06-20", "dps": 2.0},
-        ],
+        lambda sym, since: prices.DividendWindow(
+            answered=True,
+            dividends=[
+                {"date": "2026-03-20", "dps": 1.0},
+                {"date": "2026-06-20", "dps": 2.0},
+            ],
+        ),
     )
     created = client.post("/api/transactions/catch-up").json()["created"]
     tx = created[0]
@@ -162,7 +168,9 @@ def test_the_gross_share_is_a_per_row_figure_too(client, monkeypatch):
     iid = _institution(client)
     _dist_snapshot(client, iid, "2026-01-01", qty=100)
     monkeypatch.setattr(
-        prices, "get_dividends_since", lambda sym, since: [{"date": "2026-03-20", "dps": 1.0}]
+        prices,
+        "get_dividends_since",
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": "2026-03-20", "dps": 1.0}]),
     )
     client.post("/api/transactions/catch-up")
     row = _portfolio(client)["rows"][0]
@@ -276,7 +284,9 @@ def test_a_half_set_rate_refuses_to_total(client, monkeypatch):
     _bought_and_sold(client, iid, proceeds=1400)
     _dist_snapshot(client, iid, "2026-01-01", qty=100)
     monkeypatch.setattr(
-        prices, "get_dividends_since", lambda sym, since: [{"date": "2026-03-20", "dps": 1.0}]
+        prices,
+        "get_dividends_since",
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": "2026-03-20", "dps": 1.0}]),
     )
     client.post("/api/transactions/catch-up")
     _set_rates(client, country="Italy", capital_gains_rate=26)
@@ -318,7 +328,9 @@ def test_the_tax_figure_enters_no_total(client, monkeypatch):
     _bought_and_sold(client, iid, proceeds=1400)
     _dist_snapshot(client, iid, "2026-01-01", qty=100)
     monkeypatch.setattr(
-        prices, "get_dividends_since", lambda sym, since: [{"date": "2026-03-20", "dps": 1.0}]
+        prices,
+        "get_dividends_since",
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": "2026-03-20", "dps": 1.0}]),
     )
     client.post("/api/transactions/catch-up")
 
@@ -435,7 +447,9 @@ def test_the_rate_reaches_the_shared_context_already_computed(client, monkeypatc
     _bought_and_sold(client, iid, proceeds=1400)
     _dist_snapshot(client, iid, "2026-01-01", qty=100)
     monkeypatch.setattr(
-        prices, "get_dividends_since", lambda sym, since: [{"date": "2026-03-20", "dps": 1.0}]
+        prices,
+        "get_dividends_since",
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": "2026-03-20", "dps": 1.0}]),
     )
     client.post("/api/transactions/catch-up")
     _set_rates(
@@ -471,10 +485,13 @@ def test_the_context_names_the_corrected_dividends_it_left_alone(client, monkeyp
     monkeypatch.setattr(
         prices,
         "get_dividends_since",
-        lambda sym, since: [
-            {"date": "2026-03-20", "dps": 1.0},
-            {"date": "2026-06-20", "dps": 2.0},
-        ],
+        lambda sym, since: prices.DividendWindow(
+            answered=True,
+            dividends=[
+                {"date": "2026-03-20", "dps": 1.0},
+                {"date": "2026-06-20", "dps": 2.0},
+            ],
+        ),
     )
     created = client.post("/api/transactions/catch-up").json()["created"]
     tx = created[0]

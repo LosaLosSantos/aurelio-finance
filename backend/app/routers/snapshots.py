@@ -105,7 +105,7 @@ def create_prefilled_snapshot(
         p for p in positions.project(db) if p.institution_id == institution_id
     ]
 
-    # One batched request for every ticker. A failure is not fatal: an unpriced
+    # One batch for every ticker. A failure is not fatal: an unpriced
     # row simply carries its old value forward and is reported in
     # needs_attention, like any other opaque one.
     symbols = sorted({p.symbol for p in projected if p.symbol})

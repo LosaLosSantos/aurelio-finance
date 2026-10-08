@@ -467,7 +467,10 @@ def test_dividend_catchup_credits_cash_and_is_idempotent(client, monkeypatch):
     monkeypatch.setattr(
         prices,
         "get_dividends_since",
-        lambda sym, since: [{"date": "2026-03-20", "dps": 0.75}, {"date": "2026-06-20", "dps": 0.80}],
+        lambda sym, since: prices.DividendWindow(
+            answered=True,
+            dividends=[{"date": "2026-03-20", "dps": 0.75}, {"date": "2026-06-20", "dps": 0.80}],
+        ),
     )
     monkeypatch.setattr(prices, "get_price_on", _fake_price(100.0))  # unused: no plans
 
@@ -495,7 +498,7 @@ def test_dividend_uses_shares_held_at_ex_date(client, monkeypatch):
     monkeypatch.setattr(
         prices,
         "get_dividends_since",
-        lambda sym, since: [{"date": "2026-03-20", "dps": 1.0}],
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": "2026-03-20", "dps": 1.0}]),
     )
 
     body = client.post("/api/transactions/catch-up").json()
@@ -516,7 +519,7 @@ def test_a_buy_on_the_ex_date_is_too_late(client, monkeypatch):
     monkeypatch.setattr(
         prices,
         "get_dividends_since",
-        lambda sym, since: [{"date": "2026-03-20", "dps": 1.0}],
+        lambda sym, since: prices.DividendWindow(answered=True, dividends=[{"date": "2026-03-20", "dps": 1.0}]),
     )
 
     (d,) = client.post("/api/transactions/catch-up").json()["created"]
