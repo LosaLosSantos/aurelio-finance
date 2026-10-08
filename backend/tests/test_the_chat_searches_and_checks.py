@@ -756,11 +756,28 @@ def test_the_prompt_and_the_tool_say_up_to_three_and_what_gets_none():
 # --- The migration ----------------------------------------------------------------
 
 
-def test_the_migration_keeps_every_line_and_lets_a_share_have_no_isin(one_migration_behind):
+@pytest.fixture
+def before_the_share_migration(tmp_path, start_on):
+    """A file the real chain built up to the revision before `5a4336780500`,
+    which the next `database.init_db()` starts on. Named by its revision and
+    not as "one behind the head", because the head has moved since (brief AJ,
+    `e62c6f6c8060`), and a start now runs this migration and the ones after it."""
+    path = tmp_path / "data.db"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(database.BASE_DIR / "alembic"))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(database, "DATABASE_URL", f"sqlite:///{path}")
+        command.upgrade(cfg, "e9346d9cfd3f")
+    start_on(path)
+    return path
+
+
+def test_the_migration_keeps_every_line_and_lets_a_share_have_no_isin(before_the_share_migration):
     """The reader's `data.db` takes this at its next start: the app copies the
     file, then rebuilds `watchlist_items` with `isin` optional, every row
     copied as it was. Undone only while no line lacks an ISIN."""
-    with closing(sqlite3.connect(one_migration_behind)) as conn, conn:
+    path = before_the_share_migration
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute(
             "INSERT INTO watchlist_items (isin, symbol, name, reason, based_on, unknowns, added_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -772,12 +789,10 @@ def test_the_migration_keeps_every_line_and_lets_a_share_have_no_isin(one_migrat
     database.init_db()
 
     copies = list(
-        one_migration_behind.parent.glob(
-            "data.db.bak-*-before-migration-e9346d9cfd3f-to-5a4336780500"
-        )
+        path.parent.glob("data.db.bak-*-before-migration-e9346d9cfd3f-to-*")
     )
     assert len(copies) == 1, "the app copied the file before migrating it"
-    with closing(sqlite3.connect(one_migration_behind)) as conn, conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT * FROM watchlist_items").fetchall() == before
         columns = {row[1]: row for row in conn.execute("PRAGMA table_info(watchlist_items)")}
         assert columns["isin"][3] == 0, "isin is no longer NOT NULL"
@@ -794,10 +809,10 @@ def test_the_migration_keeps_every_line_and_lets_a_share_have_no_isin(one_migrat
     cfg.set_main_option("script_location", str(database.BASE_DIR / "alembic"))
     with pytest.raises(RuntimeError, match="name a share by its symbol"):
         command.downgrade(cfg, "e9346d9cfd3f")
-    with closing(sqlite3.connect(one_migration_behind)) as conn, conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("DELETE FROM watchlist_items WHERE isin IS NULL")
     command.downgrade(cfg, "e9346d9cfd3f")
-    with closing(sqlite3.connect(one_migration_behind)) as conn, conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         columns = {row[1]: row for row in conn.execute("PRAGMA table_info(watchlist_items)")}
         assert columns["isin"][3] == 1
         assert conn.execute("SELECT * FROM watchlist_items").fetchall() == before

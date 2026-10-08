@@ -76,15 +76,36 @@ import re
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
 from app import advisor, catalogue, chain, composition, crud, fx, models, positions, prices, schemas
 from app.database import unit_of_work
 
 logger = logging.getLogger(__name__)
+
+
+# The words a model writes for "nothing" in a field it may leave empty. In the
+# reader's test round (2026-10-08) two fund cards carried "symbol": "null", the
+# word and not JSON's null, and accepting them stored the symbol "NULL" on both
+# watchlist lines, which "Record a buy" then put in the ticker box. The schema
+# offers a null; a word that means one is read as one.
+_ABSENT = frozenset({"", "null", "none", "nil", "undefined", "n/a"})
+
+
+def _absent_is_none(value):
+    """`value`, or None when it is a string that says there is nothing."""
+    if isinstance(value, str) and value.strip().lower() in _ABSENT:
+        return None
+    return value
+
+
+# An optional text argument of a tool that writes: what the model wrote, or
+# nothing, never the word for nothing. A validator and not a type, so the
+# schema the model is shown is the one it was shown before.
+MaybeText = Annotated[str | None, BeforeValidator(_absent_is_none)]
 
 
 @dataclass(frozen=True)
@@ -558,7 +579,7 @@ class AddRealAssetArgs(BaseModel):
             "a valuation records what something was OBSERVED to be worth."
         ),
     )
-    category: str | None = Field(
+    category: MaybeText = Field(
         default=None,
         description=(
             "One of: real_estate, vehicle, collectible, jewelry, art, other. "
@@ -585,7 +606,7 @@ class AddRealAssetArgs(BaseModel):
             "none: leave it null rather than repeating the present value here."
         ),
     )
-    notes: str | None = Field(default=None, description="Anything else worth keeping.")
+    notes: MaybeText = Field(default=None, description="Anything else worth keeping.")
 
 
 def _stored_currency(code: str) -> str:
@@ -693,7 +714,7 @@ class RecordTransactionArgs(BaseModel):
             "symbol OR by this string."
         ),
     )
-    symbol: str | None = Field(
+    symbol: MaybeText = Field(
         default=None,
         description=(
             "Yahoo ticker, e.g. VWCE.MI. Required for a buy, a sell and a "
@@ -702,8 +723,8 @@ class RecordTransactionArgs(BaseModel):
             "as it appears in the positions you were given."
         ),
     )
-    isin: str | None = Field(default=None, description="ISIN, when the reader gave one.")
-    asset_class: str | None = Field(
+    isin: MaybeText = Field(default=None, description="ISIN, when the reader gave one.")
+    asset_class: MaybeText = Field(
         default=None,
         description="equity | bond | fund_etf | crypto | commodity | real_estate | other",
     )
@@ -752,7 +773,7 @@ class RecordTransactionArgs(BaseModel):
             "silence is not."
         ),
     )
-    institution: str | None = Field(
+    institution: MaybeText = Field(
         default=None,
         description=(
             "The institution holding the position, BY NAME and exactly as it "
@@ -763,14 +784,14 @@ class RecordTransactionArgs(BaseModel):
             "from that position."
         ),
     )
-    cash_institution: str | None = Field(
+    cash_institution: MaybeText = Field(
         default=None,
         description=(
             "The institution whose cash moved, by name, when it is not the one "
             "holding the position. Null means the same one."
         ),
     )
-    note: str | None = Field(default=None, description="Anything else worth keeping.")
+    note: MaybeText = Field(default=None, description="Anything else worth keeping.")
 
 
 @dataclass(frozen=True)
@@ -1036,7 +1057,7 @@ class UpdateProfileArgs(BaseModel):
             "what a box cannot hold."
         ),
     )
-    topic: str | None = Field(
+    topic: MaybeText = Field(
         default=None,
         description=(
             "Which heading to file a NEW question under: reuse one already in "
@@ -1044,7 +1065,7 @@ class UpdateProfileArgs(BaseModel):
             "already on record: that one keeps the topic it has."
         ),
     )
-    question_key: str | None = Field(
+    question_key: MaybeText = Field(
         default=None,
         description=(
             "Leave this null. It is here for the case where the reader names a "
@@ -1184,7 +1205,7 @@ class SuggestInstrumentArgs(BaseModel):
     travel with it: a fund by its ISIN from the catalogue, or a single share by
     the symbol Yahoo lists it under."""
 
-    isin: str | None = Field(
+    isin: MaybeText = Field(
         default=None,
         min_length=12,
         max_length=12,
@@ -1226,7 +1247,7 @@ class SuggestInstrumentArgs(BaseModel):
             "when what was missing is the whole question."
         ),
     )
-    symbol: str | None = Field(
+    symbol: MaybeText = Field(
         default=None,
         description=(
             "For a single SHARE: the exact symbol of a `lookup_symbol` result "
