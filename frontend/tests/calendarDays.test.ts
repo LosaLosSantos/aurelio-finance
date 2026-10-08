@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { dayCount, daysAgo, daysBetween, localDay } from "../src/components/calendarDays.ts";
+import { ageWords, dayCount, daysAgo, daysBetween, localDay } from "../src/components/calendarDays.ts";
 
 const ZONE = process.env.TZ;
 afterEach(() => {
@@ -84,4 +84,14 @@ test("one day is a day, two are days", () => {
   assert.equal(dayCount(1), "1 day");
   assert.equal(dayCount(2), "2 days");
   assert.equal(dayCount(18), "18 days");
+});
+
+test("a date's age in words: today, one day, several", () => {
+  process.env.TZ = "Europe/Rome";
+  const now = new Date(2026, 9, 8, 11, 30, 0);
+  assert.equal(ageWords("2026-10-08", now), "today");
+  assert.equal(ageWords("2026-10-07", now), "1 day ago");
+  assert.equal(ageWords("2026-10-02", now), "6 days ago");
+  // A date after today (the clock behind the market's) is not "-1 days ago".
+  assert.equal(ageWords("2026-10-09", now), "today");
 });

@@ -38,6 +38,7 @@ import { prefillNote } from "./watchItem";
 import type { WatchlistItem } from "../api/watchlist";
 import { Row, RowsOrEmpty, Section, apiError, btnClass, cardClass, inputClass, locale, money, todayISO, CURRENCY_LIST } from "./ui";
 import { dividendWord } from "./dividendLine";
+import { ageWords } from "./calendarDays";
 import { avgCostTitle, plTitle } from "./costWords";
 import {
   SHOWN,
@@ -407,7 +408,14 @@ export default function Portfolio({
           // anywhere near it. Provenance travels with every number, including
           // this one.
           <span className="text-xs text-ink-faint">
-            {data.prices_as_of && <>prices as of {fmtDate(data.prices_as_of)}</>}
+            {/* With its age (brief AJ): the app now refreshes prices once a
+                day by itself, and a date alone did not say a price was days
+                old when it was. */}
+            {data.prices_as_of && (
+              <>
+                prices as of {fmtDate(data.prices_as_of)} ({ageWords(data.prices_as_of)})
+              </>
+            )}
             {data.prices_as_of && data.fx_as_of && " · "}
             {data.fx_as_of && <>FX ECB {fmtDate(data.fx_as_of)}</>}
           </span>

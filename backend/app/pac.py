@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import math
 
 from pydantic import ValidationError
@@ -65,7 +66,9 @@ from app import crud, fx, models, prices, schemas
 from app.analytics import STEP_MONTHS, recurrence
 from app.database import commit, sole_writer
 from app import dated
-from app.positions import latest_snapshot_by_institution, replay
+from app.positions import latest_snapshot_by_institution, project, replay
+
+logger = logging.getLogger(__name__)
 
 
 def plan_occurrences(plan: models.AccumulationPlan, up_to: datetime.date) -> list[datetime.date]:
@@ -907,7 +910,9 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 written = _record_dividend(db, inst_id, h.symbol, d["date"], columns)
                 if written is not None:
                     created.append(written)
-    return {"created": created, "skipped": skipped}
+    # `answers` too, for `refresh_prices`: what each ticker's window brought
+    # this run, its price included.
+    return {"created": created, "skipped": skipped, "answers": answers}
 
 
 def _record_dividend(
@@ -928,12 +933,104 @@ def _record_dividend(
         return crud.store_transaction(db, columns, estimated=True)
 
 
+# Symbols the day's batch asked about and Yahoo priced nothing for, while it
+# priced others: a delisted ticker, one typed wrong. Not asked again until the
+# next day, or each page load would ask Yahoo about them once more (seen in the
+# browser on a copy of the test database, brief AJ). A batch that priced
+# nothing at all is a market that did not answer, and is tried again at the
+# next load. Kept in the process, like the catalogue's guard: a restarted
+# server asks once more.
+_UNPRICED: dict[str, str] = {}
+
+
+def _window_failed(answer) -> bool:
+    """Whether this catch-up asked Yahoo about the ticker's dividends and got
+    nothing back: silence, or a failure. Asking again for its price, in the
+    same second, would most likely meet the same."""
+    return answer is None or isinstance(answer, prices.PriceError)
+
+
+def refresh_prices(db: Session, answers: dict) -> dict[str, dict]:
+    """Bring the price cache to the latest close, once a day for each symbol
+    the positions are priced by, asking Yahoo about none of them twice.
+
+    In the reader's test round (2026-10-08) the cached closes were days old, and
+    the chat said so: nothing but the "Refresh market prices" button and the
+    per-position refresh ever asked. Brief AJ: the catch-up the app posts at
+    every page load does it, for every symbol whose cached price was not
+    fetched today.
+
+    A ticker whose dividends this catch-up asked about is priced from that same
+    answer (`prices.Dividends.close`), with no request of its own; one Yahoo was
+    silent about, or that failed, is not asked again by this run. Every other
+    one (an accumulating fund, a coin, a ticker whose dividend answer was kept
+    from earlier in the day, one whose answer carried no price) is asked once,
+    all of them in one batch, as the button asks, with a request for its
+    currency only when the cache has never learnt it. One that does not answer
+    keeps the price it had, with its date, which the picture and the pages
+    show. Returns what was written."""
+    held = sorted({p.symbol for p in project(db) if p.symbol and p.quantity is not None})
+    if not held:
+        return {}
+    today = dated.today()
+    cached = {
+        row.symbol: row
+        for row in db.scalars(select(models.PriceCache).where(models.PriceCache.symbol.in_(held)))
+    }
+    due = [
+        s
+        for s in held
+        if (s not in cached or dated.local_day(cached[s].fetched_at) != today)
+        and _UNPRICED.get(s) != today
+    ]
+    known = {s: cached[s].currency for s in due if s in cached and cached[s].currency}
+
+    quotes: dict[str, dict] = {}
+    for symbol in due:
+        answer = answers.get(symbol)
+        close = getattr(answer, "close", None)
+        if close is not None:
+            day, price = close
+            quotes[symbol] = {
+                "symbol": symbol,
+                "price": round(price, 4),
+                "as_of": day,
+                "currency": known.get(symbol) or getattr(answer, "currency", None),
+            }
+    rest = [s for s in due if s not in quotes and not (s in answers and _window_failed(answers[s]))]
+    if rest:
+        try:
+            batch = prices.get_quotes(rest)
+        except prices.PriceError as exc:
+            logger.warning("The daily price refresh could not reach the market: %s", exc)
+            batch = {}
+        if batch:
+            for symbol in rest:
+                if symbol not in batch:
+                    _UNPRICED[symbol] = today
+        unknown = [s for s in batch if s not in known]
+        found = prices.get_currencies(unknown) if unknown else {}
+        for symbol, quote in batch.items():
+            quote["currency"] = known.get(symbol) or found.get(symbol)
+        quotes.update(batch)
+    if quotes:
+        crud.upsert_price_caches(db, quotes)
+    return quotes
+
+
 def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:
     """Run every ledger catch-up (PAC buys first, then dividends — so a buy
     recorded today counts toward today's dividend share count on the next
-    run). Returns the merged {created, skipped}."""
+    run), then the day's prices (`refresh_prices`), which write no ledger
+    entry. Returns the merged {created, skipped}."""
     pacs = execute_due(db, as_of)
     divs = execute_dividends(db, as_of)
+    try:
+        refresh_prices(db, divs["answers"])
+    except Exception:
+        # A route the app calls at every start: a price it could not refresh
+        # stays the one it was, with its date, and the ledger above stands.
+        logger.exception("The daily price refresh failed")
     return {
         "created": pacs["created"] + divs["created"],
         "skipped": pacs["skipped"] + divs["skipped"],

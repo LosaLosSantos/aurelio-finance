@@ -299,6 +299,17 @@ def _catalogue_source(funds: dict) -> str:
     return f'- The facts after "catalogue:" are from justETF\'s list of funds{when}.'
 
 
+def _age(day: str) -> str:
+    """How long before today a market date is, in words the model does not
+    have to work out: "today", "1 day before today", "6 days before today"."""
+    days = (
+        datetime.date.fromisoformat(dated.today()) - datetime.date.fromisoformat(day)
+    ).days
+    if days <= 0:
+        return "today"
+    return f"{days} day{'' if days == 1 else 's'} before today"
+
+
 def _render_positions(portfolio: dict, funds: dict) -> list[str]:
     """The investment positions as prose: one line per row, then the totals.
 
@@ -328,12 +339,18 @@ def _render_positions(portfolio: dict, funds: dict) -> list[str]:
         if r["quantity"] is not None:
             parts.append(f"qty {r['quantity']:g}")
         if r["avg_cost"] is not None:
-            parts.append(f"avg cost {r['avg_cost']:.2f}")
+            # In the base, like the book it is divided from: beside a price in
+            # the listing's currency, a bare figure read as the same money.
+            parts.append(f"avg cost {r['avg_cost']:.2f} {portfolio['base_currency']}")
         if r["live_price"] is not None:
+            # The price with its currency and its age. Without the first the
+            # chat wrote a dollar price with no unit (the reader's test round,
+            # 2026-10-08); the second is a subtraction the model had to do,
+            # and a price days old read like today's.
             parts.append(
                 f"market {r['market_value']:.2f} "
-                f"(price {r['live_price']:.2f} as of {r['as_of']}, "
-                f"P/L {r['delta']:+.2f})"
+                f"(price {r['live_price']:.2f} {r['currency']} as of {r['as_of']}, "
+                f"{_age(r['as_of'])}, P/L {r['delta']:+.2f})"
             )
         elif r["observed_value"] != r["book_value"]:
             # Nothing priced this row, and its cost is not its value: the
@@ -369,7 +386,8 @@ def _render_positions(portfolio: dict, funds: dict) -> list[str]:
         # "TOTAL market value" would read a photograph as a quote.
         line = (
             f"- TOTAL current value: {portfolio['total_market']:.2f} "
-            f"(market prices as of {portfolio['prices_as_of']})"
+            f"(market prices as of {portfolio['prices_as_of']}, "
+            f"{_age(portfolio['prices_as_of'])})"
         )
         if carried:
             line += f", of which {carried:.2f} is carried from situations, not priced"

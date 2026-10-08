@@ -555,14 +555,20 @@ def _fetch_dividends(symbol: str, period: str = "max") -> list[dict] | None:
     Yahoo's answer faked). It was iterated as (column, Series) pairs and
     raised, and the ticker's whole history was one skip line at every start;
     each row is now read on its own, and one that cannot be read takes nothing
-    else with it."""
+    else with it.
+
+    The answer is a `Dividends`: the list, with the price the same answer
+    carries beside it (`_window_price`), which the catch-up writes to the price
+    cache without asking Yahoo again (brief AJ)."""
     import yfinance as yf
 
-    dividends = yf.Ticker(symbol).get_dividends(period=period)
+    ticker = yf.Ticker(symbol)
+    dividends = ticker.get_dividends(period=period)
     if dividends is None:
         return None
+    close, listing = _window_price(ticker, period)
     if len(dividends) == 0:
-        return []
+        return Dividends([], close=close, currency=listing)
     if hasattr(dividends, "columns"):
         amounts = dividends["Dividends"]
         named = list(dividends["currency"]) if "currency" in dividends.columns else [None] * len(dividends)
@@ -572,7 +578,61 @@ def _fetch_dividends(symbol: str, period: str = "max") -> list[dict] | None:
         _read_dividend(idx.date().isoformat(), amount, currency)
         for idx, amount, currency in zip(amounts.index, amounts.to_list(), named)
     )
-    return [event for event in events if event is not None]
+    return Dividends(
+        [event for event in events if event is not None], close=close, currency=listing
+    )
+
+
+class Dividends(list):
+    """What a dividend window answers: its dividends, a list as before, and
+    what the same answer says of the price, beside them.
+
+    The window is one chart request a ticker, and Yahoo's chart is the daily
+    rows of the range asked, prices included. Measured 2026-10-08 on seven
+    public tickers (yfinance 1.4.1, every request counted): one request each,
+    plus one for the time zone the first time a ticker is seen; 22 to 31 daily
+    rows in a month; the last close equal to what the per-position refresh
+    reads on 6 of 7, the seventh 189.14 against 189.12 seconds later, a
+    session still open. The refresh asks twice a ticker (the window and the
+    currency). So the price the catch-up keeps for a ticker it asked about
+    dividends comes from here, and Yahoo is not asked again.
+
+    `close` is (day, price) of the last row with a price, `currency` the
+    listing's as the answer names it, kept in its case (GBp is pence). Either
+    is None when the answer did not carry it; a list built by anything else
+    (a test's fake) carries neither, and the catch-up then prices that ticker
+    as it prices the rest."""
+
+    def __init__(self, rows=(), *, close: tuple[str, float] | None = None, currency: str | None = None):
+        super().__init__(rows)
+        self.close = close
+        self.currency = currency
+
+
+def _window_price(ticker, period: str) -> tuple[tuple[str, float] | None, str | None]:
+    """The last close among the daily rows `ticker` was given for its
+    dividends, and the listing's currency from the same answer: no request of
+    its own.
+
+    yfinance keeps the rows `get_dividends(period)` was read from, keyed by
+    interval, period and repair, and the answer's metadata. Both are its
+    internals (read in yfinance 1.4.1, `PriceHistory._get_history_cache`), so
+    they are read defensively: a yfinance that moves them costs this shortcut,
+    the ticker is then priced the way every other one is, and nothing else
+    changes."""
+    try:
+        history = ticker._lazy_load_price_history()
+        frame = history._history_cache[("1d", period, False)]["prices"]
+        closes = frame["Close"].dropna()
+        closes = closes[closes > 0]
+        close = (
+            (closes.index[-1].date().isoformat(), float(closes.iloc[-1])) if len(closes) else None
+        )
+        named = (history._history_metadata or {}).get("currency")
+    except Exception:
+        return None, None
+    currency = named.strip() if isinstance(named, str) and named.strip() else None
+    return close, currency
 
 
 def get_dividends_since(symbol: str, since: datetime.date) -> list[dict] | None:
@@ -584,7 +644,8 @@ def get_dividends_since(symbol: str, since: datetime.date) -> list[dict] | None:
     (`_dividend_range`); `datetime.date.min` asks for the whole history.
 
     None when no answer came back, which the caller must not read as "no
-    dividends": see `_fetch_dividends`."""
+    dividends": see `_fetch_dividends`. An answer comes back as a `Dividends`,
+    with the price the window carried."""
     symbol = (symbol or "").strip()
     if not symbol:
         raise PriceError("Empty symbol")
@@ -596,7 +657,11 @@ def get_dividends_since(symbol: str, since: datetime.date) -> list[dict] | None:
     if rows is None:
         return None
     lo = since.isoformat()
-    return [row for row in rows if row["date"] > lo]
+    return Dividends(
+        [row for row in rows if row["date"] > lo],
+        close=getattr(rows, "close", None),
+        currency=getattr(rows, "currency", None),
+    )
 
 
 

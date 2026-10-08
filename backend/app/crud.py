@@ -1139,23 +1139,46 @@ def get_dividend_dates_recorded(
 def upsert_price_caches(db: Session, quotes: dict[str, dict]) -> None:
     """Store the latest fetched price per symbol (insert or overwrite). A
     quote may carry "currency"; a known cached currency is never overwritten
-    with None (a listing's currency does not change)."""
+    with None (a listing's currency does not change).
+
+    One `INSERT ... ON CONFLICT DO UPDATE` a symbol, since brief AJ: the
+    catch-up the app posts at every page load now refreshes prices too, and
+    two of those run at once (two tabs, React's StrictMode). Read-then-insert
+    let the second die on the key, which is how the rate store failed until
+    dd8370b."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    now = models._utcnow_iso()
     for sym, q in quotes.items():
-        row = db.get(models.PriceCache, sym)
-        if row is None:
-            db.add(
-                models.PriceCache(
-                    symbol=sym,
-                    price=q["price"],
-                    as_of=q["as_of"],
-                    currency=q.get("currency"),
-                )
+        row = sqlite_insert(models.PriceCache).values(
+            symbol=sym,
+            price=q["price"],
+            as_of=q["as_of"],
+            currency=q.get("currency"),
+            fetched_at=now,
+        )
+        db.execute(
+            row.on_conflict_do_update(
+                index_elements=["symbol"],
+                set_={
+                    "price": row.excluded.price,
+                    "as_of": row.excluded.as_of,
+                    "fetched_at": row.excluded.fetched_at,
+                    "currency": func.coalesce(row.excluded.currency, models.PriceCache.currency),
+                },
             )
-        else:
-            row.price, row.as_of = q["price"], q["as_of"]
-            row.currency = q.get("currency") or row.currency
-            row.fetched_at = models._utcnow_iso()
+        )
     commit(db)
+    # The statements went round the identity map: a row this session already
+    # holds would still read the price it had, inside a unit of work above all,
+    # where `commit` only flushes and expires nothing.
+    # Read off the identity keys, (class, primary key, token), so an instance
+    # the commit has already expired is not loaded just to be asked its symbol.
+    for key in list(db.identity_map.keys()):
+        if key[0] is models.PriceCache and key[1] and key[1][0] in quotes:
+            held = db.identity_map.get(key)
+            if held is not None:
+                db.expire(held)
 
 
 def earliest_dated_record(db: Session) -> str | None:
