@@ -41,7 +41,8 @@ says so, at the source, rather than a NaN travelling into the allocation and
 being reported here as a budget too small to buy a unit. What a plan buys when
 a day never gets a close at all — a weekend, a holiday, a gap in the feed — is
 `prices._close_on`'s policy, and the buy is then dated the session it was
-priced at.
+priced at. A weekend does not wait for it (brief AJ): the first session after
+it is bought as soon as that session has ended.
 
 PAC fill models (plan.execution):
 - whole_units (default): floor(amount / price) units; the remainder simply

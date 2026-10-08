@@ -43,9 +43,10 @@ _RECENT_DAYS = 10
 # across a holiday week, and no more — the rows after them decide nothing.
 _CLOSE_LOOK_AHEAD = 21
 
-# How many ended sessions must publish a close of their own before a day that
-# has none is taken as a day the market did not trade. A policy, not a
-# measurement; `_close_on` says what it sits between and why.
+# How many ended sessions must publish a close of their own before a weekday
+# that has none is taken as a day the market did not trade. A policy, not a
+# measurement; `_close_on` says what it sits between and why, and why a
+# weekend does not wait for it.
 CLOSES_SETTLE_WITHIN = 3
 
 
@@ -190,6 +191,18 @@ def _fetch_recent_close(symbol: str) -> tuple[float, str | None, str]:
     return close, currency, as_of
 
 
+# The two days a weekend has, by `weekday() - 5`, named here rather than by
+# strftime, which names them in whatever locale the process runs in.
+_WEEKEND = ("Saturday", "Sunday")
+
+
+def _trades_on_weekends(rows: list[tuple[str, float | None]]) -> bool:
+    """Whether any of Yahoo's rows falls on a Saturday or a Sunday, with or
+    without a close: a symbol that has weekend sessions at all (a coin), as
+    told by its own data rather than by a calendar or a class."""
+    return any(datetime.date.fromisoformat(day).weekday() >= 5 for day, _ in rows)
+
+
 def _close_on(symbol: str, on: datetime.date, today: datetime.date) -> tuple[float, str]:
     """(price, as_of_iso) for a sum fixed on `on`: that day's own close, or —
     once the market has moved on without ever publishing it — the first ENDED
@@ -219,13 +232,24 @@ def _close_on(symbol: str, on: datetime.date, today: datetime.date) -> tuple[flo
     below the gaps that never filled.
 
     A day the market was closed is the same case and takes the same answer: the
-    first ended session after it. A weekend or a holiday leaves no row at all
-    (measured over two years on VWCE.MI, VWCE.DE, ENI.MI and VTI: no row for
-    any of eight exchange holidays, none for any weekend), but so does a row
-    Yahoo has not written yet, and nothing distinguishes them on the day. The
-    wait costs a few days of patience on an occurrence that falls on a Saturday
-    and buys it at Monday's close either way; concluding from an absence would
-    cost a purchase on a day that never existed."""
+    first ended session after it. A holiday leaves no row at all (measured over
+    two years on VWCE.MI, VWCE.DE, ENI.MI and VTI: no row for any of eight
+    exchange holidays), but so does a row Yahoo has not written yet, and
+    nothing distinguishes them on the day, so a weekday without a close waits.
+
+    **A weekend is not a missing close** (the reader's decision, brief AJ,
+    2026-10-08). The same measurement found no row for any weekend, and the
+    wait cost every occurrence that fell on one three sessions of patience for
+    a close no market could have: a plan's Sunday was bought on Thursday, at
+    Monday's close, and the chat meanwhile said the plan had not run. So a
+    Saturday or a Sunday with no close takes the first ended session after it
+    at once, for a symbol that has no row on any weekend day of the window;
+    the window reaches a week before the day asked, so it always holds a
+    weekend. A symbol that trades on weekends has rows there (on 2026-10-08,
+    8 of ETH-EUR's 31 rows in a month were weekend days, and 0 of six
+    exchange listings'), and its Saturday waits for its own close as any day
+    does: concluding from that absence would buy a coin's Saturday at
+    Sunday's close, the trap brief R named."""
     window_end = min(
         today, on + datetime.timedelta(days=_CLOSE_LOOK_AHEAD)
     ) + datetime.timedelta(days=1)
@@ -237,6 +261,13 @@ def _close_on(symbol: str, on: datetime.date, today: datetime.date) -> tuple[flo
         if day == asked and close is not None:
             return close, day
     ended = [(day, close) for day, close in rows if asked < day < now and close is not None]
+    if on.weekday() >= 5 and not _trades_on_weekends(rows):
+        if ended:
+            return ended[0][1], ended[0][0]
+        raise NoCloseYet(
+            f"{asked} is a {_WEEKEND[on.weekday() - 5]}, when '{symbol}' does not trade: "
+            "it takes the close of the first session after it, which has not ended yet."
+        )
     if not ended:
         raise NoCloseYet(
             f"The market has no close for '{symbol}' on {asked} yet, and no session "

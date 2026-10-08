@@ -132,13 +132,17 @@ nobody recomputes. The app waits and **writes nothing**, not even that the
 occurrence came round, because it did not. What ends the wait is the
 **ended** sessions that arrive after the day: today's session is still open and
 proves nothing about the day before (on 17 September 2026 at 10:06 the 16th was
-empty and the 17th was there, at a price that kept moving until 18:00). After
-three ended sessions that all have their close, the day asked for is taken as
-one on which that security did not trade (a holiday, a weekend, or a gap in the
-feed that will never fill), and the purchase happens at the first ended session
-after it, never at the one before: a recurring order cannot execute before the
-day it exists. Three is a policy, not a measurement; `prices._close_on` says
-between what and what it sits.
+empty and the 17th was there, at a price that kept moving until 18:00). A
+Saturday or a Sunday does not wait: a security that has no weekend sessions has
+no close to wait for there, so the purchase takes the first session after it as
+soon as that session has ended. A coin trades on weekends, and its Saturday
+waits for its own close like any other day. On a weekday, after three ended
+sessions that all have their close, the day asked for is taken as one on which
+that security did not trade (a holiday, or a gap in the feed that will never
+fill), and the purchase happens at the first ended session after it, never at
+the one before: a recurring order cannot execute before the day it exists.
+Three is a policy, not a measurement; `prices._close_on` says between what and
+what it sits.
 
 **Currency is designed; locale happened.** Everything is converted into one
 base currency (yours to choose, the euro by default) before it is shown; how
