@@ -678,7 +678,8 @@ def test_the_chat_proposes_a_real_write_and_confirming_it_records_the_row(
     decided = _events(
         client.post(f"/api/chat/cards/{card['card_id']}", json={"decision": "confirm"})
     )
-    assert [e["kind"] for e in decided] == ["start", "delta", "done"]
+    assert [e["kind"] for e in decided] == ["start", "decided", "delta", "done"]
+    assert decided[1]["card"]["outcome"] == "confirmed"
     assert [a["name"] for a in client.get("/api/real-assets").json()] == ["gold necklace"]
 
     stored = client.get(

@@ -2634,6 +2634,23 @@ class ChatCard(BaseModel):
     card: ChatCardBlock
 
 
+class ChatDecided(BaseModel):
+    """A card has been decided, and this is the card as it is now stored.
+
+    Sent the moment the decision is on record: right after `start` for every
+    card but the analyzer's, whose decision is stored when its run is, after
+    its steps. The panel swaps the card it shows for this one there and then,
+    so the card reads as decided whatever the turn that follows does. Until
+    brief AJ the panel coloured it only once that turn had ended well: the
+    reader's second confirmation, on 2026-10-08, was stored, its follow-up
+    failed, and the card kept its buttons; pressing again was refused as a
+    decision already taken. The block itself, for the reason `ChatCard`
+    carries one: one shape, whether it arrived now or is read back later."""
+
+    kind: Literal["decided"] = "decided"
+    card: ChatCardBlock
+
+
 class ChatSource(BaseModel):
     """A page a web search found, as it arrives.
 
@@ -2714,6 +2731,7 @@ ChatEvent = Annotated[
     | ChatSource
     | ChatStep
     | ChatCard
+    | ChatDecided
     | ChatDone
     | ChatError,
     Field(discriminator="kind"),

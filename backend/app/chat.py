@@ -554,6 +554,14 @@ class PreparedTurn:
     # messages are EMPTY when it is, and cannot be otherwise: what the model
     # reads has to include what the tool did, and the tool has not run.
     pending: Pending | None = None
+    # The id of the card this turn answers, on a turn that answers one. Such a
+    # turn ends on the app's note about the decision (`_decision_note`) and is
+    # asked at most DECISION_ROUNDS times.
+    decision: str | None = None
+    # That card as stored once decided, when the decision was taken before the
+    # stream: every card but the analyzer's, which is decided when its run is
+    # stored. Sent as `decided` right after `start`.
+    decided: dict | None = None
 
 
 def _wire(stored: list[models.ChatMessage], now: screen.Screen | None = None) -> list[dict]:
@@ -686,6 +694,88 @@ class CardStale(ValueError):
     """What the card was drawn against has changed since it was proposed."""
 
 
+# How many times a turn that answers a card may ask the model: once with the
+# tools, then once with none. The reader's decision (2026-10-08, brief AJ),
+# after the turn that followed their first confirmation redid the lookups
+# behind the answer the card came from and wrote that answer again. The note
+# below asks for one round, and a model that reads it does not reach the
+# second; the bound is what holds when one reads it otherwise.
+DECISION_ROUNDS = 2
+
+# Said at the end of a turn that answers a card, in the app's voice: what the
+# reader decided, what is still waiting for them, and what is asked now.
+#
+# Two defects of the reader's test round (2026-10-08) are this note's absence.
+# Such a turn used to end on the card's tool results, which a model reads as
+# its own tools answering in the middle of an answer: it went on writing the
+# answer the card came from, redoing its lookups to do so, and the prompt's
+# rule about running a tool again sent it straight to them. And once anything
+# had been said after the card (the reply to the first card of an answer that
+# drew two, or any later exchange), the turn ended on the model's own words.
+# Measured on Opus 5.5 that day, on the reader's sequence rebuilt on test
+# data: that request was refused with a 400 whether the web was offered
+# ("Server tool ... failed: invalid request") or not ("Provider returned
+# error"), and cost nothing either way; the same request with this note at its
+# end was taken, the model reasoning when the probe's cap of 300 tokens
+# stopped it (0.073601 USD).
+#
+# A user turn at the end, where the last-round notice goes for those models
+# and for its reason: everything before it is the conversation as it stands,
+# so the cache is read up to here.
+DECISION_NOTE = (
+    "THE READER HAS JUST ANSWERED A CARD and asked nothing new; this note is "
+    "the app's. {outcome}{waiting}Say what that means for them briefly, in the "
+    "language of this conversation, and stop there. Do not repeat or rewrite "
+    "your earlier answer, and do not run again the lookups it was written "
+    "from: what they found is in its words, and running a tool again is for a "
+    "new question that needs what an old lookup found, which a decision is "
+    "not. Go on only where their last question still needs this outcome, and "
+    "take it from the picture above, which is rebuilt with it. Draw no new "
+    "card unless they asked for one."
+)
+
+
+def _decided_words(card: dict) -> str:
+    """What became of one card, as the note says it."""
+    title = card.get("title") or card.get("tool") or "the card"
+    if card.get("outcome") == "rejected":
+        return (
+            f'They rejected "{title}": nothing was written. Do not propose it '
+            "again unless they ask for it. "
+        )
+    if card.get("tool") == "suggest_instrument":
+        return f'They accepted "{title}": it is on their watchlist now. '
+    if card.get("tool") == "run_analysis":
+        run = (card.get("result") or {}).get("run_id")
+        ran = f" as run {run}" if run is not None else ""
+        return (
+            f'They confirmed "{title}", and it has run{ran}: its opening lines '
+            "are in the picture above, and `read_analysis` gives the rest when "
+            "their question needs more than those lines. "
+        )
+    return f'They confirmed "{title}": it is written in their records now. '
+
+
+def _decision_note(message: models.ChatMessage, card_id: str) -> dict:
+    """The app's last word on a turn that answers a card: what the reader
+    decided about `card_id`, and which cards of the same answer still wait
+    for them, read from the message that holds them as it is now stored."""
+    cards = [b for b in json.loads(message.blocks) if b.get("kind") == "card"]
+    decided = next(c for c in cards if c.get("card_id") == card_id)
+    others = [
+        c for c in cards
+        if c.get("card_id") != card_id and c.get("outcome", "pending") == "pending"
+    ]
+    waiting = ""
+    if others:
+        titles = "; ".join(f'"{c.get("title") or c.get("tool")}"' for c in others)
+        waiting = f"Still waiting for their answer, from the same reply: {titles}. "
+    return {
+        "role": "user",
+        "content": DECISION_NOTE.format(outcome=_decided_words(decided), waiting=waiting),
+    }
+
+
 def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> PreparedTurn:
     """Take the reader's decision on one card, then prepare the turn that says
     what happened.
@@ -701,6 +791,10 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
     the proposal's `tool_call_id` either way, so the conversation the model
     reads back is only well-formed once the card is settled — and a reader who
     said no is usually about to say what they wanted instead.
+
+    The turn it prepares carries the card as now stored, which the stream
+    sends before anything else, and ends on the app's note about the decision
+    (`DECISION_NOTE`): what was decided, and that the reply is to be short.
 
     Raises CardGone, CardSettled or CardStale; the caller turns each into its
     status code, before any stream starts. A refusal after the first byte is a
@@ -729,6 +823,7 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
                 arguments=card["arguments"],
                 fingerprint=card["fingerprint"],
             ),
+            decision=card_id,
         )
 
     if decision.decision == "confirm":
@@ -744,12 +839,14 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
             # another tab that decided this card between the check above and
             # here wins, and losing takes the write down with it rather than
             # leaving a second row nobody asked for.
-            if crud.settle_chat_card(db, message, card_id, "confirmed", done["result"]) is None:
+            decided = crud.settle_chat_card(db, message, card_id, "confirmed", done["result"])
+            if decided is None:
                 raise CardSettled("decided in another window")
     else:
         # No unit of work: rejecting is the one write, and the swap either
         # takes it or somebody else already decided.
-        if crud.settle_chat_card(db, message, card_id, "rejected", None) is None:
+        decided = crud.settle_chat_card(db, message, card_id, "rejected", None)
+        if decided is None:
             raise CardSettled("decided in another window")
 
     conv = message.conversation
@@ -757,7 +854,9 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
         conversation_id=conv.id,
         user_message_id=None,
         model=advisor.resolve_model(decision.model or default_model()),
-        messages=_messages(db, conv),
+        messages=[*_messages(db, conv), _decision_note(message, card_id)],
+        decision=card_id,
+        decided=decided,
     )
 
 
@@ -1026,12 +1125,21 @@ LAST_TOOL_ROUND_NOTICE = (
 )
 
 
-def _asked(completion: int, model: str, messages: list[dict]) -> tuple[str, list[dict]]:
+def _asked(
+    completion: int,
+    model: str,
+    messages: list[dict],
+    rounds: int = MAX_COMPLETIONS_PER_TURN,
+    warn: bool = True,
+) -> tuple[str, list[dict]]:
     """The system prompt and the messages one round is asked with: the turn's
-    own, plus the deadline on the round before the last, where `model` reads it
-    without the round losing its cache (see LAST_TOOL_ROUND_NOTICE)."""
+    own, plus the deadline on the round before the last of `rounds`, where
+    `model` reads it without the round losing its cache (see
+    LAST_TOOL_ROUND_NOTICE). Not when `warn` is false: a turn that answers a
+    card has its own note, which asks for no tools at all, and a deadline
+    saying "propose it NOW" would undo it."""
     system = system_prompt(model)
-    if completion != MAX_COMPLETIONS_PER_TURN - 1:
+    if not warn or completion != rounds - 1:
         return system, messages
     if advisor.caches_on_request(model):
         # When the round before passed pages on, the app's turn after the tool
@@ -1073,9 +1181,29 @@ def _kept_prefixes(messages: list[dict]) -> tuple[int, ...]:
     return (0,) if before == 0 else (0, before)
 
 
+# What a turn that broke on a fault of this app's says: an exception nobody
+# anticipated, logged with its traceback where the app runs.
+BROKE_OFF = (
+    "The answer broke off before it was finished, on a fault in the app. Ask "
+    "again; if it happens again, the window the app runs in shows what went "
+    "wrong."
+)
+
+# Said after any failure on a turn that answers a card, once the card is on
+# record: the reader's decision is not what failed, and the card shows it.
+DECISION_KEPT = "Your answer to the card is saved: only this reply to it is missing."
+
+
+def _kept_decision(detail: str, settled: bool) -> str:
+    """A failure's sentence, with DECISION_KEPT after it when the card this
+    turn answers was decided before it failed."""
+    return f"{detail} {DECISION_KEPT}" if settled else detail
+
+
 def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]:
     """Run a confirmed card's long tool, saying what it finishes as it finishes,
-    then settle the card and RETURN the messages the model is about to read.
+    then settle the card and RETURN the messages the model is about to read,
+    ending on the note about the decision, with the card as now stored.
 
     Two things happen here that do not happen on the ordinary confirm path, and
     both are consequences of the tool taking a minute rather than a millisecond.
@@ -1126,15 +1254,16 @@ def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]
             )
         message, _ = found
         with unit_of_work(db):
-            if (
-                crud.settle_chat_card(db, message, pending.card_id, "confirmed", outcome["result"])
-                is None
-            ):
+            decided = crud.settle_chat_card(
+                db, message, pending.card_id, "confirmed", outcome["result"]
+            )
+            if decided is None:
                 raise advisor.AdvisorError(
                     "Another window decided this card while the analysis was "
                     "running. It ran, and it is on record."
                 )
-        return _messages(db, message.conversation)
+        messages = [*_messages(db, message.conversation), _decision_note(message, pending.card_id)]
+        return messages, decided
 
 
 def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
@@ -1158,6 +1287,13 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
     with nothing on the wire is the spinner this step exists to remove. So its
     decision is still taken before the stream and its work happens on it, one
     `step` event per finished step, and only then is the model asked anything.
+
+    And a turn that answers a card says the decision before it says anything
+    else: `decided`, the card as stored, right after `start`, or after the
+    analyzer's steps once its run is stored. The reply that follows is the
+    model's, and may fail; the decision is not, and the panel shows it from
+    this event on. That turn ends on the app's note about the decision and is
+    asked at most DECISION_ROUNDS times, with no deadline notice.
 
     A turn is a LOOP now, and the loop is the tool protocol. The model streams
     a turn that ends in tool calls; that assistant turn goes back into the
@@ -1209,9 +1345,21 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
     # asked, None for a round it said nothing about. `_spent` turns them into
     # the turn's figures when it ends, however it ends.
     rounds: list[advisor.Usage | None] = []
+    # Whether the card this turn answers is on record as decided: from the
+    # first byte for every card but the analyzer's, and once its run is stored
+    # for that one. A failure after that point leaves the decision standing,
+    # and the reader is told so.
+    settled = turn.decided is not None
+    # A turn that answers a card has its own, smaller bound, and its own note
+    # in place of the deadline (see DECISION_ROUNDS).
+    allowed = MAX_COMPLETIONS_PER_TURN if turn.decision is None else DECISION_ROUNDS
     try:
+        if turn.decided is not None:
+            yield schemas.ChatDecided(card=schemas.ChatCardBlock(**turn.decided))
         if turn.pending is not None:
-            messages = yield from _work(turn.pending, turn.conversation_id)
+            messages, decided = yield from _work(turn.pending, turn.conversation_id)
+            settled = True
+            yield schemas.ChatDecided(card=schemas.ChatCardBlock(**decided))
         declared = tools.declarations()
         web = tools.web_search(turn.model)
         # Worked out once, on the conversation as it stands before any tool is
@@ -1222,14 +1370,16 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         # once.
         searched = 0
         listed: set[str] = set()
-        for completion in range(1, MAX_COMPLETIONS_PER_TURN + 1):
+        for completion in range(1, allowed + 1):
             # The last round is asked with no tools, so it can only write. That
             # is the whole of the old error path, deleted rather than caught.
-            last = completion == MAX_COMPLETIONS_PER_TURN
+            last = completion == allowed
             calls: list[advisor.ToolCall] = []
             said: list[str] = []
             found: list[advisor.WebPage] = []
-            system, asked = _asked(completion, turn.model, messages)
+            system, asked = _asked(
+                completion, turn.model, messages, rounds=allowed, warn=turn.decision is None
+            )
             rounds.append(None)
             for kind, piece in advisor.stream_llm(
                 system,
@@ -1331,11 +1481,11 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 messages.append(_passed_on(found))
         ending = ("done", None)
     except advisor.AdvisorError as exc:
-        ending = ("error", str(exc))
-        yield schemas.ChatError(detail=str(exc))
+        ending = ("error", _kept_decision(str(exc), settled))
+        yield schemas.ChatError(detail=ending[1])
     except Exception:
         logger.exception("chat stream broke")
-        ending = ("error", "The answer broke off before it was finished.")
+        ending = ("error", _kept_decision(BROKE_OFF, settled))
         yield schemas.ChatError(detail=ending[1])
     finally:
         status, detail = ending or ("cut", None)

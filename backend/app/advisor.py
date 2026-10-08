@@ -1306,25 +1306,99 @@ def _where_set(model: str) -> str:
     return "It was picked in the chat's model menu."
 
 
-def _refused(error: Exception, model: str) -> AdvisorError:
-    """What the reader is told when a call to OpenRouter fails.
+# What each status OpenRouter documents means for the reader, after "OpenRouter
+# refused the call to <model> with <status>:". The codes and their meanings are
+# OpenRouter's (its page on errors, read 2026-10-08): 400 a bad request, 401
+# invalid credentials, 402 insufficient credits, 403 a guardrail block or a
+# moderation flag, 408 a timeout, 429 rate limiting, 502 a model that is down
+# or answered something invalid, 503 no provider meeting the request. 404 is
+# not on that page, and is what it answered for a model it had no endpoint for
+# (brief W part 2).
+_REFUSAL_MEANS = {
+    400: "the request the app built is not one it accepts, which is the app's "
+    "fault and not your question's",
+    401: "it does not accept the API key in backend/.env (OPENROUTER_API_KEY)",
+    402: "the account behind the API key has no credit left",
+    403: "a moderation flag, a guardrail or a permission on the key stopped it",
+    404: "it has nowhere to send it",
+    408: "the model took too long to answer",
+    429: "too many requests are reaching it or the model's provider right now",
+    502: "the model is down, or sent back something OpenRouter could not read",
+    503: "no provider can serve this model right now",
+}
+
+
+def _remedy(status: int, chat: bool) -> str:
+    """What the reader can do about a refusal with `status`: in the chat, where
+    another model is one menu away, and in the analysis, whose models are set
+    in backend/.env."""
+    another = (
+        "pick another model in the menu under the question"
+        if chat
+        else "set another model in backend/.env"
+    )
+    if status == 401:
+        return (
+            "Check the key on openrouter.ai, put the right one in backend/.env, "
+            "and start the app again."
+        )
+    if status == 402:
+        return "Add credit on openrouter.ai, then ask again."
+    if status == 403:
+        return f"Rephrase it, or {another}."
+    if status == 408:
+        return "Ask again in a moment."
+    if status == 429:
+        return "Wait a minute, then ask again."
+    if status == 404 or status >= 500:
+        return f"Ask again in a few minutes, or {another}."
+    return f"Ask again; if it happens again, {another}."
+
+
+def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
+    """What the reader is told when a call to OpenRouter fails: what happened,
+    what they can do about it, and what OpenRouter said, last.
 
     A refusal (400 or 404) of a model that OpenRouter's public list no longer
     has is a model that is gone, and the sentence says which, where it is set,
     and what dated versions of it are still listed. Neither sign alone is
     proof: the documentation gives no wording for this case, and the reader's
-    short name had left the list while still answering (2026-09-24). Any
-    other refusal is OpenRouter's own status and message, in words, where the
-    SDK would print a dictionary. A failure that is not a refusal (no network,
-    a timeout) keeps the SDK's words.
+    short name had left the list while still answering (2026-09-24). Any other
+    refusal says what its status means and what to do (`_REFUSAL_MEANS`,
+    `_remedy`), with OpenRouter's own message after it. Until brief AJ it was
+    that message alone, which is how the reader met a 400 on 2026-10-08:
+    'Server tool "openrouter:web_search" failed: invalid request (400)', and
+    nothing about what it meant for them or what to do. A failure that is not
+    a refusal (no network, a timeout) says that, with the SDK's words.
+
+    `chat` is whether the call answers the chat, where another model is one
+    menu away; the analysis's models are set in backend/.env.
     """
     openai = sdk()
+    if isinstance(error, openai.APITimeoutError):
+        return AdvisorError(
+            f"OpenRouter did not answer in time ({error}). Ask again in a moment."
+        )
+    if isinstance(error, openai.APIConnectionError):
+        return AdvisorError(
+            f"OpenRouter could not be reached ({error}). Check that this computer is "
+            "online, then ask again."
+        )
     if not isinstance(error, openai.APIStatusError):
-        return AdvisorError(f"LLM call failed: {error}")
+        return AdvisorError(
+            f"The call to OpenRouter failed before it was answered ({error}). Ask "
+            "again in a moment."
+        )
     body = error.body if isinstance(error.body, dict) else {}
     said = str(body.get("message") or error.message).strip().rstrip(".")
-    refused = f"OpenRouter refused the call to {model} with {error.status_code}: {said}."
-    if error.status_code not in (400, 404):
+    status = error.status_code
+    means = _REFUSAL_MEANS.get(status)
+    refused = (
+        f"OpenRouter refused the call to {model} with {status}"
+        + (f": {means}. " if means else ". ")
+        + f"{_remedy(status, chat)} OpenRouter said: {said}."
+    )
+    if status not in (400, 404):
         return AdvisorError(refused)
     try:
         listed = _fetch_model_list()
@@ -1662,7 +1736,7 @@ def stream_llm(
             **cache,
         )
     except Exception as exc:
-        raise _refused(exc, model) from exc
+        raise _refused(exc, model, chat=True) from exc
 
     produced = False
     # index -> the call being assembled. A dict rather than a list: `index` is
@@ -1725,7 +1799,10 @@ def stream_llm(
         # GeneratorExit is a BaseException, so a reader leaving is not caught
         # here: it passes through, the `with` closes the stream, and no error
         # is invented for something that was a choice.
-        raise AdvisorError(f"LLM stream failed: {exc}") from exc
+        raise AdvisorError(
+            f"The connection to OpenRouter broke while the answer was being "
+            f"written ({exc}). Ask again."
+        ) from exc
     if ended not in ("stop", "tool_calls"):
         # The usage first, for the reason the empty case below gives: a turn
         # that was cut still cost what it was sent.

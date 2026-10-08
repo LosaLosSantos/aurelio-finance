@@ -36,6 +36,7 @@ import {
   type Pane,
 } from "./followStream";
 import { linkOf, withSource, type Link, type WebPage } from "./webSources";
+import { withDecided } from "./cardDecided";
 
 /* The chat that reads.
 
@@ -775,6 +776,9 @@ export default function ChatPanel({
         onSource: (found) => addSource(answer.id, found),
         onStep: (step) => addStep(answer.id, step),
         onCard: (card) => addCard(answer.id, card),
+        // A question never decides a card; the handler is here because the
+        // stream's handlers are one type for both endpoints.
+        onDecided: (card) => setMessages((prev) => withDecided(prev, card)),
       },
       controller.signal,
     );
@@ -796,15 +800,22 @@ export default function ChatPanel({
   /* Answering a card. The write has already happened by the time the first
      byte arrives — the endpoint runs it before it starts streaming — so a
      stream that starts at all is a decision taken, and the truth about the
-     card is on the server rather than here. That is why this reloads the
-     conversation instead of colouring the block in locally: `result` is what
-     the write produced and only the server knows it, and a panel that painted
-     "Recorded" from its own guess would be the one surface in this app
-     claiming something it was not told.
+     card is on the server rather than here. So the card is never coloured in
+     from a guess of this panel's: it is replaced by the card the server sends
+     as stored, `decided`, which arrives right after `start` (after the steps,
+     for the analyzer), before the reply and whatever becomes of it. `result`
+     is what the write produced, and only the server knows it.
 
-     A refusal — the card is gone, already answered, or stale — never starts a
-     stream, and comes back as an error to leave on screen with the card still
-     answerable. */
+     And whatever the ending, the conversation is read back from the server
+     afterwards, as a finished one always was: a reply that failed is stored
+     with its sentence, and a card decided in another window shows its state.
+     Until brief AJ this read happened only on `done`, so a reply that failed
+     left a decided card with its buttons, and pressing one again was refused
+     as a decision already taken (the reader, 2026-10-08).
+
+     A refusal (the card is gone, already answered, or stale) never starts a
+     stream and is stored nowhere, so it stays on screen under the
+     conversation as read, with any card still pending still answerable. */
   async function decide(cardId: string, decision: "confirm" | "reject") {
     if (streaming) return;
     const answer = newMessage("assistant", [], "streaming");
@@ -812,11 +823,16 @@ export default function ChatPanel({
 
     const controller = new AbortController();
     abortRef.current = controller;
+    let started = false;
     const end = await decideCard(
       cardId,
       { decision, model },
       {
-        onStart: (cid) => setConversationId(cid),
+        onStart: (cid) => {
+          started = true;
+          setConversationId(cid);
+        },
+        onDecided: (card) => setMessages((prev) => withDecided(prev, card)),
         onThought: (text) => append(answer.id, "thought", text),
         onDelta: (text) => append(answer.id, "text", text),
         onTool: (name, detail) => addTool(answer.id, name, detail),
@@ -828,18 +844,23 @@ export default function ChatPanel({
     );
     abortRef.current = null;
 
-    if (end.kind === "error" || conversationId === null) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === answer.id
-            ? { ...m, status: end.kind, detail: end.kind === "error" ? end.detail : undefined }
-            : m,
-        ),
-      );
-      return;
+    const ended: Message = {
+      ...answer,
+      status: end.kind,
+      detail: end.kind === "error" ? end.detail : undefined,
+      model: end.kind === "done" ? end.model : undefined,
+    };
+    if (conversationId !== null) {
+      try {
+        const full = await getConversation(conversationId);
+        const stored = full.messages.map(fromStored);
+        setMessages(started ? stored : [...stored, ended]);
+        return;
+      } catch {
+        /* the backend did not answer: keep what is on screen, ended */
+      }
     }
-    const full = await getConversation(conversationId);
-    setMessages(full.messages.map(fromStored));
+    setMessages((prev) => prev.map((m) => (m.id === answer.id ? { ...m, ...ended, blocks: m.blocks } : m)));
   }
 
   function onSubmit(e: FormEvent) {

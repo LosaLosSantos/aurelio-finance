@@ -1023,7 +1023,7 @@ def test_confirming_runs_the_tool_records_the_outcome_and_answers(client, monkey
 
     seen = _fake_stream(monkeypatch, pieces=("Recorded.",))
     events = _events(_decide(client, card["card_id"], "confirm"))
-    assert _kinds(events) == ["start", "delta", "done"]
+    assert _kinds(events) == ["start", "decided", "delta", "done"]
     assert events[0]["user_message_id"] is None, "nobody asked a question"
 
     assert state["written"] == [{"what": "a gold necklace", "amount": 500.0}]
@@ -1033,10 +1033,16 @@ def test_confirming_runs_the_tool_records_the_outcome_and_answers(client, monkey
     ).json()["messages"][1]["blocks"][1]
     assert settled["outcome"] == "confirmed"
     assert settled["result"] == {"recorded": "a gold necklace", "amount": 500.0}
+    assert events[1]["card"] == settled, "the stream said the decision as it is stored"
 
     # and the model was told, in the protocol's own shape
-    # A confirm appends no user turn, so the exchange is the tail of the list.
-    request, result = seen[0]["messages"][-2], seen[0]["messages"][-1]
+    # A confirm appends no turn of the reader's: the exchange comes right
+    # before the app's note about the decision, which ends the list.
+    request, result = seen[0]["messages"][-3], seen[0]["messages"][-2]
+    note = seen[0]["messages"][-1]
+    assert note["role"] == "user" and note["content"].startswith(
+        "THE READER HAS JUST ANSWERED A CARD"
+    )
     assert request["role"] == "assistant"
     assert request["tool_calls"][0]["function"]["name"] == "record_thing"
     assert result["role"] == "tool" and result["tool_call_id"] == "call_1"
@@ -1054,14 +1060,17 @@ def test_rejecting_writes_nothing_and_still_says_so_on_record(client, monkeypatc
 
     seen = _fake_stream(monkeypatch, pieces=("Understood.",))
     events = _events(_decide(client, card["card_id"], "reject"))
-    assert _kinds(events) == ["start", "delta", "done"]
+    assert _kinds(events) == ["start", "decided", "delta", "done"]
     assert state["written"] == []
 
     settled = client.get(
         f"/api/chat/conversations/{events[0]['conversation_id']}"
     ).json()["messages"][1]["blocks"][1]
     assert settled["outcome"] == "rejected" and settled["result"] is None
-    assert json.loads(seen[0]["messages"][-1]["content"])["outcome"] == "rejected"
+    assert events[1]["card"] == settled
+    # The tool turn says it, and so does the app's note after it.
+    assert json.loads(seen[0]["messages"][-2]["content"])["outcome"] == "rejected"
+    assert "They rejected" in seen[0]["messages"][-1]["content"]
 
 
 def test_a_card_nobody_answered_is_carried_back_as_unanswered(client, monkeypatch):
@@ -1567,7 +1576,8 @@ def test_confirming_streams_a_step_per_finished_step_then_the_answer(client, mon
     seen = _fake_stream(monkeypatch, pieces=("The analyzer says:",))
 
     events = _events(_decide(client, card["card_id"], "confirm"))
-    assert _kinds(events) == ["start", "step", "step", "step", "delta", "done"]
+    # Decided once its run is stored, which is after the steps.
+    assert _kinds(events) == ["start", "step", "step", "step", "decided", "delta", "done"]
     steps = [e for e in events if e["kind"] == "step"]
     assert [e["step_no"] for e in steps] == [1, 2, 3]
     assert [e["label"] for e in steps] == [
@@ -1612,8 +1622,9 @@ def test_what_comes_back_is_the_opening_and_the_address_not_the_document(
     assert result["opening"].endswith("[…]") and len(result["opening"]) < len(verdict)
     assert "read_analysis with run_id=1" in result["read_in_full"]
 
-    # the model was handed exactly that, and never the whole thing
-    answered = json.loads(seen[0]["messages"][-1]["content"])
+    # the model was handed exactly that, and never the whole thing (in the
+    # tool turn before the app's note, which ends the list)
+    answered = json.loads(seen[0]["messages"][-2]["content"])
     assert answered["outcome"] == "confirmed"
     assert answered["written"]["run_id"] == 1
     assert verdict not in json.dumps(seen[0]["messages"])

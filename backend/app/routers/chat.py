@@ -82,8 +82,8 @@ _STREAMS = {
         "content": {"text/event-stream": {}},
         "description": (
             "Server-sent events: `start`, then "
-            "`thought`/`delta`/`tool`/`step`/`card` as they happen, then "
-            "exactly one `done` or one `error`."
+            "`decided`/`thought`/`delta`/`tool`/`source`/`step`/`card` as "
+            "they happen, then exactly one `done` or one `error`."
         ),
     }
 }
@@ -155,7 +155,10 @@ def decide(
 
     Anything the model itself fails at afterwards arrives as an `error` event,
     the same as any other turn — by then the write has happened and the reader
-    is owed the stream, not a status code.
+    is owed the stream, not a status code. Which is why the stream says the
+    decision first: `decided`, the card as stored, right after `start` (for
+    the analyzer, once its run is stored), so a failure after it cannot leave
+    the card looking undecided.
     """
     try:
         turn = chat.resume(db, card_id, payload)

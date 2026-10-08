@@ -252,7 +252,10 @@ export interface paths {
          *
          *     Anything the model itself fails at afterwards arrives as an `error` event,
          *     the same as any other turn — by then the write has happened and the reader
-         *     is owed the stream, not a status code.
+         *     is owed the stream, not a status code. Which is why the stream says the
+         *     decision first: `decided`, the card as stored, right after `start` (for
+         *     the analyzer, once its run is stored), so a failure after it cannot leave
+         *     the card looking undecided.
          */
         post: operations["decide_api_chat_cards__card_id__post"];
         delete?: never;
@@ -2271,6 +2274,28 @@ export interface components {
             title: string | null;
             /** Updated At */
             updated_at: string;
+        };
+        /**
+         * ChatDecided
+         * @description A card has been decided, and this is the card as it is now stored.
+         *
+         *     Sent the moment the decision is on record: right after `start` for every
+         *     card but the analyzer's, whose decision is stored when its run is, after
+         *     its steps. The panel swaps the card it shows for this one there and then,
+         *     so the card reads as decided whatever the turn that follows does. Until
+         *     brief AJ the panel coloured it only once that turn had ended well: the
+         *     reader's second confirmation, on 2026-10-08, was stored, its follow-up
+         *     failed, and the card kept its buttons; pressing again was refused as a
+         *     decision already taken. The block itself, for the reason `ChatCard`
+         *     carries one: one shape, whether it arrived now or is read back later.
+         */
+        ChatDecided: {
+            card: components["schemas"]["ChatCardBlock"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "decided";
         };
         /**
          * ChatDelta
@@ -5284,13 +5309,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Server-sent events: `start`, then `thought`/`delta`/`tool`/`step`/`card` as they happen, then exactly one `done` or one `error`. */
+            /** @description Server-sent events: `start`, then `decided`/`thought`/`delta`/`tool`/`source`/`step`/`card` as they happen, then exactly one `done` or one `error`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSource"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
+                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSource"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDecided"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
                     "text/event-stream": unknown;
                 };
             };
@@ -5320,13 +5345,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Server-sent events: `start`, then `thought`/`delta`/`tool`/`step`/`card` as they happen, then exactly one `done` or one `error`. */
+            /** @description Server-sent events: `start`, then `decided`/`thought`/`delta`/`tool`/`source`/`step`/`card` as they happen, then exactly one `done` or one `error`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSource"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
+                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSource"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDecided"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
                     "text/event-stream": unknown;
                 };
             };

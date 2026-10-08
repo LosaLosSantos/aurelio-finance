@@ -211,7 +211,13 @@ def test_a_refusal_of_a_model_still_listed_is_not_called_gone(client, openrouter
 
     sentence = _chat_error(client)
 
-    assert sentence == f"OpenRouter refused the call to {GONE} with 404: No endpoints found for {GONE}."
+    # What the status means, what to do, and OpenRouter's own words last
+    # (brief AJ: the words alone were all the reader got, 2026-10-08).
+    assert sentence == (
+        f"OpenRouter refused the call to {GONE} with 404: it has nowhere to send it. "
+        "Ask again in a few minutes, or pick another model in the menu under the "
+        f"question. OpenRouter said: No endpoints found for {GONE}."
+    )
     assert "no longer served" not in sentence
 
 
@@ -220,7 +226,8 @@ def test_a_public_list_that_does_not_answer_is_said(client, openrouter, public_l
 
     sentence = _chat_error(client)
 
-    assert sentence.startswith(f"OpenRouter refused the call to {GONE} with 404: No endpoints found for {GONE}.")
+    assert sentence.startswith(f"OpenRouter refused the call to {GONE} with 404: it has nowhere to send it.")
+    assert f"OpenRouter said: No endpoints found for {GONE}." in sentence
     assert "could not be checked: its public list of models did not answer (no route to host)." in sentence
     assert "no longer served" not in sentence
     _reads_as_words(sentence)
@@ -231,5 +238,10 @@ def test_any_other_refusal_reads_in_words_and_asks_the_list_nothing(client, open
 
     sentence = _chat_error(client)
 
-    assert sentence == f"OpenRouter refused the call to {GONE} with 401: User not found."
+    assert sentence == (
+        f"OpenRouter refused the call to {GONE} with 401: it does not accept the API "
+        "key in backend/.env (OPENROUTER_API_KEY). Check the key on openrouter.ai, put "
+        "the right one in backend/.env, and start the app again. OpenRouter said: User "
+        "not found."
+    )
     assert public_list.asked == 0

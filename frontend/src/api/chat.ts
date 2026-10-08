@@ -42,6 +42,7 @@ export type ChatEvent =
   | Schemas["ChatSource"]
   | Schemas["ChatStep"]
   | Schemas["ChatCard"]
+  | Schemas["ChatDecided"]
   | Schemas["ChatDone"]
   | Schemas["ChatError"];
 // A step of a long tool, arriving while it runs. Not a block: nothing stores
@@ -129,12 +130,17 @@ export type StreamHandlers = {
   onStep: (step: ChatStepEvent) => void;
   /** A write the model proposed. Nothing has happened yet. */
   onCard: (card: ChatCardBlock) => void;
+  /** A card the reader decided, as the server now stores it: sent the moment
+      the decision is on record, before the reply that follows it, so the card
+      reads as decided however that reply ends. */
+  onDecided: (card: ChatCardBlock) => void;
 };
 
 // POST /api/chat/cards/{id} — confirm or reject one proposed write, and hear
 // what the model makes of it. The write runs before the first byte, so a
-// stream that starts at all is a decision already taken; a refusal (the card
-// is gone, already answered, or stale) arrives as an HTTP error instead.
+// stream that starts at all is a decision already taken, and its first frame
+// after `start` is the card as stored (`decided`); a refusal (the card is
+// gone, already answered, or stale) arrives as an HTTP error instead.
 //
 // One exception, and it is the analyzer: three to six model calls, a minute of
 // them, and a minute of a request holding open before the first byte is the
@@ -231,6 +237,9 @@ async function post(
             break;
           case "card":
             handlers.onCard(event.card);
+            break;
+          case "decided":
+            handlers.onDecided(event.card);
             break;
           case "done":
             return { kind: "done", model: event.model, messageId: event.message_id };
