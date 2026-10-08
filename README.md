@@ -9,7 +9,7 @@ machine. The AI part is optional: it goes through
 
 ![Aurelio on invented demo data: the net worth, what the funds really hold, and the chat answering from the records with a card to confirm](docs/demo.gif)
 
-On invented demo data. [Watch the 30-second video](https://github.com/LosaLosSantos/aurelio-finance/issues/2).
+On invented demo data.
 
 ## Try it on invented data
 
