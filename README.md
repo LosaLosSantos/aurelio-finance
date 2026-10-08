@@ -9,8 +9,6 @@ machine. The AI part is optional: it goes through
 
 ![Aurelio on invented demo data: the net worth, what the funds really hold, and the chat answering from the records with a card to confirm](docs/demo.gif)
 
-On invented demo data.
-
 ## Try it on invented data
 
 You need [Git](https://git-scm.com), [Node.js](https://nodejs.org) 22 or later
