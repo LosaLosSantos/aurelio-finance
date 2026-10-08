@@ -38,7 +38,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, event  # noqa: E402
 from sqlalchemy.exc import OperationalError  # noqa: E402
 
-from app import advisor, catalogue, composition, database, fx, issuers, pac, prices  # noqa: E402
+from app import advisor, catalogue, composition, database, fx, issuers, prices  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -201,11 +201,10 @@ def offline(monkeypatch):
     is the point: a refusal here reproduces a real outage exactly, and does it
     the same way every time.
 
-    Three module-level caches are reset with it, because they outlive a test
-    and a faster suite makes that worse rather than better: the reachability
+    Two module-level caches are reset with it, because they outlive a test and
+    a faster suite makes that worse rather than better: the reachability
     verdict is cached for 20 seconds (once the whole run fits in a minute, that
-    is a good share of it), the justETF catalogue for 24 hours, and the day's
-    symbols Yahoo priced nothing for (`pac._UNPRICED`, brief AJ).
+    is a good share of it), and the justETF catalogue for 24 hours.
     """
     for module, helpers in _NETWORK_BOUNDARY.items():
         for name in helpers:
@@ -213,7 +212,6 @@ def offline(monkeypatch):
     prices._reset_reachability()
     monkeypatch.setattr(composition, "_CATALOGUE", None)
     monkeypatch.setattr(composition, "_CATALOGUE_AT", None)
-    monkeypatch.setattr(pac, "_UNPRICED", {})
 
 
 @pytest.fixture(autouse=True)

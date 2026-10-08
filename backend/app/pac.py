@@ -58,7 +58,7 @@ import logging
 import math
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -933,13 +933,48 @@ def _record_dividend(
 
 
 # Symbols the day's batch asked about and Yahoo priced nothing for, while it
-# priced others: a delisted ticker, one typed wrong. Not asked again until the
-# next day, or each page load would ask Yahoo about them once more (seen in the
-# browser on a copy of the test database, brief AJ). A batch that priced
-# nothing at all is a market that did not answer, and is tried again at the
-# next load. Kept in the process, like the catalogue's guard: a restarted
-# server asks once more.
-_UNPRICED: dict[str, str] = {}
+# priced others or while the market answered: a delisted ticker, one typed
+# wrong. Not asked again until the reader's next day, or each page load would
+# ask Yahoo about them once more (seen in the browser on a copy of the test
+# database, brief AJ). Brief AJ kept them in the process, and every restart
+# asked again: measured 2026-10-08, a symbol Yahoo does not know cost the first
+# batch of a process 12 requests, and 8 each time after (brief AK). So they are
+# kept where the dividend answers are, in `settings`: one row a symbol, its
+# value the reader's day it was asked, read only on that day. Every batch that
+# comes back deletes the rows of an earlier day as the day's are written, so
+# the table holds one day's at most and a symbol no longer held leaves no row
+# behind. A batch that priced nothing at all writes nothing when the market
+# did not answer either, and the next load asks again (`refresh_prices`).
+_UNPRICED_ON = "unpriced:{symbol}"
+
+
+def _unpriced_today(db: Session, symbols: list[str], today: str) -> set[str]:
+    """Which of `symbols` the batch priced nothing for today. One read."""
+    keys = {_UNPRICED_ON.format(symbol=s): s for s in symbols}
+    rows = db.execute(
+        select(models.Setting.key, models.Setting.value).where(models.Setting.key.in_(list(keys)))
+    )
+    return {keys[key] for key, value in rows if value == today}
+
+
+def _remember_unpriced(db: Session, symbols: list[str], today: str) -> None:
+    """Forget the rows of an earlier day, and keep `symbols` as priced nothing
+    for today. Statements rather than objects, each saying what it means, since
+    two catch-ups run at once (the dividend answers' `INSERT ... ON CONFLICT
+    DO UPDATE`); nothing reads these rows as objects, so the session holds none
+    to keep in step. Committed at once, like the dividend answers."""
+    db.execute(
+        delete(models.Setting)
+        .where(
+            models.Setting.key.startswith(_UNPRICED_ON.format(symbol=""), autoescape=True),
+            models.Setting.value != today,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    for symbol in symbols:
+        upsert = sqlite_insert(models.Setting).values(key=_UNPRICED_ON.format(symbol=symbol), value=today)
+        db.execute(upsert.on_conflict_do_update(index_elements=["key"], set_={"value": today}))
+    commit(db)
 
 
 def refresh_prices(db: Session) -> dict[str, dict]:
@@ -963,8 +998,10 @@ def refresh_prices(db: Session) -> dict[str, dict]:
 
     A listing's currency is the cache's; one it never learnt is asked once
     (`get_currencies`). A symbol that does not answer keeps the price it had,
-    with its date, which the picture and the pages show. Returns what was
-    written."""
+    with its date, which the picture and the pages show, and one Yahoo priced
+    nothing for, while it priced others or while the market answered, is not
+    asked again that day, a restart included (`_UNPRICED_ON`). Returns what
+    was written."""
     held = sorted({p.symbol for p in project(db) if p.symbol and p.quantity is not None})
     if not held:
         return {}
@@ -973,12 +1010,11 @@ def refresh_prices(db: Session) -> dict[str, dict]:
         row.symbol: row
         for row in db.scalars(select(models.PriceCache).where(models.PriceCache.symbol.in_(held)))
     }
-    due = [
-        s
-        for s in held
-        if (s not in cached or dated.local_day(cached[s].fetched_at) != today)
-        and _UNPRICED.get(s) != today
-    ]
+    stale = [s for s in held if s not in cached or dated.local_day(cached[s].fetched_at) != today]
+    if not stale:
+        return {}
+    remembered = _unpriced_today(db, stale, today)
+    due = [s for s in stale if s not in remembered]
     if not due:
         return {}
     known = {s: cached[s].currency for s in due if s in cached and cached[s].currency}
@@ -987,16 +1023,23 @@ def refresh_prices(db: Session) -> dict[str, dict]:
     except prices.PriceError as exc:
         logger.warning("The daily price refresh could not reach the market: %s", exc)
         return {}
-    if quotes:
-        for symbol in due:
-            if symbol not in quotes:
-                _UNPRICED[symbol] = today
+    unpriced = [s for s in due if s not in quotes]
+    # Priced nothing at all: a market that did not answer, or only symbols
+    # Yahoo does not know, such as one typed wrong and added after the day's
+    # first batch, which would be asked again at every load until the next day.
+    # The canary tells them apart, as it does for one quote
+    # (`prices.market_reachable`: a symbol always quoted, its verdict kept 20
+    # seconds). Nobody answering says nothing about any one symbol.
+    if unpriced and not quotes and not prices.market_reachable():
+        unpriced = []
+    _remember_unpriced(db, unpriced, today)
+    if not quotes:
+        return {}
     unknown = [s for s in quotes if s not in known]
     found = prices.get_currencies(unknown) if unknown else {}
     for symbol, quote in quotes.items():
         quote["currency"] = known.get(symbol) or found.get(symbol)
-    if quotes:
-        crud.upsert_price_caches(db, quotes)
+    crud.upsert_price_caches(db, quotes)
     return quotes
 
 

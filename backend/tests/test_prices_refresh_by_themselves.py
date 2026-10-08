@@ -13,10 +13,12 @@ Yahoo is faked at the app's helpers. Every symbol here is invented.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from sqlalchemy import select
 
-from app import advisor, crud, dated, models, prices
+from app import advisor, crud, dated, models, pac, prices
 from app.database import SessionLocal
 
 TODAY = "2026-10-08"
@@ -185,6 +187,154 @@ def test_a_batch_that_priced_nothing_is_tried_at_the_next_load(client, held, yah
     _catch_up(client)
 
     assert yahoo.batches == [EVERY, EVERY]
+
+
+# --- The day's unpriced symbols are kept in the database (brief AK) ---------------------
+
+
+def _unpriced_rows() -> dict[str, str]:
+    with SessionLocal() as db:
+        return {
+            key: value
+            for key, value in db.execute(
+                select(models.Setting.key, models.Setting.value).where(models.Setting.key.like("unpriced:%"))
+            )
+        }
+
+
+def _restart(monkeypatch) -> None:
+    """What a restart forgets: whatever the process held. Brief AJ kept the
+    day's unpriced symbols there (`pac._UNPRICED`); emptied where it still
+    exists, so the same test runs on the code before brief AK."""
+    monkeypatch.setattr(pac, "_UNPRICED", {}, raising=False)
+
+
+def test_a_restart_does_not_ask_again_for_a_symbol_yahoo_priced_nothing_for(client, held, yahoo, monkeypatch):
+    """Measured 2026-10-08: a symbol Yahoo does not know cost the first batch
+    of a process 12 requests. Before: kept in the process, so every restart
+    of the app asked again."""
+    yahoo.closes = {"XACC.DE": (80.0, "2026-10-07"), "XSHR.DE": (50.0, "2026-10-07")}
+
+    _catch_up(client)
+    _restart(monkeypatch)
+    _catch_up(client)
+
+    assert yahoo.batches == [EVERY], "asked once that day, a restart included"
+
+
+def test_the_day_is_kept_in_settings_under_the_symbols_name(client, held, yahoo):
+    yahoo.closes = {"XACC.DE": (80.0, "2026-10-07"), "XSHR.DE": (50.0, "2026-10-07")}
+
+    _catch_up(client)
+
+    assert _unpriced_rows() == {"unpriced:XCOIN-EUR": TODAY}
+
+
+def test_the_next_day_asks_again_and_the_day_before_is_forgotten(client, held, yahoo, monkeypatch):
+    """A guard, true before too: the next day the symbol is asked again, and
+    once Yahoo prices it nothing of the day before is left."""
+    yahoo.closes = {"XACC.DE": (80.0, "2026-10-07"), "XSHR.DE": (50.0, "2026-10-07")}
+    _catch_up(client)
+    monkeypatch.setattr(dated, "today", lambda: "2026-10-09")
+    yahoo.closes["XCOIN-EUR"] = (2010.0, "2026-10-09")
+
+    _catch_up(client)
+
+    assert yahoo.batches[-1] == EVERY
+    assert _cached()["XCOIN-EUR"] == (2010.0, "2026-10-09", "EUR")
+    assert _unpriced_rows() == {}
+
+
+def test_a_symbol_no_longer_held_leaves_no_row_behind(client, held, yahoo):
+    """A row of an earlier day is deleted by the next refresh that asks Yahoo,
+    whatever its symbol: one sold, or typed wrong and corrected, leaves
+    nothing in `settings`."""
+    with SessionLocal() as db:
+        db.add(models.Setting(key="unpriced:XGONE.DE", value="2026-10-07"))
+        db.commit()
+    yahoo.closes = {"XACC.DE": (80.0, "2026-10-07"), "XSHR.DE": (50.0, "2026-10-07")}
+
+    _catch_up(client)
+
+    assert _unpriced_rows() == {"unpriced:XCOIN-EUR": TODAY}
+
+
+def test_a_batch_that_priced_nothing_remembers_nothing(client, held, yahoo):
+    """A guard: a market that did not answer, the canary included (refused
+    here, as every network call is), says nothing about one symbol."""
+    yahoo.closes = {}
+
+    _catch_up(client)
+
+    assert _unpriced_rows() == {}
+
+
+def test_a_symbol_alone_in_the_batch_that_yahoo_does_not_know_is_asked_once(client, held, yahoo, monkeypatch):
+    """A fund added after the day's first batch, its ticker typed wrong, is the
+    only symbol the next batch asks about, and Yahoo prices nothing. The
+    market answers the canary, so the symbol is the one Yahoo does not know:
+    asked once, not at every load until the next day."""
+    _catch_up(client)
+    iid = client.post("/api/institutions", json={"name": "Broker B", "type": "broker"}).json()["id"]
+    sid = client.post(f"/api/institutions/{iid}/snapshots", json={"date": ANCHOR}).json()["id"]
+    r = client.post(
+        f"/api/snapshots/{sid}/holdings",
+        json={
+            "asset_name": "Example fund, ticker typed wrong", "asset_class": "fund_etf", "symbol": "XTYPO.DE",
+            "quantity": 10, "unit_price": 100, "currency": "EUR", "distribution_policy": "acc",
+        },
+    )
+    assert r.status_code == 201, r.text
+    monkeypatch.setattr(prices, "_fetch_probe", lambda symbol: True)
+
+    _catch_up(client)
+    _catch_up(client)
+
+    assert yahoo.batches == [EVERY, ["XTYPO.DE"]]
+    assert _unpriced_rows() == {"unpriced:XTYPO.DE": TODAY}
+
+
+def test_two_catch_ups_at_once_both_keep_the_day(client, held, monkeypatch, caplog):
+    """Two page loads at once both find the coin unpriced and both write its
+    row: one statement that says "this row, whatever was there", so the second
+    rewrites the first instead of dying on the key. The batch holds both
+    callers until both are inside it, the moment two plain inserts would
+    collide. The catch-up swallows a refresh that fails (its ledger part
+    stands), so the failure is looked for where it goes: the log."""
+    monkeypatch.setattr(dated, "today", lambda: TODAY)
+    everyone_in = threading.Barrier(2, timeout=10)
+    lock = threading.Lock()
+    batches: list[list[str]] = []
+
+    def batch(symbols):
+        with lock:
+            batches.append(list(symbols))
+            held_here = len(batches) <= 2
+        if held_here:
+            everyone_in.wait()
+        return {"XACC.DE": (80.0, "2026-10-07"), "XSHR.DE": (50.0, "2026-10-07")}
+
+    monkeypatch.setattr(prices, "_fetch_dividends", lambda symbol, period="max": prices.DividendWindow(answered=True))
+    monkeypatch.setattr(prices, "_fetch_recent_closes", batch)
+    monkeypatch.setattr(prices, "_fetch_currency", lambda symbol: "EUR")
+    statuses: list[int] = []
+
+    def run() -> None:
+        response = client.post("/api/transactions/catch-up")
+        with lock:
+            statuses.append(response.status_code)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not any(t.is_alive() for t in threads), "a catch-up never came back"
+    assert len(batches) == 2, "the catch-ups did not overlap, so nothing was tested"
+    assert statuses == [200, 200]
+    assert "The daily price refresh failed" not in caplog.text
+    assert _unpriced_rows() == {"unpriced:XCOIN-EUR": TODAY}
 
 
 def test_writing_a_price_keeps_a_currency_already_learnt():
