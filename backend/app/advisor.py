@@ -297,6 +297,28 @@ def _settles(t, named: dict[int, str]) -> str:
     return f", made by {plan} for its occurrence of {t.plan_occurrence}, bought {t.date}"
 
 
+def _render_rates(db: Session, base: str, portfolio: dict) -> list[str]:
+    """The ECB's rates the app keeps, those in force today, for every currency
+    on record that is not the base and every listing a position is priced in:
+    one line, or none when everything is in the base.
+
+    The totals were always converted at these and never said what they were:
+    in the reader's second test round (2026-10-08) the chat answered that it
+    had no exchange rate for a dollar figure, with the app holding the ECB's."""
+    listings = {r["currency"] for r in portfolio["rows"] if r["currency"]}
+    published, rates, missing = fx.rates_for(db, crud.get_currencies_on_record(db) | listings)
+    said = []
+    if rates:
+        listed = ", ".join(f"{rate:.10g} {code}" for code, rate in rates.items())
+        said.append(
+            f"Exchange rates: the ECB's reference rates, which the app keeps; those "
+            f"in force today were published on {published}: 1 {base} = {listed}."
+        )
+    if missing:
+        said.append(f"The ECB publishes no rate for {', '.join(missing)}.")
+    return [" ".join(said)] if said else []
+
+
 def _isin(row: dict) -> str:
     """A row's ISIN as the fund catalogue stores it, or "" for none."""
     return (row["isin"] or "").strip().upper()
@@ -711,6 +733,7 @@ def build_context(db: Session) -> str:
     summary = analytics.compute_summary(db)
     allocation = analytics.compute_allocation(db)
     flows = analytics.compute_flows_in_force(db, dated.today())
+    portfolio = analytics.compute_portfolio(db)  # cached prices only, no network
 
     lines: list[str] = [
         "# User financial situation",
@@ -720,6 +743,7 @@ def build_context(db: Session) -> str:
         # beside it; it has to be written down.
         f"Totals are in {summary['base_currency']}, the base currency. Figures a "
         "record states itself are given with their own currency.",
+        *_render_rates(db, summary["base_currency"], portfolio),
         "",
     ]
 
@@ -761,7 +785,6 @@ def build_context(db: Session) -> str:
     lines.extend(_render_flows_in_force(flows))
 
     lines.append("## Investment positions (latest situation + recorded buys/sells)")
-    portfolio = analytics.compute_portfolio(db)  # cached prices only, no network
     if not portfolio["rows"]:
         lines.append("- (no investment positions)")
     lines.extend(_render_positions(portfolio, _funds_held(db, portfolio)))

@@ -20,7 +20,7 @@ from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, union, update
 from sqlalchemy.orm import Session, selectinload
 
 from app import dated, fx, models, schemas
@@ -670,6 +670,30 @@ def get_listing_currencies(db: Session) -> dict[str, str]:
         models.PriceCache.currency.is_not(None)
     )
     return {symbol: currency for symbol, currency in db.execute(stmt)}
+
+
+def get_currencies_on_record(db: Session) -> set[str]:
+    """Every currency an amount on record is written in, as written: the
+    situations' holdings, the real assets, the debts, income and expenses, the
+    cash balances, both sides of a transfer, the goals, the ledger (an entry's
+    amount and its price) and the PACs. One query; a listing's own currency is
+    the price cache's business (`get_listing_currencies`)."""
+    columns = (
+        models.Holding.currency,
+        models.RealAsset.currency,
+        models.Liability.currency,
+        models.IncomeSource.currency,
+        models.Expense.currency,
+        models.CashAnchor.currency,
+        models.Transfer.currency,
+        models.Transfer.to_currency,
+        models.Goal.currency,
+        models.Transaction.currency,
+        models.Transaction.price_currency,
+        models.AccumulationPlan.currency,
+    )
+    stmt = union(*(select(column.label("currency")) for column in columns))
+    return {currency for currency in db.scalars(stmt) if currency}
 
 
 def get_cash_anchors_for_institution(

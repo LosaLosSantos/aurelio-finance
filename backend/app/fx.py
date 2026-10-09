@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import bisect
 import datetime
+from collections.abc import Iterable
 from contextlib import contextmanager
 
 from sqlalchemy import inspect, select
@@ -356,6 +357,43 @@ def feed_currencies(db: Session) -> list[str]:
     its own rates). Only the current base when the feed has never answered."""
     base = base_currency(db)
     return sorted(set(rates_on(db, base, _today())) | {base})
+
+
+def rates_for(
+    db: Session, currencies: Iterable[str]
+) -> tuple[str | None, dict[str, float], list[str]]:
+    """The rates in force today against the base for `currencies`, spelt as
+    records spell them: the ECB day they were published, {code: units of it per
+    one unit of the base}, and the spellings the ECB publishes no rate for.
+
+    A minor unit is read as its major one, as every conversion reads it, so
+    pence ask for the pound's rate; the base itself needs none and is left out.
+    Read from the store like any conversion of today (`rates_on`), so it asks
+    the feed only when a conversion would have.
+
+    For the chat's picture, which converted every total at these rates and
+    never said what they were: in the reader's second test round (2026-10-08)
+    the chat answered that it had no exchange rate, with the app holding the
+    ECB's."""
+    base = base_currency(db)
+    wanted: dict[str, str] = {}
+    for written in currencies:
+        if not written or not written.strip():
+            continue
+        _, code = _in_major_units(1.0, written)
+        if code != base:
+            wanted.setdefault(code, written.strip())
+    if not wanted:
+        return None, {}, []
+    in_force = rates_on(db, base, _today())
+    known = {
+        code: in_force[code]
+        for code in sorted(wanted)
+        if code in in_force and in_force[code]["rate"]
+    }
+    published = max((entry["as_of"] for entry in known.values()), default=None)
+    missing = sorted(written for code, written in wanted.items() if code not in known)
+    return published, {code: entry["rate"] for code, entry in known.items()}, missing
 
 
 def choose_base(db: Session, new_base: str, since: str | None) -> None:
