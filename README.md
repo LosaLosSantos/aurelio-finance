@@ -7,7 +7,10 @@ own computer, with an AI advisor you can talk to. Your records are kept on your
 machine. The AI part is optional: it goes through
 [OpenRouter](https://openrouter.ai) with your own key.
 
-![Aurelio on invented demo data: the net worth, what the funds really hold, and the chat answering from the records with a card to confirm](docs/demo.gif)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/LosaLosSantos/aurelio-finance/main/docs/banner-dark.gif">
+  <img alt="Aurelio: everything you own in one place. An animation: the net worth and what makes it up, the countries inside the funds, a question about 1,235 euros left each month answered with a split, and a proposal you confirm or reject." src="https://raw.githubusercontent.com/LosaLosSantos/aurelio-finance/main/docs/banner-light.gif" width="100%">
+</picture>
 
 ## Try it on invented data
 
