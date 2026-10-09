@@ -66,7 +66,7 @@ def test_build_context_includes_ledger_and_position_economics(client):
     assert "realized P/L +100.00" in ctx     # 650 - 5*110
     assert "## Transaction ledger" in ctx
     assert f"{today} sell 5 x VWCE.MI @ 130.00" in ctx
-    assert "no executions recorded yet" in ctx
+    assert "No occurrence has bought anything yet." in ctx
 
 
 def test_build_portfolio_context_has_the_look_through_and_no_personal_data(client, monkeypatch):

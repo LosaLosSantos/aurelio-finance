@@ -231,6 +231,72 @@ def _plan_targets_label(plan) -> str:
     )
 
 
+def _plan_budget(plan) -> str:
+    """How one occurrence of `plan` spends its money, in a sentence.
+
+    The reader's second test round (2026-10-08): the picture gave the plan's
+    weights, and the chat expected each fund's buy at exactly its weight's
+    share of the amount. A whole-unit plan spends the amount, with what the
+    occurrence before it left, as ONE budget (`pac.allocate`), so each fund's
+    figure follows the prices, and what no whole unit fits waits for the next
+    one (`carried_remainder`)."""
+    amount = f"{plan.amount:.2f} {plan.currency}"
+    if (plan.execution or "whole_units") == "fractional":
+        return f"Each occurrence invests exactly {amount}, in fractional units, split by the weights."
+    carried = f"carried now: {plan.carried_remainder or 0.0:.2f} {plan.currency}"
+    if len(plan.targets) > 1:
+        return (
+            f"Each occurrence spends {amount} and what the one before left as ONE "
+            "budget, in whole units across its funds: a fund's figure follows the "
+            "prices, not its weight exactly, and what no whole unit fits waits for "
+            f"the next occurrence ({carried})."
+        )
+    return (
+        f"Each occurrence buys whole units only, as many as {amount} and what the "
+        "one before left can pay for; what no whole unit fits waits for the next "
+        f"occurrence ({carried})."
+    )
+
+
+def _plan_executed(db: Session, plan, txs: list) -> str:
+    """Which occurrences of `plan` have run, the last with the day it was
+    bought, and what its buys are.
+
+    The occurrence and the day can differ: an occurrence on a Sunday is bought
+    at Monday's close and dated Monday (brief AJ). The picture said the last
+    execution was the Sunday and listed buys on the Monday with nothing tying
+    them, and the chat offered to delete "one of the two" as a duplicate."""
+    executed = crud.get_plan_occurrences_executed(db, plan.id)
+    unfilled = len(crud.get_plan_occurrences_settled(db, plan.id) - executed)
+    nothing = (
+        f"{unfilled} occurrence{'' if unfilled == 1 else 's'} ran and bought nothing, "
+        "their money waiting with what is carried."
+    )
+    if not executed:
+        return "No occurrence has bought anything yet." + (f" {nothing}" if unfilled else "")
+    last = max(executed)
+    bought = ", ".join(
+        sorted({t.date for t in txs if t.plan_id == plan.id and t.plan_occurrence == last})
+    )
+    said = (
+        f"{len(executed)} occurrence{'' if len(executed) == 1 else 's'} executed; "
+        f"the last is that of {last}, bought {bought}. Its buys are the ledger "
+        "entries made by this PAC: each occurrence's own execution, never a "
+        "second purchase of the same thing."
+    )
+    return said + (f" Besides, {nothing}" if unfilled else "")
+
+
+def _settles(t, named: dict[int, str]) -> str:
+    """What a buy a PAC made says about it on its ledger line: the plan, the
+    occurrence it settles and the day it was bought, which is the occurrence's
+    own day or the first session after it. Nothing for any other entry."""
+    if not t.plan_occurrence:
+        return ""
+    plan = f'the PAC "{named[t.plan_id]}"' if t.plan_id in named else "a PAC no longer on record"
+    return f", made by {plan} for its occurrence of {t.plan_occurrence}, bought {t.date}"
+
+
 def _isin(row: dict) -> str:
     """A row's ISIN as the fund catalogue stores it, or "" for none."""
     return (row["isin"] or "").strip().upper()
@@ -701,9 +767,11 @@ def build_context(db: Session) -> str:
     lines.extend(_render_positions(portfolio, _funds_held(db, portfolio)))
     lines.append("")
 
+    plans = crud.get_accumulation_plans(db)
     txs = crud.get_transactions(db)
     if txs:
         lines.append("## Transaction ledger (most recent first, up to 15)")
+        named = {p.id: p.name for p in plans}
         for t in txs[:15]:
             est = " (estimated)" if t.estimated else ""
             # Each figure with its currency: the price is the listing's, the
@@ -717,7 +785,7 @@ def build_context(db: Session) -> str:
             )
             lines.append(
                 f"- {t.date} {t.kind} {t.quantity:g} x {t.symbol} "
-                f"{price}= {t.amount:.2f} {t.currency}{rate}{est}"
+                f"{price}= {t.amount:.2f} {t.currency}{rate}{est}{_settles(t, named)}"
             )
         if len(txs) > 15:
             lines.append(f"- ... and {len(txs) - 15} older entries")
@@ -742,7 +810,6 @@ def build_context(db: Session) -> str:
         ratio = summary["liabilities_total"] / assets_total
         lines.append(f"- Debt-to-asset ratio: {ratio * 100:.1f}%")
 
-    plans = crud.get_accumulation_plans(db)
     if plans:
         lines.append("")
         lines.append("## PACs (recurring contributions)")
@@ -759,15 +826,9 @@ def build_context(db: Session) -> str:
             window = ""
             if p.start_date:
                 window = f" from {p.start_date}" + (f" to {p.end_date}" if p.end_date else "")
-            executed = crud.get_plan_occurrences_executed(db, p.id)
-            status = (
-                f" — {len(executed)} executions recorded (last {max(executed)})"
-                if executed
-                else " — no executions recorded yet"
-            )
             lines.append(
                 f"- {p.name}: {p.amount:.0f} {p.currency} {p.frequency or ''} from {src} "
-                f"-> {tgt}{at}{window}{status}"
+                f"-> {tgt}{at}{window}. {_plan_budget(p)} {_plan_executed(db, p, txs)}"
             )
 
     survey = _render_survey(crud.get_survey_responses(db), heading="###")
