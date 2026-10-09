@@ -25,6 +25,22 @@ TODAY = "2026-10-08"
 ANCHOR = "2026-10-01"
 
 
+@pytest.fixture(autouse=True)
+def _stamped_on_the_pinned_day(monkeypatch):
+    """The clock every stamp in these tests is taken by: noon UTC of the day
+    `dated.today` says at that moment, which the tests pin to TODAY and move
+    to the next day.
+
+    The refresh asks whether a cached price was fetched today by comparing
+    its stamp's day with `dated.today()`. With the stamp left to the real
+    clock, the tests that read a price as fetched "today" passed only while
+    the real day was 2026-10-08: from local midnight six of them failed
+    (found by brief AL, 2026-10-09). Read when the stamp is taken, so a test
+    that moves to the next day stamps the next day too; noon UTC is that day
+    in Europe and on CI."""
+    monkeypatch.setattr(models, "_utcnow_iso", lambda: f"{dated.today()}T12:00:00+00:00")
+
+
 # --- The catch-up refreshes them --------------------------------------------------------
 
 
