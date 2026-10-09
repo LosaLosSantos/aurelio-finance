@@ -1553,6 +1553,45 @@ class SurveyAnswerRead(SurveyAnswer):
     created_at: str
 
 
+class SurveyQuestionCondition(BaseModel):
+    """Show a question only while another question's answer is `equals`."""
+
+    model_config = API_OUT
+
+    key: str
+    equals: str
+
+
+class SurveyQuestionNote(BaseModel):
+    """A few words shown under a question while its answer is `equals`."""
+
+    model_config = API_OUT
+
+    equals: str
+    text: str
+
+
+class SurveyQuestion(BaseModel):
+    """One question of the Profile form: what it asks, and the kind of answer
+    it takes. The form draws itself from these (`app/questionnaire.py`), and
+    the chat's `update_profile` is checked against them.
+
+    `type` is how it is answered: "boolean" by yes or no ("unsure" too when
+    `unsure`), "single" by one of `options`, "number" by digits, "text" and
+    "longtext" by any words."""
+
+    model_config = API_OUT
+
+    key: str
+    topic: str
+    text: str
+    type: Literal["boolean", "single", "text", "longtext", "number"]
+    options: list[str] = Field(default_factory=list)
+    unsure: bool = False
+    show_if: SurveyQuestionCondition | None = None
+    explain_when: SurveyQuestionNote | None = None
+
+
 class GoalBase(BaseModel):
     """A financial goal. The target_* fields are used only for type 'target_amount'."""
 

@@ -7,6 +7,13 @@ import type { Schemas } from "./types";
    — present in every response, declared nowhere, and therefore unusable. */
 export type SurveyAnswer = Schemas["SurveyAnswer"];
 export type SurveyAnswerRead = Schemas["SurveyAnswerRead"];
+export type SurveyQuestion = Schemas["SurveyQuestion"];
+
+/* The form's own questions, in its order. The backend holds them because it
+   checks the chat's answers to them against the same list. */
+export async function getSurveyQuestions(): Promise<SurveyQuestion[]> {
+  return (await api.get<SurveyQuestion[]>("/api/survey/questions")).data;
+}
 
 export async function getSurvey(): Promise<SurveyAnswerRead[]> {
   return (await api.get<SurveyAnswerRead[]>("/api/survey")).data;

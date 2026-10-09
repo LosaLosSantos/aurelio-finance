@@ -81,7 +81,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
-from app import advisor, catalogue, chain, composition, crud, dated, fx, models, positions, prices, schemas
+from app import advisor, catalogue, chain, composition, crud, dated, fx, models, positions, prices, questionnaire, schemas
 from app.database import unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -1093,6 +1093,14 @@ def _transaction_receipt(result: dict) -> list[tuple]:
 
 # --- update_profile ----------------------------------------------------------
 
+# The Profile form's own questions as the model is told them: each one's key,
+# its wording and what it takes, from the list the form draws itself from. A
+# question nobody has answered yet is nowhere in the picture, so without this
+# the model could neither name it nor know that it takes yes or no.
+_FORM_QUESTIONS = "; ".join(
+    f'{q.key} "{q.text}" ({questionnaire.takes(q)})' for q in questionnaire.QUESTIONS
+)
+
 
 class UpdateProfileArgs(BaseModel):
     """One answer in the reader's questionnaire, written by key."""
@@ -1101,10 +1109,11 @@ class UpdateProfileArgs(BaseModel):
         ...,
         min_length=1,
         description=(
-            "The question this answers. To CHANGE something already on record, "
-            "copy its wording from the profile section of the picture you were "
-            "given, exactly: a paraphrase files a second copy of the same "
-            "question under a new name. To record something the form never "
+            "The question this answers. For a question of the Profile form, its "
+            "wording as listed under question_key. To CHANGE something already "
+            "on record, copy its wording from the profile section of the picture "
+            "you were given, exactly: a paraphrase files a second copy of the "
+            "same question under a new name. To record something the form never "
             "asked, write the question you actually put to the reader."
         ),
     )
@@ -1114,7 +1123,9 @@ class UpdateProfileArgs(BaseModel):
         description=(
             "What they said, in their words, not summarised into a category. "
             "The questionnaire is already full of boxes; what it is missing is "
-            "what a box cannot hold."
+            "what a box cannot hold. A question of the Profile form takes only "
+            "what its entry under question_key says, written as it is written "
+            "there, and anything else is refused."
         ),
     )
     topic: MaybeText = Field(
@@ -1122,15 +1133,16 @@ class UpdateProfileArgs(BaseModel):
         description=(
             "Which heading to file a NEW question under: reuse one already in "
             "the profile section when it fits. Ignored for a question that is "
-            "already on record: that one keeps the topic it has."
+            "already on record, and for one of the Profile form's: those keep "
+            "the topic they have."
         ),
     )
     question_key: MaybeText = Field(
         default=None,
         description=(
-            "Leave this null. It is here for the case where the reader names a "
-            "key outright; otherwise the question above is what identifies the "
-            "row."
+            "For a question of the Profile form, its key; null for any other "
+            "question, which the question above then identifies. The form's "
+            "questions, as key, wording and what each takes: " + _FORM_QUESTIONS + "."
         ),
     )
 
@@ -1150,17 +1162,32 @@ def _key(text: str) -> str:
 def _profile_row(
     db: Session, args: UpdateProfileArgs
 ) -> tuple[str, models.SurveyResponse | None]:
-    """The key this answer belongs under, and the row already there, if any."""
+    """The key this answer belongs under, and the row already there, if any.
+
+    A question of the Profile form is found by its key, or by its wording even
+    while nobody has answered it: it has no row to be found by then, and a
+    first answer to "Your age?" used to be filed under a key minted from those
+    words, which the form never shows and nothing checks. The form's question
+    wins over a row of the chat's that happens to read the same."""
     rows = crud.get_survey_responses(db)
     if (args.question_key or "").strip():
         key = _key(args.question_key)
     else:
         wanted = _key(args.question)
+        form = next((q.key for q in questionnaire.QUESTIONS if _key(q.text) == wanted), None)
         match = next((r for r in rows if r.question and _key(r.question) == wanted), None)
-        key = match.question_key if match is not None else wanted
+        key = form or (match.question_key if match is not None else wanted)
     if not key:
         raise ValueError(f"{args.question!r} has no letters or digits to make a key from.")
     return key, next((r for r in rows if r.question_key == key), None)
+
+
+def _stored_answer(key: str, answer: str) -> str:
+    """The answer as it is written under `key`: as the form stores it when the
+    Profile form asks that question (`questionnaire.fit`, which refuses what
+    the question does not take), else the words as they were given."""
+    form = questionnaire.BY_KEY.get(key)
+    return questionnaire.fit(form, answer) if form is not None else answer.strip()
 
 
 # What an overwritten answer costs, said on the card. Not the snapshot
@@ -1185,10 +1212,18 @@ def _propose_profile(db: Session, args: UpdateProfileArgs) -> Proposal:
 
     The fingerprint is what that question says NOW, which is also what the diff
     was drawn from: the two go stale together, so a card can never be confirmed
-    against a sentence other than the one the reader was shown."""
+    against a sentence other than the one the reader was shown.
+
+    A question of the Profile form is drawn with the form's own wording, and
+    only with an answer it takes: anything else is refused before any card is
+    drawn (`questionnaire.AnswerRefused`)."""
     key, row = _profile_row(db, args)
-    answer = args.answer.strip()
-    asked = (row.question if row is not None and row.question else args.question).strip()
+    answer = _stored_answer(key, args.answer)
+    form = questionnaire.BY_KEY.get(key)
+    if row is not None and row.question:
+        asked = row.question.strip()
+    else:
+        asked = (form.text if form is not None else args.question).strip()
     if row is None or not (row.answer or "").strip():
         return Proposal(
             title=f"profile · {asked}: {answer}",
@@ -1213,20 +1248,28 @@ def _update_profile(db: Session, args: UpdateProfileArgs) -> dict:
 
     A question already on record keeps its own wording and its own topic: the
     form owns those, and letting a paraphrase from a conversation rewrite the
-    label would change the question under an answer given to the old one."""
+    label would change the question under an answer given to the old one. A
+    question of the Profile form answered for the first time takes the form's
+    wording and topic, and only an answer the form would store."""
     key, row = _profile_row(db, args)
+    answer = _stored_answer(key, args.answer)
+    form = questionnaire.BY_KEY.get(key)
     fresh = row is None or not row.question
     # Read off the row BEFORE the write. `upsert_survey_response` mutates this
     # same identity-mapped instance, so asking it afterwards what it used to
     # say returns what it says now — a receipt that reports the change as
     # having replaced itself.
     replaced = row.answer if row is not None else None
+    if form is not None:
+        question, topic = form.text, form.topic
+    else:
+        question, topic = args.question.strip(), (args.topic or "").strip() or None
     saved = crud.upsert_survey_response(
         db,
         key,
-        args.answer.strip(),
-        question=args.question.strip() if fresh else None,
-        topic=((args.topic or "").strip() or None) if fresh else None,
+        answer,
+        question=question if fresh else None,
+        topic=topic if fresh else None,
     )
     return {
         "question_key": saved.question_key,
@@ -1942,7 +1985,11 @@ REGISTRY: dict[str, Tool] = {
                 "they behaved when the market fell, what they would never give "
                 "up), not for a passing remark. It does not write: it draws a "
                 "card they confirm, and changing an answer that already exists "
-                "shows them what it would replace."
+                "shows them what it would replace. A question of the Profile "
+                "form takes only the kind of answer the form offers (listed "
+                "under question_key); anything else is refused. Never a goal: "
+                "goals are a list of their own, which no tool writes yet, so "
+                "say that instead of filing one as an answer here."
             ),
             arguments=UpdateProfileArgs,
             run=_update_profile,
@@ -2190,6 +2237,11 @@ def answer(db: Session, call: advisor.ToolCall) -> dict:
 
     try:
         proposal = tool.propose(db, args)
+    except questionnaire.AnswerRefused as exc:
+        # A rule refusing an answer, not a failure of the tool's: its sentence
+        # goes to the model and under the tool's line as it is, with no
+        # traceback logged and no exception's name in front of it.
+        return {"ok": False, "error": str(exc)}
     except Exception as exc:
         logger.exception("drafting %s failed", call.name)
         return {"ok": False, "error": f"{call.name} could not be drafted: {type(exc).__name__}: {exc}"}

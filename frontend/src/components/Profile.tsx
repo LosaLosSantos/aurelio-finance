@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { getSurvey, saveSurvey, type SurveyAnswer } from "../api/survey";
+import {
+  getSurvey,
+  getSurveyQuestions,
+  saveSurvey,
+  type SurveyAnswer,
+  type SurveyQuestion,
+} from "../api/survey";
 import {
   getTaxSettings,
   saveTaxSettings,
@@ -7,187 +13,20 @@ import {
   type TaxSettingsRead,
 } from "../api/tax";
 import { getBaseCurrency, saveBaseCurrency, type BaseCurrencySetting } from "../api/baseCurrency";
+import { choicesOf, isVisible, topicsOf, unshownAnswer } from "./questionnaire";
 import { apiError, btnClass, cardClass, inputClass } from "./ui";
 
-type QType = "boolean" | "single" | "text" | "longtext" | "number";
-
-interface Question {
-  key: string;
-  topic: string;
-  text: string;
-  type: QType;
-  options?: string[];
-  // Branching: only show this question if another answer equals a value.
-  showIf?: { key: string; equals: string };
-  // Educational: show this explanation when the answer equals a value (e.g. "no").
-  explainWhen?: { equals: string; text: string };
-  // For boolean questions where "unsure" is a meaningful third answer.
-  unsure?: boolean;
-}
-
-// Declarative questionnaire. Booleans store "yes"/"no" (or "unsure" when allowed).
-const QUESTIONS: Question[] = [
-  // --- About you (context) ---
-  { key: "about_country", topic: "About you", type: "text", text: "Which country do you live in?" },
-  { key: "about_area", topic: "About you", type: "text", text: "Which city or area?" },
-  { key: "about_age", topic: "About you", type: "number", text: "Your age?" },
-  {
-    key: "about_employment",
-    topic: "About you",
-    type: "single",
-    options: ["Employee", "Self-employed", "Business owner", "Student", "Retired", "Not working"],
-    text: "Employment status?",
-  },
-  {
-    key: "about_household",
-    topic: "About you",
-    type: "single",
-    options: ["Single", "Couple", "Family with children", "Other"],
-    text: "Household?",
-  },
-  { key: "about_dependents", topic: "About you", type: "number", text: "How many people depend on you financially?" },
-  {
-    key: "about_home",
-    topic: "About you",
-    type: "single",
-    options: ["Rent", "Own (with mortgage)", "Own (outright)", "Live with family", "Other"],
-    text: "Your housing situation?",
-  },
-
-  // --- Financial literacy intro (with explanations on "no") ---
-  {
-    key: "lit_why_invest",
-    topic: "Financial literacy",
-    type: "boolean",
-    text: "Do you know why people invest?",
-    explainWhen: {
-      equals: "no",
-      text: "Investing grows your savings over time and protects them from inflation: money left idle loses purchasing power every year. By investing in assets that yield a return, your capital can grow and outpace inflation, in exchange for some risk.",
-    },
-  },
-  {
-    key: "lit_inflation",
-    topic: "Financial literacy",
-    type: "boolean",
-    text: "Do you know what inflation is?",
-    explainWhen: {
-      equals: "no",
-      text: "Inflation is the general rise in prices over time: with the same amount you buy less tomorrow than today. At 3%/year, €100 is worth about €97 of purchasing power after one year, which is why idle cash 'loses value'.",
-    },
-  },
-  {
-    key: "lit_risk_return",
-    topic: "Financial literacy",
-    type: "boolean",
-    text: "Do you know the risk/return trade-off?",
-    explainWhen: {
-      equals: "no",
-      text: "Higher potential returns usually require accepting more risk (ups and downs, possible losses). There are no high, guaranteed, risk-free returns. Be wary of anyone promising them.",
-    },
-  },
-  {
-    key: "lit_diversification",
-    topic: "Financial literacy",
-    type: "boolean",
-    text: "Do you know what diversification is?",
-    explainWhen: {
-      equals: "no",
-      text: "Diversification means not putting all your eggs in one basket. Spreading across instruments, sectors and regions reduces the chance that a single bad investment hurts everything.",
-    },
-  },
-
-  // --- Family ---
-  { key: "fam_want", topic: "Family", type: "boolean", text: "Do you want to start or grow a family?", unsure: true },
-  {
-    key: "fam_when",
-    topic: "Family",
-    type: "single",
-    options: ["< 2 years", "2–5 years", "> 5 years"],
-    text: "On what horizon?",
-    showIf: { key: "fam_want", equals: "yes" },
-  },
-  {
-    key: "fam_children",
-    topic: "Family",
-    type: "number",
-    text: "How many children do you plan for?",
-    showIf: { key: "fam_want", equals: "yes" },
-  },
-
-  // --- Housing & city ---
-  { key: "home_buy", topic: "Housing & city", type: "boolean", text: "Do you plan to buy a home?", unsure: true },
-  {
-    key: "home_when",
-    topic: "Housing & city",
-    type: "single",
-    options: ["< 2 years", "2–5 years", "> 5 years"],
-    text: "When?",
-    showIf: { key: "home_buy", equals: "yes" },
-  },
-  { key: "home_city", topic: "Housing & city", type: "text", text: "Any city/area you plan to move to or settle in?" },
-
-  // --- Career & income ---
-  { key: "career_change", topic: "Career & income", type: "boolean", text: "Do you expect a major career or income change soon?", unsure: true },
-  {
-    key: "career_detail",
-    topic: "Career & income",
-    type: "text",
-    text: "Briefly, what change?",
-    showIf: { key: "career_change", equals: "yes" },
-  },
-
-  // --- Major purchases ---
-  { key: "big_purchase", topic: "Major purchases", type: "boolean", text: "Any large purchase planned (car, renovation, …)?", unsure: true },
-  {
-    key: "big_purchase_detail",
-    topic: "Major purchases",
-    type: "text",
-    text: "What and roughly when?",
-    showIf: { key: "big_purchase", equals: "yes" },
-  },
-
-  // --- Retirement & horizon ---
-  { key: "ret_age", topic: "Retirement & horizon", type: "number", text: "At what age would you like to retire or be financially independent?" },
-
-  // --- Risk & values ---
-  { key: "risk_tolerance", topic: "Risk & values", type: "single", options: ["Low", "Medium", "High"], text: "How would you describe your risk tolerance?" },
-  // Classic loss-aversion probe: both options have the SAME expected value
-  // (−500), so the answer reveals attitude to risk rather than to the amount.
-  {
-    key: "risk_loss_choice",
-    topic: "Risk & values",
-    type: "single",
-    options: [
-      "A certain loss of 500 €",
-      "A 50/50 gamble: lose 1000 € or lose nothing",
-    ],
-    text: "Which would you choose: a certain loss of 500 €, or a 50% chance of losing 1000 € and a 50% chance of losing nothing?",
-  },
-  { key: "values_esg", topic: "Risk & values", type: "boolean", text: "Do ethical / ESG considerations matter for your investments?", unsure: true },
-
-  // --- In your words ---
-  // The richest input a model can get, and the one no number can replace: how
-  // you talk about your own money, and how you want to be talked to.
-  {
-    key: "self_narrative",
-    topic: "In your words",
-    type: "longtext",
-    text: "Write freely about yourself and your money: what you are working towards, what worries you, what you would never give up, how you want Aurelio to talk to you. Nothing here is validated or scored: it is context.",
-  },
-
-  // --- Lifestyle ---
-  { key: "lifestyle_notes", topic: "Lifestyle", type: "text", text: "Anything else about your situation, habits, or plans Aurelio should know?" },
-];
-
-const TOPICS = [...new Set(QUESTIONS.map((q) => q.topic))];
-
-// The keys this form is authoritative for. Everything else stored under
-// /api/survey belongs to somebody else — today the chat, which can write an
-// answer to a question this list never asked, because the analyses declare
-// what they do not know about you and a form cannot ask that in advance.
-const OWN_KEYS = new Set(QUESTIONS.map((q) => q.key));
+/* The questions are the backend's (`GET /api/survey/questions`, app/questionnaire.py):
+   the chat's answers to them are checked against the same list, so the two
+   cannot disagree about what a question takes. Booleans store "yes"/"no" (or
+   "unsure" when allowed). The keys in that list are the ones this form is
+   authoritative for; everything else stored under /api/survey belongs to
+   somebody else, today the chat, which can write an answer to a question this
+   list never asked, because the analyses declare what they do not know about
+   you and a form cannot ask that in advance. */
 
 export default function Profile() {
+  const [questions, setQuestions] = useState<SurveyQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   /* Answers stored under keys this form does not render, kept so they can be
      posted back untouched. PUT /api/survey replaces the WHOLE set — it deletes
@@ -226,11 +65,13 @@ export default function Profile() {
     setLoading(true);
     setError(null);
     try {
-      const [existing, taxes, currentBase] = await Promise.all([
+      const [asked, existing, taxes, currentBase] = await Promise.all([
+        getSurveyQuestions(),
         getSurvey(),
         getTaxSettings(),
         getBaseCurrency(),
       ]);
+      setQuestions(asked);
       setBase(currentBase);
       setPickedBase(currentBase.base_currency);
       setTax(taxes);
@@ -240,9 +81,10 @@ export default function Profile() {
       const map: Record<string, string> = {};
       for (const a of existing) if (a.answer != null) map[a.question_key] = a.answer;
       setAnswers(map);
+      const own = new Set(asked.map((q) => q.key));
       setCarried(
         existing
-          .filter((a) => !OWN_KEYS.has(a.question_key) && a.answer != null)
+          .filter((a) => !own.has(a.question_key) && a.answer != null)
           .map(({ question_key, topic, question, answer }) => ({
             question_key,
             topic,
@@ -262,16 +104,12 @@ export default function Profile() {
     setSaved(false);
   }
 
-  function isVisible(q: Question): boolean {
-    return !q.showIf || answers[q.showIf.key] === q.showIf.equals;
-  }
-
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      const payload: SurveyAnswer[] = QUESTIONS.filter(
-        (q) => isVisible(q) && (answers[q.key] ?? "") !== "",
+      const payload: SurveyAnswer[] = questions.filter(
+        (q) => isVisible(q, answers) && (answers[q.key] ?? "") !== "",
       ).map((q) => ({
         question_key: q.key,
         topic: q.topic,
@@ -316,8 +154,8 @@ export default function Profile() {
 
       {error && <p className="text-down">{error}</p>}
 
-      {TOPICS.map((topic) => {
-        const qs = QUESTIONS.filter((q) => q.topic === topic && isVisible(q));
+      {topicsOf(questions).map((topic) => {
+        const qs = questions.filter((q) => q.topic === topic && isVisible(q, answers));
         if (qs.length === 0) return null;
         return (
           <section key={topic} className={cardClass + " space-y-4 p-5"}>
@@ -582,17 +420,20 @@ function QuestionField({
   value,
   onChange,
 }: {
-  q: Question;
+  q: SurveyQuestion;
   value: string;
   onChange: (v: string) => void;
 }) {
+  // An answer on record that no button, option or number box can show: written
+  // before the chat's answers were checked against the question (brief AL).
+  const unshown = unshownAnswer(q, value);
   return (
     <div>
       <label className="mb-1 block text-sm text-ink">{q.text}</label>
 
       {q.type === "boolean" ? (
         <div className="flex gap-2">
-          {(q.unsure ? ["yes", "unsure", "no"] : ["yes", "no"]).map((opt) => (
+          {choicesOf(q).map((opt) => (
             <button
               key={opt}
               type="button"
@@ -611,7 +452,7 @@ function QuestionField({
       ) : q.type === "single" ? (
         <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">choose…</option>
-          {q.options?.map((o) => (
+          {q.options.map((o) => (
             <option key={o} value={o}>
               {o}
             </option>
@@ -640,9 +481,11 @@ function QuestionField({
         />
       )}
 
-      {q.explainWhen && value === q.explainWhen.equals && (
+      {unshown && <p className="mt-2 text-sm text-warn">{unshown}</p>}
+
+      {q.explain_when && value === q.explain_when.equals && (
         <p className="mt-2 rounded-sm bg-warn-tint p-3 text-sm text-warn">
-          {q.explainWhen.text}
+          {q.explain_when.text}
         </p>
       )}
     </div>

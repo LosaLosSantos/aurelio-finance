@@ -1374,6 +1374,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/survey/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Survey Questions
+         * @description The Profile form's questions, in its order: the form draws itself from
+         *     this list, and the chat's answers to them are checked against it
+         *     (`app/questionnaire.py`).
+         */
+        get: operations["get_survey_questions_api_survey_questions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/transactions": {
         parameters: {
             query?: never;
@@ -4419,6 +4441,58 @@ export interface components {
             question_key: string;
             /** Topic */
             topic: string | null;
+        };
+        /**
+         * SurveyQuestion
+         * @description One question of the Profile form: what it asks, and the kind of answer
+         *     it takes. The form draws itself from these (`app/questionnaire.py`), and
+         *     the chat's `update_profile` is checked against them.
+         *
+         *     `type` is how it is answered: "boolean" by yes or no ("unsure" too when
+         *     `unsure`), "single" by one of `options`, "number" by digits, "text" and
+         *     "longtext" by any words.
+         */
+        SurveyQuestion: {
+            explain_when: components["schemas"]["SurveyQuestionNote"] | null;
+            /** Key */
+            key: string;
+            /** Options */
+            options: string[];
+            show_if: components["schemas"]["SurveyQuestionCondition"] | null;
+            /** Text */
+            text: string;
+            /** Topic */
+            topic: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "boolean" | "single" | "text" | "longtext" | "number";
+            /**
+             * Unsure
+             * @default false
+             */
+            unsure: boolean;
+        };
+        /**
+         * SurveyQuestionCondition
+         * @description Show a question only while another question's answer is `equals`.
+         */
+        SurveyQuestionCondition: {
+            /** Equals */
+            equals: string;
+            /** Key */
+            key: string;
+        };
+        /**
+         * SurveyQuestionNote
+         * @description A few words shown under a question while its answer is `equals`.
+         */
+        SurveyQuestionNote: {
+            /** Equals */
+            equals: string;
+            /** Text */
+            text: string;
         };
         /**
          * SymbolLookup
@@ -7767,6 +7841,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_survey_questions_api_survey_questions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SurveyQuestion"][];
                 };
             };
         };

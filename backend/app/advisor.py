@@ -773,13 +773,20 @@ def build_context(db: Session) -> str:
     survey = _render_survey(crud.get_survey_responses(db), heading="###")
     if survey:
         lines.append("")
-        lines.append("## Personal profile & goals (from the questionnaire)")
+        # The questionnaire holds no goals; the section below does. Headed "profile
+        # & goals" until brief AL, and the chat filed a goal as an answer here.
+        lines.append("## Personal profile (from the questionnaire)")
         lines.extend(survey)
 
     goals = crud.get_goals(db)
-    if goals:
-        lines.append("")
-        lines.append("## Goals")
+    lines.append("")
+    lines.append("## Goals")
+    if not goals:
+        # Said rather than left out, under its own heading: the model is told
+        # that no tool writes a goal (the system prompt), and a goal asked for
+        # in the chat was filed in the questionnaire instead (brief AL).
+        lines.append("- (none recorded)")
+    else:
         for g in goals:
             entry = f"- {g.name} [{g.type or 'n/a'}]"
             if g.type == "target_amount" and g.target_amount and g.target_date:
