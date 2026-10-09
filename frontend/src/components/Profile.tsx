@@ -148,7 +148,8 @@ export default function Profile() {
         <h2 className="text-lg font-semibold text-ink">Profile &amp; goals</h2>
         <p className="text-sm text-ink-soft">
           A short questionnaire that gives Aurelio your context. Saved on your
-          machine; only sent to the LLM when you run an analysis.
+          machine; sent to the AI model through OpenRouter when you run an
+          analysis or ask the chat.
         </p>
       </div>
 
