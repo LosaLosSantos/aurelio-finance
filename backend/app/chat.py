@@ -75,9 +75,9 @@ else of the conversation. Until then it was OpenRouter's own search, declared
 on every request, and brief AL's paid probe found that a request declaring it
 kept none of the cache's markers but the last, so no turn read the one before
 it. What comes back is the pages: the model reads them as the tool's result,
-and the reader is shown them as links where the search ran. A turn runs at
-most WEB_SEARCHES_PER_TURN; a call past them is answered in words, and the
-tools stay as they were.
+and the reader is shown them as links where the search ran, under the query
+that went out. A turn runs at most WEB_SEARCHES_PER_TURN; a call past them is
+answered in words, and the tools stay as they were.
 
 And this chat is an ORCHESTRATOR now. `run_analysis` is a card like any other
 write, and confirming it runs the advisor chain — three to six model calls, a
@@ -1102,15 +1102,15 @@ def _past_the_cards(call: advisor.ToolCall, drawn: list[str]) -> dict | None:
     return None
 
 
-def _found(blocks: list[dict], page: websearch.WebPage) -> None:
-    """A page into the answer, where the search ran: onto the list it is part
-    of, or a new list. Its excerpt is not kept. It was for the model; the link
-    is what the reader opens."""
-    entry = {"url": page.url, "title": page.title}
-    if blocks and blocks[-1].get("kind") == "sources":
-        blocks[-1]["pages"].append(entry)
-    else:
-        blocks.append({"kind": "sources", "pages": [entry]})
+def _found(found: websearch.Search) -> dict:
+    """What a search that ran found, as the answer keeps it: the query the app
+    sent, and each page's address and title. The excerpts are not kept. They
+    were for the model; the link is what the reader opens."""
+    return {
+        "kind": "sources",
+        "query": found.query,
+        "pages": [{"url": page.url, "title": page.title} for page in found.pages],
+    }
 
 
 # Said to the model on the last round that has tools, and on no other. WHERE it
@@ -1386,11 +1386,8 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         # Worked out once, on the conversation as it stands before any tool is
         # called: every round of the turn begins with it.
         kept = _kept_prefixes(messages)
-        # How many web searches the turn has run, against
-        # WEB_SEARCHES_PER_TURN, and every page already listed: one found
-        # twice is shown once.
+        # How many web searches the turn has run, against WEB_SEARCHES_PER_TURN.
         searched = 0
-        listed: set[str] = set()
         for completion in range(1, allowed + 1):
             # The last round is asked with no tools, so it can only write. That
             # is the whole of the old error path, deleted rather than caught.
@@ -1478,15 +1475,16 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                         "detail": outcome.get("error"),
                     }
                 )
-                # The pages a search found, under its line and before the
-                # words written from them, for the reader to open. The model
-                # reads them, with their excerpts, in the tool's result.
-                for page in ran.pages if ran is not None and outcome["ok"] else ():
-                    if page.url in listed:
-                        continue
-                    listed.add(page.url)
-                    _found(blocks, page)
-                    yield schemas.ChatSource(url=page.url, title=page.title)
+                # What a search that ran found, under its line and before the
+                # words written from it: the query it was asked with, which is
+                # what went out, and the pages, for the reader to open. Each
+                # search a list of its own, an empty one when it found nothing.
+                # The model reads the pages, excerpts and all, in the tool's
+                # result.
+                if ran is not None and outcome["ok"]:
+                    found = _found(ran)
+                    blocks.append(found)
+                    yield schemas.ChatSources(query=found["query"], pages=found["pages"])
                 messages.append(tools.result_message(call, outcome))
             if proposed:
                 # The turn ends on the card, and ends DONE. The confirmation is

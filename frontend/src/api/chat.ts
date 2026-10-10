@@ -39,7 +39,7 @@ export type ChatEvent =
   | Schemas["ChatThought"]
   | Schemas["ChatDelta"]
   | Schemas["ChatTool"]
-  | Schemas["ChatSource"]
+  | Schemas["ChatSources"]
   | Schemas["ChatStep"]
   | Schemas["ChatCard"]
   | Schemas["ChatDecided"]
@@ -121,9 +121,10 @@ export type StreamHandlers = {
   /** A tool the model asked for, named, once it has been answered, with the
       reason when it failed (null otherwise, which claims no success). */
   onTool: (name: string, detail: string | null) => void;
-  /** A page a web search found, as the search the app ran comes back: under
-      the search's line and before the words written from it. */
-  onSource: (page: { url: string; title: string }) => void;
+  /** What a web search found, whole, as the search the app ran comes back:
+      the query it sent and the pages, under the search's line and before the
+      words written from them. */
+  onSources: (found: { query: string; pages: { url: string; title: string }[] }) => void;
   /** One finished step of a long tool. The analyzer is three to six model
       calls; this is what the minute is made of. */
   onStep: (step: ChatStepEvent) => void;
@@ -228,8 +229,8 @@ async function post(
           case "tool":
             handlers.onTool(event.name, event.detail ?? null);
             break;
-          case "source":
-            handlers.onSource({ url: event.url, title: event.title });
+          case "sources":
+            handlers.onSources({ query: event.query, pages: event.pages });
             break;
           case "step":
             handlers.onStep(event);

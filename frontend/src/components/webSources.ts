@@ -1,12 +1,12 @@
 /* The pages a web search found, as the chat panel lists them.
 
    Brief AG gave the chat the web, and since brief AM the app runs each search
-   itself: each page a search found arrives on the stream when the search
-   comes back, under its line, then is stored where the search ran. Two jobs
-   live here: growing an answer's blocks as pages arrive, by the same rule the
-   server stores them, so a live answer and the same answer read back from the
-   history look alike; and turning a page into a link only when it is a web
-   address. The server already refuses anything else, and this refuses it
+   itself: what a search found arrives on the stream whole when it comes back,
+   under the search's line, with the query the app sent, and is stored the
+   same way, so a live answer and the same answer read back from the history
+   look alike. Two jobs live here: the words above a search's list, which say
+   what was searched for; and turning a page into a link only when it is a
+   web address. The server already refuses anything else, and this refuses it
    again, because a link is something the reader presses.
 
    No runtime imports, so `npm test` reaches it. */
@@ -17,31 +17,21 @@ export interface WebPage {
   title: string;
 }
 
-/** The pages one search, or a run of searches, found: the stored block. */
-export interface SourcesBlock {
-  kind: "sources";
-  pages: WebPage[];
+/** What heads one search's list: the words, and the query the app sent when
+    the list says it (every list stored since brief AM does). */
+export interface FoundOn {
+  words: string;
+  query: string | null;
 }
 
-function isSources(block: { kind: string }): block is SourcesBlock {
-  return block.kind === "sources";
-}
-
-/** The answer's blocks with `page` added where it arrived: onto the list of
-    pages the last block already is, or as a new list after it. A page the
-    answer already lists is not listed again. */
-export function withSource<B extends { kind: string }>(
-  blocks: readonly (B | SourcesBlock)[],
-  page: WebPage,
-): (B | SourcesBlock)[] {
-  if (blocks.some((b) => isSources(b) && b.pages.some((p) => p.url === page.url))) {
-    return [...blocks];
-  }
-  const last = blocks[blocks.length - 1];
-  if (last !== undefined && isSources(last)) {
-    return [...blocks.slice(0, -1), { kind: "sources", pages: [...last.pages, page] }];
-  }
-  return [...blocks, { kind: "sources", pages: [page] }];
+/** The heading for a list of `links` pages that a search for `query` found,
+    or null when there is nothing to say: a list stored before queries were,
+    with no page that can be a link. A search that ran and found nothing still
+    says what it looked for, since that query went out all the same. */
+export function foundOn(query: string | null | undefined, links: number): FoundOn | null {
+  const asked = query?.trim() ?? "";
+  if (asked === "") return links > 0 ? { words: "Found on the web", query: null } : null;
+  return { words: links > 0 ? "Found on the web for" : "Found nothing on the web for", query: asked };
 }
 
 /** A page as a link: its address, the words to show, and the site it is on. */

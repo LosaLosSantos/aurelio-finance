@@ -2145,9 +2145,10 @@ _SEARCH_WEB_DESCRIPTION = (
     "each with its title, its address and an excerpt. For what neither the "
     "reader's records, the catalogue nor `lookup_symbol` holds: news, recent "
     "performance, comparisons, how a fund or an index works. The query leaves "
-    "this app for a search engine, so write it about instruments and facts, "
-    "and never put the reader's figures, names or anything else about them in "
-    "it. Each search costs a little, and the app caps how many one answer runs."
+    "this app for a search engine, and the reader is shown it above the pages "
+    "it found: write it about instruments and facts, and never put the "
+    "reader's figures, names or anything else about them in it. Each search "
+    "costs a little, and the app caps how many one answer runs."
 )
 
 

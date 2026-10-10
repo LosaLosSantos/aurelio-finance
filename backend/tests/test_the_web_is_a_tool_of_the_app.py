@@ -16,7 +16,8 @@ These pin:
   models are offered `search_web` beside the app's other tools;
 - a search is one request that carries its query and nothing else, and its
   pages come back to the model as the tool's result, with their excerpts;
-- the reader sees the pages as before, as links where the search ran;
+- the reader sees the pages as before, as links where the search ran, and
+  above them the query that went out, each search a list of its own;
 - six searches a turn: a seventh is answered in words and the tools stay as
   they are; one round's searches run at the same time;
 - a search whose answer reports no search did not run, and is never told as
@@ -366,9 +367,9 @@ def test_the_model_reads_the_pages_with_their_excerpts_as_the_searchs_result(cli
 
 def test_the_reader_sees_the_pages_as_links_where_the_search_ran(client, openrouter):
     """Under the search's line and before the words written from them, in the
-    order the search gave them. A page found twice is listed once, anything
-    that is not an http or https address is no link at all, and a page with
-    no title is named by its site."""
+    order the search gave them, under the query the app sent. A page found
+    twice is listed once, anything that is not an http or https address is no
+    link at all, and a page with no title is named by its site."""
     openrouter.search = lambda body: httpx.Response(
         200,
         json=_answer(
@@ -387,16 +388,54 @@ def test_the_reader_sees_the_pages_as_links_where_the_search_ran(client, openrou
     kinds = [e["kind"] for e in events]
     (tool,) = [e for e in events if e["kind"] == "tool"]
     assert tool == {"kind": "tool", "name": "search_web", "detail": None}
-    assert kinds.index("tool") < kinds.index("source") < kinds.index("delta")
+    assert kinds.index("tool") < kinds.index("sources") < kinds.index("delta")
     pages = [
-        ("https://investor.example/voo", "VOO fact sheet"),
-        ("https://www.sec.example/prospectus.htm", "Prospectus"),
-        ("https://www.example.org/a/b", "www.example.org"),
+        {"url": "https://investor.example/voo", "title": "VOO fact sheet"},
+        {"url": "https://www.sec.example/prospectus.htm", "title": "Prospectus"},
+        {"url": "https://www.example.org/a/b", "title": "www.example.org"},
     ]
-    assert [(e["url"], e["title"]) for e in events if e["kind"] == "source"] == pages
+    (found,) = [e for e in events if e["kind"] == "sources"]
+    assert found == {"kind": "sources", "query": "VOO expense ratio", "pages": pages}
     *_, blocks = _stored(events)
     assert [b["kind"] for b in blocks] == ["tool", "sources", "text"]
-    assert blocks[1]["pages"] == [{"url": url, "title": title} for url, title in pages]
+    assert blocks[1] == {"kind": "sources", "query": "VOO expense ratio", "pages": pages}
+
+
+def test_each_search_is_a_list_of_its_own_under_its_query(client, openrouter):
+    """Two searches in one round, each under its own line and its own query.
+    A page both found is under both: each list says what its query found."""
+    openrouter.search = lambda body: httpx.Response(
+        200,
+        json=_answer(
+            _cited("https://both.example/etf", "Found by both"),
+            _cited(f"https://only.example/{_slug(_query(body))}", f"Only {_query(body)}"),
+        ),
+    )
+    openrouter.script = [_searches_for("first query", "second query"), _says("Fatto.")]
+
+    events = _ask(client, "Cerca due cose", OPUS)
+
+    *_, blocks = _stored(events)
+    assert [b["kind"] for b in blocks] == ["tool", "sources", "tool", "sources", "text"]
+    lists = [b for b in blocks if b["kind"] == "sources"]
+    assert [b["query"] for b in lists] == ["first query", "second query"]
+    for found in lists:
+        assert [p["url"] for p in found["pages"]] == [
+            "https://both.example/etf",
+            f"https://only.example/{_slug(found['query'])}",
+        ]
+
+
+def test_a_search_that_found_nothing_shows_its_query_with_no_page(client, openrouter):
+    """The search ran and returned no page: the reader still sees what was
+    searched for, with nothing under it."""
+    openrouter.search = lambda body: httpx.Response(200, json=_answer(searches=1))
+    openrouter.script = [_searches_for(QUERY), _says("Non ho trovato nulla.")]
+
+    events = _ask(client, QUESTION, OPUS)
+
+    (found,) = [e for e in events if e["kind"] == "sources"]
+    assert found == {"kind": "sources", "query": QUERY, "pages": []}
 
 
 def test_a_later_turn_gets_the_words_and_not_the_pages(client, openrouter):
@@ -505,7 +544,7 @@ def test_a_search_whose_answer_reports_no_search_did_not_run(client, openrouter,
     assert _results(openrouter.asked[1]) == [{"ok": False, "error": said}]
     (tool,) = [e for e in events if e["kind"] == "tool"]
     assert tool["detail"] == said
-    assert not [e for e in events if e["kind"] == "source"]
+    assert not [e for e in events if e["kind"] == "sources"]
     _, _, cost, _ = _stored(events)
     assert cost == pytest.approx(2 * ROUND_COST + SEARCH_COST)
 

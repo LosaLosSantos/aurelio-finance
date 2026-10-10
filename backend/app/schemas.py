@@ -2383,19 +2383,29 @@ class ChatWebPage(BaseModel):
 
 
 class ChatSourcesBlock(BaseModel):
-    """The pages a web search found, kept where the search ran.
+    """The pages one web search found, under the query it was asked with,
+    kept where the search ran.
 
     Provenance, for the reason a `ChatToolBlock` is kept: an answer that says
     "Vanguard gives 0.03%" got that from somewhere, and the reader is owed the
     page. These are what the search RETURNED (the app's search, on Exa through
     OpenRouter, hands back every page it found, five a search), so they are
     the pages the model was given to read, not a claim about which of them it
-    used; the sentence that uses one carries its link. A page found twice in a
-    turn is listed once. Never sent back to the model with a later turn: past
-    turns travel as their words, and a link the model wrote travels inside
-    them."""
+    used; the sentence that uses one carries its link.
+
+    The query since brief AM (2026-10-09): the app runs each search itself, so
+    it knows the query it sent, and the reader is shown it above the pages:
+    what went out of the app to be searched for. Each search is a list of its
+    own; an empty one is a search that ran and found nothing.
+    A block stored before has no query. Never sent back to the model with a
+    later turn: past turns travel as their words, and a link the model wrote
+    travels inside them."""
 
     kind: Literal["sources"] = "sources"
+    query: str | None = Field(
+        default=None,
+        description="What the app sent to be searched for; null on a list stored before brief AM",
+    )
     pages: list[ChatWebPage]
 
 
@@ -2720,16 +2730,18 @@ class ChatDecided(BaseModel):
     card: ChatCardBlock
 
 
-class ChatSource(BaseModel):
-    """A page a web search found, as it arrives.
+class ChatSources(BaseModel):
+    """What one web search found, as it comes back: the query the app sent
+    and the pages it found, in one piece, since the search's answer arrives
+    whole.
 
-    Sent when the search the app ran comes back: under the search's line and
-    before the words written from it. The panel lists it where it arrived, as
-    the stored `ChatSourcesBlock` will when the conversation is read back."""
+    Sent under the search's line and before the words written from it. The
+    panel puts it where it arrived, as the stored `ChatSourcesBlock` will be
+    when the conversation is read back."""
 
-    kind: Literal["source"] = "source"
-    url: str
-    title: str
+    kind: Literal["sources"] = "sources"
+    query: str
+    pages: list[ChatWebPage]
 
 
 class ChatCardDecision(BaseModel):
@@ -2796,7 +2808,7 @@ ChatEvent = Annotated[
     | ChatThought
     | ChatDelta
     | ChatTool
-    | ChatSource
+    | ChatSources
     | ChatStep
     | ChatCard
     | ChatDecided

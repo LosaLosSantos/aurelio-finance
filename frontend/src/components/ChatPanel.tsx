@@ -35,7 +35,7 @@ import {
   type Follow,
   type Pane,
 } from "./followStream";
-import { linkOf, withSource, type Link, type WebPage } from "./webSources";
+import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
 
@@ -195,32 +195,44 @@ function ToolNote({ block, running }: { block: ChatToolBlock; running: boolean }
   );
 }
 
-/* The pages a web search found, listed where the search ran: under its line
-   and above the words written from them. They are what the search RETURNED,
-   so the heading says found and not cited; the sentence that uses a page
-   carries its own link. Each opens in a new tab and tells the site nothing
-   about where the reader came from. */
+/* What one web search found, listed where the search ran: under its line and
+   above the words written from it, headed by the query the app sent, which is
+   what went out of this computer to be searched for (brief AM). The pages are
+   what the search RETURNED, so the heading says found and not cited; the
+   sentence that uses a page carries its own link. Each opens in a new tab and
+   tells the site nothing about where the reader came from. The query keeps its
+   own case, like a tool's name on its line. */
 function Sources({ block }: { block: ChatSourcesBlock }) {
   const links = block.pages.map(linkOf).filter((l): l is Link => l !== null);
-  if (links.length === 0) return null;
+  const heading = foundOn(block.query, links.length);
+  if (heading === null) return null;
   return (
     <div className="my-2 border-l border-hair pl-3">
-      <p className="text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">Found on the web</p>
-      <ul className="mt-1 space-y-0.5">
-        {links.map((l) => (
-          <li key={l.href} className="break-words text-xs leading-relaxed">
-            <a
-              href={l.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-olive underline underline-offset-2"
-            >
-              {l.label}
-            </a>
-            <span className="text-ink-faint"> · {l.host}</span>
-          </li>
-        ))}
-      </ul>
+      <p className="text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">
+        {heading.words}
+        {heading.query !== null && (
+          <span className="break-words normal-case tracking-normal text-ink-soft">
+            {` "${heading.query}"`}
+          </span>
+        )}
+      </p>
+      {links.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {links.map((l) => (
+            <li key={l.href} className="break-words text-xs leading-relaxed">
+              <a
+                href={l.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-olive underline underline-offset-2"
+              >
+                {l.label}
+              </a>
+              <span className="text-ink-faint"> · {l.host}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -710,12 +722,19 @@ export default function ChatPanel({
     );
   }
 
-  // A page a web search found, onto the list it belongs to, by the rule the
-  // server stores it with: a live answer and the same answer read back from
-  // the history list the same pages in the same places.
-  function addSource(id: string, page: WebPage) {
+  // What a web search found, whole, as a list of its own after the search's
+  // line, the way the server stores it: a live answer and the same answer read
+  // back from the history show the same queries and pages in the same places.
+  function addSources(id: string, found: { query: string; pages: WebPage[] }) {
     setMessages((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, blocks: withSource(m.blocks, page) } : m)),
+      prev.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              blocks: [...m.blocks, { kind: "sources", query: found.query, pages: found.pages }],
+            }
+          : m,
+      ),
     );
   }
 
@@ -772,7 +791,7 @@ export default function ChatPanel({
         onThought: (text) => append(answer.id, "thought", text),
         onDelta: (text) => append(answer.id, "text", text),
         onTool: (name, detail) => addTool(answer.id, name, detail),
-        onSource: (found) => addSource(answer.id, found),
+        onSources: (found) => addSources(answer.id, found),
         onStep: (step) => addStep(answer.id, step),
         onCard: (card) => addCard(answer.id, card),
         // A question never decides a card; the handler is here because the
@@ -835,7 +854,7 @@ export default function ChatPanel({
         onThought: (text) => append(answer.id, "thought", text),
         onDelta: (text) => append(answer.id, "text", text),
         onTool: (name, detail) => addTool(answer.id, name, detail),
-        onSource: (found) => addSource(answer.id, found),
+        onSources: (found) => addSources(answer.id, found),
         onStep: (step) => addStep(answer.id, step),
         onCard: (card) => addCard(answer.id, card),
       },

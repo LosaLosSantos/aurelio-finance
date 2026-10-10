@@ -2619,37 +2619,45 @@ export interface components {
             page?: (components["schemas"]["ChatPageDashboard"] | components["schemas"]["ChatPagePortfolio"] | components["schemas"]["ChatPageProfile"] | components["schemas"]["ChatPageRecords"] | components["schemas"]["ChatPageAccount"] | components["schemas"]["ChatPageSituation"] | components["schemas"]["ChatPageRealAsset"] | components["schemas"]["ChatPageDebt"] | components["schemas"]["ChatPageAnalyses"] | components["schemas"]["ChatPageAnalysis"]) | null;
         };
         /**
-         * ChatSource
-         * @description A page a web search found, as it arrives.
+         * ChatSources
+         * @description What one web search found, as it comes back: the query the app sent
+         *     and the pages it found, in one piece, since the search's answer arrives
+         *     whole.
          *
-         *     Sent when the search the app ran comes back: under the search's line and
-         *     before the words written from it. The panel lists it where it arrived, as
-         *     the stored `ChatSourcesBlock` will when the conversation is read back.
+         *     Sent under the search's line and before the words written from it. The
+         *     panel puts it where it arrived, as the stored `ChatSourcesBlock` will be
+         *     when the conversation is read back.
          */
-        ChatSource: {
+        ChatSources: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            kind: "source";
-            /** Title */
-            title: string;
-            /** Url */
-            url: string;
+            kind: "sources";
+            /** Pages */
+            pages: components["schemas"]["ChatWebPage"][];
+            /** Query */
+            query: string;
         };
         /**
          * ChatSourcesBlock
-         * @description The pages a web search found, kept where the search ran.
+         * @description The pages one web search found, under the query it was asked with,
+         *     kept where the search ran.
          *
          *     Provenance, for the reason a `ChatToolBlock` is kept: an answer that says
          *     "Vanguard gives 0.03%" got that from somewhere, and the reader is owed the
          *     page. These are what the search RETURNED (the app's search, on Exa through
          *     OpenRouter, hands back every page it found, five a search), so they are
          *     the pages the model was given to read, not a claim about which of them it
-         *     used; the sentence that uses one carries its link. A page found twice in a
-         *     turn is listed once. Never sent back to the model with a later turn: past
-         *     turns travel as their words, and a link the model wrote travels inside
-         *     them.
+         *     used; the sentence that uses one carries its link.
+         *
+         *     The query since brief AM (2026-10-09): the app runs each search itself, so
+         *     it knows the query it sent, and the reader is shown it above the pages:
+         *     what went out of the app to be searched for. Each search is a list of its
+         *     own; an empty one is a search that ran and found nothing.
+         *     A block stored before has no query. Never sent back to the model with a
+         *     later turn: past turns travel as their words, and a link the model wrote
+         *     travels inside them.
          */
         ChatSourcesBlock: {
             /**
@@ -2659,6 +2667,11 @@ export interface components {
             kind: "sources";
             /** Pages */
             pages: components["schemas"]["ChatWebPage"][];
+            /**
+             * Query
+             * @description What the app sent to be searched for; null on a list stored before brief AM
+             */
+            query?: string | null;
         };
         /**
          * ChatStart
@@ -5429,7 +5442,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSource"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDecided"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
+                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSources"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDecided"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
                     "text/event-stream": unknown;
                 };
             };
@@ -5465,7 +5478,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSource"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDecided"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
+                    "application/json": components["schemas"]["ChatStart"] | components["schemas"]["ChatThought"] | components["schemas"]["ChatDelta"] | components["schemas"]["ChatTool"] | components["schemas"]["ChatSources"] | components["schemas"]["ChatStep"] | components["schemas"]["ChatCard"] | components["schemas"]["ChatDecided"] | components["schemas"]["ChatDone"] | components["schemas"]["ChatError"];
                     "text/event-stream": unknown;
                 };
             };

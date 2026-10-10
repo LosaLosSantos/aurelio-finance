@@ -1,54 +1,43 @@
-/* The pages a web search found, as the chat panel lists them.
+/* What a web search found, as the chat panel heads and lists it.
 
-   Brief AG: each page arrives on the stream when OpenRouter hands it over and
-   is stored where the search ran. These pin the two rules the panel keeps:
-   pages grow the list they arrived after, the way the server stores them
-   (backend/app/chat.py, `_found`), and only a web address becomes a link.
+   Since brief AM the app runs each search itself, and what a search found
+   arrives whole, with the query the app sent, as a list of its own under the
+   search's line. These pin the two rules the panel keeps: the heading says
+   what was searched for, and whether anything was found; and only a web
+   address becomes a link.
 
    Run by `npm test` with Node's own test runner. Type-checked by `tsc -b`
    through tsconfig.node.json. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { linkOf, withSource } from "../src/components/webSources.ts";
+import { foundOn, linkOf } from "../src/components/webSources.ts";
 
-type Block = { kind: "text"; text: string } | { kind: "sources"; pages: { url: string; title: string }[] };
-
-const VOO = { url: "https://investor.example/voo", title: "VOO fact sheet" };
 const SEC = { url: "https://www.sec.example/prospectus.htm", title: "Prospectus" };
-const NEWS = { url: "https://news.example/etf", title: "ETF news" };
 
-test("a first page starts a list after what was already said", () => {
-  const before: Block[] = [{ kind: "text", text: "Cerco." }];
-  assert.deepEqual(withSource(before, VOO), [
-    { kind: "text", text: "Cerco." },
-    { kind: "sources", pages: [VOO] },
-  ]);
-  assert.deepEqual(before, [{ kind: "text", text: "Cerco." }], "the blocks given are not changed");
+test("a list says what was searched for, above the pages it found", () => {
+  assert.deepEqual(foundOn("S&P 500 UCITS ETF lowest ongoing charge", 5), {
+    words: "Found on the web for",
+    query: "S&P 500 UCITS ETF lowest ongoing charge",
+  });
 });
 
-test("the next page joins the list it arrived after", () => {
-  const one = withSource([] as Block[], VOO);
-  assert.deepEqual(withSource(one, SEC), [{ kind: "sources", pages: [VOO, SEC] }]);
+test("a search that found nothing still says what it looked for", () => {
+  assert.deepEqual(foundOn("ECB rate decision September 2026", 0), {
+    words: "Found nothing on the web for",
+    query: "ECB rate decision September 2026",
+  });
 });
 
-test("a page after words starts a list of its own, where that search ran", () => {
-  let blocks: Block[] = withSource([] as Block[], VOO);
-  blocks = [...blocks, { kind: "text", text: "Lo 0,03%." }];
-  assert.deepEqual(withSource(blocks, NEWS), [
-    { kind: "sources", pages: [VOO] },
-    { kind: "text", text: "Lo 0,03%." },
-    { kind: "sources", pages: [NEWS] },
-  ]);
+test("a list stored before queries were is headed as it was", () => {
+  assert.deepEqual(foundOn(undefined, 2), { words: "Found on the web", query: null });
+  assert.deepEqual(foundOn(null, 2), { words: "Found on the web", query: null });
+  assert.deepEqual(foundOn("   ", 2), { words: "Found on the web", query: null });
+  assert.equal(foundOn(null, 0), null, "and with no link to show, it shows nothing");
 });
 
-test("a page the answer already lists is not listed again", () => {
-  let blocks: Block[] = withSource([] as Block[], VOO);
-  blocks = [...blocks, { kind: "text", text: "Lo 0,03%." }];
-  assert.deepEqual(withSource(blocks, { url: VOO.url, title: "VOO, again" }), [
-    { kind: "sources", pages: [VOO] },
-    { kind: "text", text: "Lo 0,03%." },
-  ]);
+test("a query is shown without the spaces around it", () => {
+  assert.equal(foundOn("  ETF costs  ", 1)?.query, "ETF costs");
 });
 
 test("a web page becomes a link, named by its title, on its site", () => {
