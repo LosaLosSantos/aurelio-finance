@@ -2375,7 +2375,7 @@ class ChatCardBlock(BaseModel):
 
 class ChatWebPage(BaseModel):
     """One page a web search found: its address and its title. An http or https
-    address only, checked where it entered (`advisor._page`), because it is
+    address only, checked where it entered (`websearch._page`), because it is
     shown as a link the reader can press."""
 
     url: str
@@ -2387,12 +2387,13 @@ class ChatSourcesBlock(BaseModel):
 
     Provenance, for the reason a `ChatToolBlock` is kept: an answer that says
     "Vanguard gives 0.03%" got that from somewhere, and the reader is owed the
-    page. These are what the search RETURNED (OpenRouter's search on Exa hands
-    back every page it found, five a search), so they are the pages the model
-    was given to read, not a claim about which of them it used; the sentence
-    that uses one carries its link. A page found twice in a turn is listed
-    once. Never sent back to the model with a later turn: past turns travel as
-    their words, and a link the model wrote travels inside them."""
+    page. These are what the search RETURNED (the app's search, on Exa through
+    OpenRouter, hands back every page it found, five a search), so they are
+    the pages the model was given to read, not a claim about which of them it
+    used; the sentence that uses one carries its link. A page found twice in a
+    turn is listed once. Never sent back to the model with a later turn: past
+    turns travel as their words, and a link the model wrote travels inside
+    them."""
 
     kind: Literal["sources"] = "sources"
     pages: list[ChatWebPage]
@@ -2722,10 +2723,9 @@ class ChatDecided(BaseModel):
 class ChatSource(BaseModel):
     """A page a web search found, as it arrives.
 
-    Sent when OpenRouter hands it over: once the search has run, which is
-    before the words written from it, or at the end of a round that ended on
-    the app's own tools. The panel lists it where it arrived, as the stored
-    `ChatSourcesBlock` will when the conversation is read back."""
+    Sent when the search the app ran comes back: under the search's line and
+    before the words written from it. The panel lists it where it arrived, as
+    the stored `ChatSourcesBlock` will when the conversation is read back."""
 
     kind: Literal["source"] = "source"
     url: str

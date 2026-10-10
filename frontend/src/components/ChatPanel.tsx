@@ -195,11 +195,11 @@ function ToolNote({ block, running }: { block: ChatToolBlock; running: boolean }
   );
 }
 
-/* The pages a web search found, listed where the search ran: above the words
-   written from them, or at the end of a round that ended on one of the app's
-   tools. They are what the search RETURNED, so the heading says found and not
-   cited; the sentence that uses a page carries its own link. Each opens in a
-   new tab and tells the site nothing about where the reader came from. */
+/* The pages a web search found, listed where the search ran: under its line
+   and above the words written from them. They are what the search RETURNED,
+   so the heading says found and not cited; the sentence that uses a page
+   carries its own link. Each opens in a new tab and tells the site nothing
+   about where the reader came from. */
 function Sources({ block }: { block: ChatSourcesBlock }) {
   const links = block.pages.map(linkOf).filter((l): l is Link => l !== null);
   if (links.length === 0) return null;

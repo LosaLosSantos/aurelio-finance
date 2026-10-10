@@ -1,13 +1,13 @@
 /* The pages a web search found, as the chat panel lists them.
 
-   Brief AG: the chat searches the web through OpenRouter, and each page a
-   search found arrives on the stream when it is handed over, then is stored
-   where the search ran. Two jobs live here: growing an answer's blocks as
-   pages arrive, by the same rule the server stores them, so a live answer and
-   the same answer read back from the history look alike; and turning a page
-   into a link only when it is a web address. The server already refuses
-   anything else, and this refuses it again, because a link is something the
-   reader presses.
+   Brief AG gave the chat the web, and since brief AM the app runs each search
+   itself: each page a search found arrives on the stream when the search
+   comes back, under its line, then is stored where the search ran. Two jobs
+   live here: growing an answer's blocks as pages arrive, by the same rule the
+   server stores them, so a live answer and the same answer read back from the
+   history look alike; and turning a page into a link only when it is a web
+   address. The server already refuses anything else, and this refuses it
+   again, because a link is something the reader presses.
 
    No runtime imports, so `npm test` reaches it. */
 

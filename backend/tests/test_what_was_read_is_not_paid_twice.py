@@ -305,15 +305,17 @@ def _unmarked(body: dict) -> dict:
     every marked text back to the plain string it was, and the notice back in
     the system prompt, where every other model reads it. And the web taken
     out, which Anthropic's models are offered since brief AG and the others
-    are not (tests/test_the_chat_searches_and_checks.py): the search from its
-    tools, and its rules from its system prompt. And the session every request
-    to them names since brief AM (tests/test_every_turn_reads_the_one_before.py),
-    which the others do not."""
+    are not (tests/test_the_web_is_a_tool_of_the_app.py): `search_web` from
+    its tools, and its rules from its system prompt. And the session every
+    request to them names since brief AM
+    (tests/test_every_turn_reads_the_one_before.py), which the others do not."""
     body = copy.deepcopy(body)
     assert body.pop("session_id") == advisor.SESSION_ID
     body.pop("cache_control", None)
     if "tools" in body:
-        body["tools"] = [t for t in body["tools"] if t != tools.WEB_SEARCH]
+        (web,) = tools.web_search(OPUS)
+        assert body["tools"].count(web) == 1
+        body["tools"] = [t for t in body["tools"] if t != web]
     for message in body["messages"]:
         content = message.get("content")
         if isinstance(content, list):

@@ -121,9 +121,8 @@ export type StreamHandlers = {
   /** A tool the model asked for, named, once it has been answered, with the
       reason when it failed (null otherwise, which claims no success). */
   onTool: (name: string, detail: string | null) => void;
-  /** A page a web search found, as OpenRouter hands it over: after the
-      search has run, so before the words written from it, or at the end of a
-      round that ended on one of the app's tools. */
+  /** A page a web search found, as the search the app ran comes back: under
+      the search's line and before the words written from it. */
   onSource: (page: { url: string; title: string }) => void;
   /** One finished step of a long tool. The analyzer is three to six model
       calls; this is what the minute is made of. */

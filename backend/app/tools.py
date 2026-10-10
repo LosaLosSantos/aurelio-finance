@@ -42,6 +42,12 @@ milliseconds and the other is a network call, and behind a single function the
 instant lane waits for the slow one while an outage empties a list that had
 good local results in it.
 
+`search_web` fails the first too, and is the one read tool REGISTRY does not
+hold. What it reads is the web, through a request of its own to OpenRouter
+(`websearch`), and the pages it finds and what it costs belong to the turn
+that ran it, so the chat loop answers it. It is declared here like the others
+(`web_search`), for Anthropic's models only (brief AM).
+
 Tools that WRITE do not run from here. They are proposed: a card the reader
 confirms, and only then does the normal write path run — `crud`, a unit of
 work, `_columns`, `test_write_contract`. The chat does not get a service door
@@ -2103,34 +2109,73 @@ def declarations() -> list[dict]:
     ]
 
 
-# OpenRouter's web search, offered beside the tools above and not one of them:
-# OpenRouter runs it inside the request, and what reaches the app is the pages
-# it found (`advisor.WebPage`), never a call to answer. So it has no entry in
-# REGISTRY and no body here.
+# --- The web --------------------------------------------------------------------
 #
-# Exa, and these caps, from a paid probe on 2026-10-06. One search on Opus 5.5
-# cost about $0.02 on Exa against about
-# $0.043 on Anthropic's own search, which also added about 2,500 tokens to
-# every request, searching or not; and Exa hands back every page it found with
-# an excerpt, which is what the reader is shown and what a later round is
-# passed. Five pages a search. `max_uses` did not hold within one batch (two
-# searches ran under a cap of one), so the cap that holds is the turn's,
-# `chat.WEB_SEARCHES_PER_TURN`. Fixed, so the declaration never changes inside
-# the prefix the provider caches.
-WEB_SEARCH = {
-    "type": "openrouter:web_search",
-    "parameters": {"engine": "exa", "max_results": 5, "max_uses": 3},
-}
+# A tool of this app since brief AM (2026-10-09), and not one of REGISTRY's: a
+# search's pages and its cost belong to the turn that ran it (the reader is
+# shown the pages where the search ran, and the turn's cost includes the
+# search's), so the chat loop answers it (`chat._searches`), and the search is
+# a request of its own (`websearch`). Until then it was OpenRouter's server
+# tool, declared on every request of the chat, and brief AL's paid probe P1
+# (2026-10-08) found that a request declaring it keeps none of the cache's
+# markers but the last: no turn read the one before it.
+
+SEARCH_WEB = "search_web"
+
+
+class SearchWebArgs(BaseModel):
+    """What `search_web` takes."""
+
+    query: str = Field(
+        ...,
+        min_length=2,
+        # A query is words for a search engine, not a paragraph: a bound keeps
+        # the conversation from being pasted into one.
+        max_length=300,
+        description=(
+            "What to search for, as you would type it into a search engine: "
+            "words about instruments and facts, such as 'S&P 500 UCITS ETF "
+            "lowest ongoing charge' or 'ECB rate decision September 2026'."
+        ),
+    )
+
+
+_SEARCH_WEB_DESCRIPTION = (
+    "Search the web for ONE query and read what it finds: up to five pages, "
+    "each with its title, its address and an excerpt. For what neither the "
+    "reader's records, the catalogue nor `lookup_symbol` holds: news, recent "
+    "performance, comparisons, how a fund or an index works. The query leaves "
+    "this app for a search engine, so write it about instruments and facts, "
+    "and never put the reader's figures, names or anything else about them in "
+    "it. Each search costs a little, and the app caps how many one answer runs."
+)
 
 
 def web_search(model: str) -> list[dict]:
-    """The web search for a model that is offered it, else nothing.
+    """`search_web`'s declaration for a model that is offered it, else nothing.
 
-    Anthropic's models only, the line brief AD drew for the cache and for the
-    same reason: measured on Opus 5.5 and Sonnet 4.6 (2026-10-06) and on no
-    other family, and a model the reader can pick from a menu is not where to
-    find out what it does with a tool it has never been measured with."""
-    return [WEB_SEARCH] if model.removeprefix("~").startswith("anthropic/") else []
+    Anthropic's models only, the line brief AD drew for the cache and brief AG
+    for the web, and for the same reason: the web was measured with Opus 5.5
+    and Sonnet 4.6 and with no other family, and a model the reader can pick
+    from a menu is not where to find out what it does with a tool it has never
+    been measured with. A plain function since brief AM, so the other families
+    could be offered it as it is, once it has been measured with them.
+
+    Fixed, so the tools never change inside the prefix the provider caches."""
+    if not model.removeprefix("~").startswith("anthropic/"):
+        return []
+    return [
+        advisor.sdk().pydantic_function_tool(
+            SearchWebArgs, name=SEARCH_WEB, description=_SEARCH_WEB_DESCRIPTION
+        )
+    ]
+
+
+def search_query(call: advisor.ToolCall) -> str | dict:
+    """The query a `search_web` call asks for, or the outcome that says why its
+    arguments do not fit, for the model to correct on its next round."""
+    args = _parse(SearchWebArgs, call)
+    return args if isinstance(args, dict) else args.query
 
 
 # --- A card, in the reader's words -------------------------------------------
@@ -2231,7 +2276,7 @@ def answer(db: Session, call: advisor.ToolCall) -> dict:
     if tool is None or tool.propose is None:
         return invoke(db, call)
 
-    args = _parse(tool, call)
+    args = _parse(tool.arguments, call)
     if isinstance(args, dict):  # it did not parse; the model is told why
         return args
 
@@ -2376,12 +2421,12 @@ def _storable(produced: dict) -> dict:
     return json.loads(json.dumps(produced, ensure_ascii=False, default=str))
 
 
-def _parse(tool: Tool, call: advisor.ToolCall):
-    """The call's arguments as the tool's model, or the outcome that says why
-    not — told apart by the caller with an isinstance, since a validated model
-    is never a dict."""
+def _parse(arguments: type[BaseModel], call: advisor.ToolCall):
+    """The call's arguments as `arguments`, the model its tool takes, or the
+    outcome that says why not: told apart by the caller with an isinstance,
+    since a validated model is never a dict."""
     try:
-        return tool.arguments.model_validate_json(call.arguments or "{}")
+        return arguments.model_validate_json(call.arguments or "{}")
     except ValidationError as exc:
         # Pydantic reports "this is not JSON at all" as one more validation
         # error in the list, and the two are different mistakes for the model:
@@ -2421,7 +2466,7 @@ def invoke(db: Session, call: advisor.ToolCall) -> dict:
                 f"are: {', '.join(sorted(REGISTRY)) or '(none)'}."
             ),
         }
-    args = _parse(tool, call)
+    args = _parse(tool.arguments, call)
     if isinstance(args, dict):
         return args
 

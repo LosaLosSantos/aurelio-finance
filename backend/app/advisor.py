@@ -24,7 +24,6 @@ from __future__ import annotations
 import datetime
 import os
 import re
-import urllib.parse
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -154,35 +153,18 @@ class Usage:
     input price that day, and a token written to it at 1.25 times.
 
     `searches` is how many web searches OpenRouter ran inside the call, None
-    for a call that said nothing about any (every call not offered the web).
-    It arrives in `server_tool_use_details`, and not in the `server_tool_use`
-    OpenRouter's documentation names: measured on 2026-10-06 in a paid probe,
-    where `cost` also proved to be what the key was charged, the search's fee
-    included whenever one was charged."""
+    for a call that said nothing about any. Since brief AM only the web
+    search's own request runs one (`websearch`), and no call of the chat does.
+    It arrived in `server_tool_use_details`, and not in the `server_tool_use`
+    OpenRouter's documentation names, in both paid probes that read it (a
+    stream on 2026-10-06, a search's answer on 2026-10-09); the documented
+    name is read too, after it. In both, `cost` proved to be what the key was
+    charged, the search's fee included."""
 
     prompt_tokens: int | None
     cached_tokens: int | None
     cost: float | None
     searches: int | None = None
-
-
-@dataclass(frozen=True)
-class WebPage:
-    """One page a web search found, as OpenRouter hands it to the caller: a
-    `url_citation` annotation on the stream, its address, its title and an
-    excerpt of what it says.
-
-    With OpenRouter's search on Exa these are the search's RESULTS, five a
-    search, and not the sources a model chose to cite: they arrive when the
-    search has run, before the words written from them, or after a round that
-    ended on the app's own tools and so never read them (the probe of
-    2026-10-06, calls S2 and B5)."""
-
-    url: str
-    title: str
-    excerpt: str
-
-
 
 
 def _position_caveats(r: dict) -> list[str]:
@@ -1649,55 +1631,31 @@ def _cost(completion) -> float | None:
 
 
 def _usage(reported) -> Usage:
-    """The figures on a stream's usage chunk. `cached_tokens` sits one level
-    down, in `prompt_tokens_details`, and `cost` is OpenRouter's own field,
-    which the SDK keeps as an extra attribute (see `_cost`). So is the count
-    of web searches, which arrives as a plain dict."""
+    """The figures on a call's usage: a stream's last chunk, or a whole
+    answer's. `cached_tokens` sits one level down, in `prompt_tokens_details`,
+    and `cost` is OpenRouter's own field, which the SDK keeps as an extra
+    attribute (see `_cost`). So is the count of web searches, which arrives as
+    a plain dict, under the name it was measured with or the documented one."""
     prompt = getattr(reported, "prompt_tokens", None)
     details = getattr(reported, "prompt_tokens_details", None)
     cached = getattr(details, "cached_tokens", None)
     cost = getattr(reported, "cost", None)
-    used = getattr(reported, "server_tool_use_details", None)
-    searches = (
-        used.get("web_search_requests")
-        if isinstance(used, dict)
-        else getattr(used, "web_search_requests", None)
-    )
+    searches = None
+    for name in ("server_tool_use_details", "server_tool_use"):
+        used = getattr(reported, name, None)
+        counted = (
+            used.get("web_search_requests")
+            if isinstance(used, dict)
+            else getattr(used, "web_search_requests", None)
+        )
+        if isinstance(counted, int):
+            searches = counted
+            break
     return Usage(
         prompt_tokens=prompt if isinstance(prompt, int) else None,
         cached_tokens=cached if isinstance(cached, int) else None,
         cost=float(cost) if isinstance(cost, (int, float)) else None,
-        searches=searches if isinstance(searches, int) else None,
-    )
-
-
-# How long a page's title may be, as kept and shown. A title is a label for a
-# link; the probe's longest was 55 characters.
-_TITLE_CHARS = 200
-
-
-def _page(annotation) -> WebPage | None:
-    """The page one annotation names, or None when it is not a `url_citation`
-    or its address is not http or https.
-
-    What is kept here becomes a link the reader can press, so the scheme is
-    checked where it enters: an address a page or a model made up as
-    `javascript:` is not a page, and neither is anything else a browser would
-    run or hand to another program. A page with no title is named by its host,
-    which is what its link would show anyway."""
-    found = annotation if isinstance(annotation, dict) else annotation.model_dump()
-    if found.get("type") != "url_citation":
-        return None
-    cited = found.get("url_citation") or {}
-    url = str(cited.get("url") or "").strip()
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        return None
-    title = " ".join(str(cited.get("title") or "").split())[:_TITLE_CHARS]
-    return WebPage(
-        url=url,
-        title=title or parts.netloc,
-        excerpt=str(cited.get("content") or "").strip(),
+        searches=searches,
     )
 
 
@@ -1760,10 +1718,10 @@ def stream_llm(
     model: str | None = None,
     tools: list[dict] | None = None,
     cache_at: tuple[int, ...] | None = None,
-) -> Iterator[tuple[str, str | ToolCall | Usage | WebPage]]:
+) -> Iterator[tuple[str, str | ToolCall | Usage]]:
     """The streaming sibling of `call_llm`: yields the answer as it is written,
     one `(kind, piece)` pair at a time, for a whole conversation rather than a
-    single question. Three kinds:
+    single question. Four kinds:
 
       "thought"    the model's reasoning — models that think stream it first,
                    for seconds, on a separate field. `piece` is text.
@@ -1778,13 +1736,10 @@ def stream_llm(
                    non-streamed completion, and they are the reason `chat.py`
                    no longer has to believe a docstring about what a turn
                    costs.
-      "page"       a page a web search found: a `WebPage`, one per
-                   `url_citation` annotation, in the order they arrive. Only
-                   a call offered OpenRouter's web search gets any. The
-                   searches themselves never arrive as tool calls: OpenRouter
-                   runs them and leaves a gap in the calls' numbering where
-                   they were (measured 2026-10-06), which the assembly by
-                   index below already takes in its stride.
+
+    No call of the chat declares a search OpenRouter runs, since brief AM: the
+    web is a tool of the app's (`websearch`), and its pages come back as that
+    tool's result, never on this stream.
 
     `cache_at` asks the provider to keep what this call read, so that the next
     call that begins the same way pays a fraction for it. None asks for
@@ -1908,13 +1863,6 @@ def stream_llm(
                 if delta.content:
                     produced = True
                     yield ("text", delta.content)
-                # Another extra field, one annotation a chunk in the probe.
-                # Not `produced`: a page is not an answer, and a call that
-                # found pages and then said nothing still said nothing.
-                for annotation in getattr(delta, "annotations", None) or ():
-                    page = _page(annotation)
-                    if page is not None:
-                        yield ("page", page)
                 for fragment in delta.tool_calls or ():
                     call = building.setdefault(
                         fragment.index, {"id": "", "name": "", "arguments": ""}

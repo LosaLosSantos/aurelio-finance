@@ -67,14 +67,17 @@ every quotable ticker there is — which is searched rather than sent for the
 plain reason that it does not fit and is not about them. They stay two tools
 and not one, for the reason `routers/instruments.py` keeps two endpoints.
 
-And the web, which is not a tool of this app at all (brief AG). For Anthropic's
-models each round also offers OpenRouter's own search (`tools.web_search`),
-which OpenRouter runs inside the request: nothing here answers a call for it,
-and what comes back is the pages it found, which the reader is shown as links
-where the search ran. A round that ended on this app's tools never read its
-pages, because the search ran after it, so they are passed on to the round
-after; and a turn stops searching at WEB_SEARCHES_PER_TURN. Both measured
-before they were built, in a paid probe on 2026-10-06.
+And the web, a tool of this app since brief AM (2026-10-09). For Anthropic's
+models each round offers `search_web` beside the other tools
+(`tools.web_search`), and this loop answers a call for it by running the
+search as a request of its own (`websearch`), carrying the query and nothing
+else of the conversation. Until then it was OpenRouter's own search, declared
+on every request, and brief AL's paid probe found that a request declaring it
+kept none of the cache's markers but the last, so no turn read the one before
+it. What comes back is the pages: the model reads them as the tool's result,
+and the reader is shown them as links where the search ran. A turn runs at
+most WEB_SEARCHES_PER_TURN; a call past them is answered in words, and the
+tools stay as they were.
 
 And this chat is an ORCHESTRATOR now. `run_analysis` is a card like any other
 write, and confirming it runs the advisor chain — three to six model calls, a
@@ -114,11 +117,12 @@ import json
 import logging
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app import advisor, crud, dated, models, schemas, screen, tools
+from app import advisor, crud, dated, models, schemas, screen, tools, websearch
 from app.database import SessionLocal, unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -245,13 +249,14 @@ _PROMPT_HEAD = (
 # web turns up first (a US-domiciled ETF has no KID), so the refusal is said
 # where the temptation is.
 WEB_RULES = (
-    "You can also search the web, for what neither their records, the "
-    "catalogue nor `lookup_symbol` holds: news, recent performance, "
-    "comparisons, how a fund or an index works, what people use for a goal. "
-    "Never for what the picture or the catalogue answers. Never put their "
-    "figures, names or anything else about them in a query: search for "
-    "instruments and facts, never for them. A search costs a little and the "
-    "app caps it per answer; it is a read, so run it unasked. Every claim from "
+    "You can also search the web, with `search_web`, for what neither their "
+    "records, the catalogue nor `lookup_symbol` holds: news, recent "
+    "performance, comparisons, how a fund or an index works, what people use "
+    "for a goal. Never for what the picture or the catalogue answers. Never "
+    "put their figures, names or anything else about them in a query: search "
+    "for instruments and facts, never for them. A search costs a little and "
+    "the app caps it per answer; it is a read, so run it unasked, and several "
+    "in one round when you need several. Every claim from "
     "a page carries its link, as [title](url), in the sentence that makes it, "
     "and rule 1 holds there too: a figure from a page is stated with its link "
     "or not at all. The web finds; it does not verify. A security is still "
@@ -877,12 +882,12 @@ def _store_answer(
     request's session is closed by the time the stream finishes, and this runs
     even when the reader has gone. Returns the stored message's id.
 
-    The three figures are what the provider reported for the turn's rounds
-    (`_spent`): every token they read, how many of those came from the cache,
-    and what it all cost. The answer to "what does a turn cost", kept per turn
-    instead of in a sentence somebody measured once. The tokens alone stopped
-    answering it the day the cache came in: on Opus 5.5 a cached token cost a
-    twentieth of one sent fresh (2026-10-05)."""
+    The three figures are what the provider reported for the turn (`_spent`):
+    every token its rounds read, how many of those came from the cache, and
+    what it all cost, its web searches included. The answer to "what does a
+    turn cost", kept per turn instead of in a sentence somebody measured once.
+    The tokens alone stopped answering it the day the cache came in: on Opus
+    5.5 a cached token cost a twentieth of one sent fresh (2026-10-05)."""
     with SessionLocal() as db:
         conv = crud.get_chat_conversation(db, turn.conversation_id)
         if conv is None:  # deleted while the answer was being written
@@ -902,26 +907,32 @@ def _store_answer(
         return msg.id
 
 
-def _spent(rounds: list[advisor.Usage | None]) -> dict:
-    """A turn's figures from its rounds', one entry per round asked and None
-    for a round the provider said nothing about.
+def _spent(
+    rounds: list[advisor.Usage | None], searches: list[advisor.Usage | None] = ()
+) -> dict:
+    """A turn's figures from its rounds' and its web searches', one entry per
+    round asked and per search run, None for one the provider said nothing
+    about.
 
-    The tokens are summed over the rounds that reported them, and are None
-    when none did. A zero in `prompt_tokens` is stored as None too, as it
-    always was: a turn that cost nothing to send does not exist. A zero in
-    `cached_tokens` is kept, because it is a real answer: nothing was read from
-    the cache.
+    The tokens are the rounds' alone, summed over those that reported them,
+    and None when none did. They exist to show what the cache reads, and a
+    search is another model's request that reads nothing from it: counted
+    in, they would lower the share read from the cache without saying why. A
+    zero in `prompt_tokens` is stored as None too, as it always was: a turn
+    that cost nothing to send does not exist. A zero in `cached_tokens` is
+    kept, because it is a real answer: nothing was read from the cache.
 
-    The cost is a sum only when every round asked reported one. A round whose
-    price nobody said makes the turn's cost unknown, never smaller: the rule
-    the reader set for the analysis's spend (2026-10-02), since a figure about
-    money that is low without saying so is the worse mistake."""
+    The cost is everything the turn spent, its rounds and its searches, and a
+    sum only when every one of them reported a cost. One whose price nobody
+    said makes the turn's cost unknown, never smaller: the rule the reader set
+    for the analysis's spend (2026-10-02), since a figure about money that is
+    low without saying so is the worse mistake."""
 
     def total(figures: list) -> int | None:
         known = [f for f in figures if f is not None]
         return sum(known) if known else None
 
-    costs = [r.cost if r is not None else None for r in rounds]
+    costs = [r.cost if r is not None else None for r in [*rounds, *searches]]
     return {
         "prompt_tokens": total([r.prompt_tokens if r is not None else None for r in rounds]) or None,
         "cached_tokens": total([r.cached_tokens if r is not None else None for r in rounds]),
@@ -984,54 +995,63 @@ def _say(blocks: list[dict], kind: str, text: str) -> None:
 # weakest of the three fixes: a five-way comparison needs eight and the wall
 # just moves — what stops the wall from being a defect is that hitting it now
 # costs prose instead of an exception.
+#
+# Since brief AM a web search is one of those tools, and takes a round like any
+# other: asked for in one, read in the next. Seven still holds. A round can ask
+# for several searches and other reads at once, so brief AG's advice turn (a
+# search and the catalogue, then the catalogue and a lookup, then the answer
+# and its cards) still takes three rounds; and a model that searched once a
+# round would run its six and answer on the seventh.
 MAX_COMPLETIONS_PER_TURN = 7
 
 
-# How many web searches one turn may make, for a model offered the web
-# (`tools.web_search`). OpenRouter's caps are per request and a turn is up to
-# seven of them, so none of those caps a turn; and its `max_uses` did not even
-# hold within one request, where a model asking for two searches at once got
-# both under a cap of one (a paid probe, 2026-10-06). So the app
-# adds up what each round reports and, at six, asks the rest of the turn
-# without the web. Those rounds offer other tools than the rounds before, so
-# the first of them pays for its prefix again, about what a cold round costs,
-# and only in a turn that searched six times. Six is the reader's figure
-# (2026-10-06); at the probe's prices that is about $0.12 of searching on Opus
-# 5.5. A round can still pass it inside one batch: counted after it, never
-# stopped in the middle of it.
+# How many web searches one turn may run, for a model offered the web
+# (`tools.web_search`). Six is the reader's figure (2026-10-06). The app counts
+# the searches it runs (`_searches`) and answers a call past them itself, in
+# words (SEARCHES_SPENT), with the tools left as they are. Until brief AM the
+# rounds after the sixth were asked without the web, and a round whose tools
+# changed paid for its whole prefix again, since the tools come first in what
+# a provider caches. At brief AM's measured price ($0.0073 a search, P1) six
+# searches are about $0.044, before the chat's model reads their pages.
 WEB_SEARCHES_PER_TURN = 6
 
-
-# Said after a round that found pages, when another round follows. Measured on
-# 2026-10-06 in a paid probe: asked for searches and one of the app's tools in
-# the same response, OpenRouter runs the searches after that response, so the
-# model never reads what they found; and a page a round did read is not in the
-# next request either, which carries
-# the round's words and calls and not what a search returned. Passed on like
-# this after the tool results (B3), the model used the pages without searching
-# again, cited them as links, and kept what came from the catalogue apart from
-# what came from the web. A user turn in the app's voice, after the tool
-# results, for the reason the last-round notice is one: that is the place that
-# keeps the round's cache.
-PAGES_PASSED_ON = (
-    "WEB PAGES FROM YOUR LAST ROUND, passed on by the app. What a search finds "
-    "does not travel from one round to the next, and when a round ends on the "
-    "app's tools the search runs after it, so you may not have read these. Use "
-    "them as sources, and cite each one you rely on with its link."
+# What the model reads for a search past the turn's six, which does not run.
+SEARCHES_SPENT = (
+    f"This answer has already run {WEB_SEARCHES_PER_TURN} web searches, the most "
+    "one answer may, so this one did not run: answer from what you have."
 )
 
-# How much of each page's excerpt is passed on. The probe's longest was 1,666
-# characters, and a round of two searches found ten pages.
-EXCERPT_CHARS = 1000
 
+def _searches(
+    calls: list[advisor.ToolCall], allowed: int
+) -> dict[int, tuple[dict, websearch.Search | None]]:
+    """What each `search_web` call of one round comes to, by its place among
+    the round's calls: what the model reads back, and the search that ran, or
+    None for a call that did not run (its arguments do not fit, or the turn's
+    searches are spent).
 
-def _passed_on(pages: list[advisor.WebPage]) -> dict:
-    """The pages one round found, as the next round reads them: each one's
-    title, its address and the start of its excerpt."""
-    lines = [PAGES_PASSED_ON]
-    for n, page in enumerate(pages, 1):
-        lines.append(f"\n[{n}] {page.title}\n{page.url}\n{page.excerpt[:EXCERPT_CHARS]}")
-    return {"role": "user", "content": "\n".join(lines)}
+    At most `allowed` run, the first ones asked for, and they run at the same
+    time: each is a request of a few seconds (3.5 to 4.4 in brief AM's P1)
+    that waits for nothing but itself, and the reader would otherwise wait for
+    them one after the other."""
+    answered: dict[int, tuple[dict, websearch.Search | None]] = {}
+    queued: list[tuple[int, str]] = []
+    for place, call in enumerate(calls):
+        if call.name != tools.SEARCH_WEB:
+            continue
+        query = tools.search_query(call)
+        if isinstance(query, dict):  # its arguments do not fit; it says how
+            answered[place] = (query, None)
+        elif len(queued) >= allowed:
+            answered[place] = ({"ok": False, "error": SEARCHES_SPENT}, None)
+        else:
+            queued.append((place, query))
+    if queued:
+        with ThreadPoolExecutor(max_workers=len(queued)) as pool:
+            ran = list(pool.map(websearch.search, [query for _, query in queued]))
+        for (place, _), found in zip(queued, ran):
+            answered[place] = (websearch.outcome(found), found)
+    return answered
 
 
 # How many suggestions one answer may put up. The reader's decision
@@ -1082,7 +1102,7 @@ def _past_the_cards(call: advisor.ToolCall, drawn: list[str]) -> dict | None:
     return None
 
 
-def _found(blocks: list[dict], page: advisor.WebPage) -> None:
+def _found(blocks: list[dict], page: websearch.WebPage) -> None:
     """A page into the answer, where the search ran: onto the list it is part
     of, or a new list. Its excerpt is not kept. It was for the model; the link
     is what the reader opens."""
@@ -1146,13 +1166,6 @@ def _asked(
     if not warn or completion != rounds - 1:
         return system, messages
     if advisor.caches_on_request(model):
-        # When the round before passed pages on, the app's turn after the tool
-        # results is already there, and the notice joins it: one turn of the
-        # app's, not two in a row.
-        tail = messages[-1] if messages else {}
-        if tail.get("role") == "user" and str(tail.get("content")).startswith(PAGES_PASSED_ON):
-            joined = {**tail, "content": tail["content"] + "\n\n" + LAST_TOOL_ROUND_NOTICE}
-            return system, [*messages[:-1], joined]
         return system, [*messages, {"role": "user", "content": LAST_TOOL_ROUND_NOTICE}]
     return system + "\n\n" + LAST_TOOL_ROUND_NOTICE, messages
 
@@ -1346,9 +1359,11 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
     messages = list(turn.messages)
     ending: tuple[str, str | None] | None = None
     # What the provider said each round read and cost, one entry per round
-    # asked, None for a round it said nothing about. `_spent` turns them into
-    # the turn's figures when it ends, however it ends.
+    # asked, None for a round it said nothing about; and the same for every
+    # web search the turn ran. `_spent` turns them into the turn's figures
+    # when it ends, however it ends.
     rounds: list[advisor.Usage | None] = []
+    searches: list[advisor.Usage | None] = []
     # Whether the card this turn answers is on record as decided: from the
     # first byte for every card but the analyzer's, and once its run is stored
     # for that one. A failure after that point leaves the decision standing,
@@ -1364,14 +1379,16 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
             messages, decided = yield from _work(turn.pending, turn.conversation_id)
             settled = True
             yield schemas.ChatDecided(card=schemas.ChatCardBlock(**tools.present(decided)))
-        declared = tools.declarations()
-        web = tools.web_search(turn.model)
+        # The same on every round that has tools, whatever happens in the
+        # turn: they come first in what a provider caches, so a round whose
+        # tools changed would pay for everything it sends again.
+        declared = tools.declarations() + tools.web_search(turn.model)
         # Worked out once, on the conversation as it stands before any tool is
         # called: every round of the turn begins with it.
         kept = _kept_prefixes(messages)
-        # The turn's web searches so far, against WEB_SEARCHES_PER_TURN, and
-        # every page already listed: one found twice is shown and passed on
-        # once.
+        # How many web searches the turn has run, against
+        # WEB_SEARCHES_PER_TURN, and every page already listed: one found
+        # twice is shown once.
         searched = 0
         listed: set[str] = set()
         for completion in range(1, allowed + 1):
@@ -1380,7 +1397,6 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
             last = completion == allowed
             calls: list[advisor.ToolCall] = []
             said: list[str] = []
-            found: list[advisor.WebPage] = []
             system, asked = _asked(
                 completion, turn.model, messages, rounds=allowed, warn=turn.decision is None
             )
@@ -1389,11 +1405,7 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 system,
                 asked,
                 model=turn.model,
-                tools=(
-                    None
-                    if last
-                    else declared + (web if searched < WEB_SEARCHES_PER_TURN else [])
-                ),
+                tools=None if last else declared,
                 # Nothing asked of the round with no tools: everything a
                 # provider caches begins with the tools, so what that round
                 # wrote could be read only by another round without them, and
@@ -1407,16 +1419,6 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     said.append(piece)
                     _say(blocks, "text", piece)
                     yield schemas.ChatDelta(text=piece)
-                elif kind == "page":
-                    # Stored and sent where it arrived: before the words a
-                    # round wrote from it, or after a round that ended on the
-                    # app's tools and never read it.
-                    if piece.url in listed:
-                        continue
-                    listed.add(piece.url)
-                    found.append(piece)
-                    _found(blocks, piece)
-                    yield schemas.ChatSource(url=piece.url, title=piece.title)
                 elif kind == "usage":
                     # One per round, and all of them count: a turn that called
                     # a tool asked the model twice and paid for both. Kept out
@@ -1426,8 +1428,6 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     rounds[-1] = piece
                 else:
                     calls.append(piece)
-            if rounds[-1] is not None:
-                searched += rounds[-1].searches or 0
             # `last` and not `not calls` alone: a call arriving on a round
             # that was offered no tools is a model contradicting the request,
             # and running it would spend a fetch on an answer no completion is
@@ -1435,15 +1435,27 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
             if last or not calls:
                 break
             messages.append(tools.request_message("".join(said), calls))
+            # The round's web searches first, all at once, and what they cost
+            # into the turn's figures before anything is said about them: a
+            # reader who leaves now has still paid for them.
+            web = _searches(calls, WEB_SEARCHES_PER_TURN - searched)
+            for _, found in web.values():
+                if found is not None:
+                    searched += 1
+                    searches.append(found.usage)
             proposed = False
             # The instruments this round has put on a card so far: at most
             # SUGGESTIONS_PER_ANSWER, and none twice.
             drawn: list[str] = []
-            for call in calls:
-                outcome = _past_the_cards(call, drawn)
-                if outcome is None:
-                    with SessionLocal() as db:
-                        outcome = tools.answer(db, call)
+            for place, call in enumerate(calls):
+                ran = None
+                if place in web:
+                    outcome, ran = web[place]
+                else:
+                    outcome = _past_the_cards(call, drawn)
+                    if outcome is None:
+                        with SessionLocal() as db:
+                            outcome = tools.answer(db, call)
                 card = outcome.get("card")
                 if card is not None:
                     proposed = True
@@ -1466,6 +1478,15 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                         "detail": outcome.get("error"),
                     }
                 )
+                # The pages a search found, under its line and before the
+                # words written from them, for the reader to open. The model
+                # reads them, with their excerpts, in the tool's result.
+                for page in ran.pages if ran is not None and outcome["ok"] else ():
+                    if page.url in listed:
+                        continue
+                    listed.add(page.url)
+                    _found(blocks, page)
+                    yield schemas.ChatSource(url=page.url, title=page.title)
                 messages.append(tools.result_message(call, outcome))
             if proposed:
                 # The turn ends on the card, and ends DONE. The confirmation is
@@ -1481,8 +1502,6 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 # cheaper than the alternatives — refusing to end the turn, or
                 # keeping a half-turn somewhere to resume from.
                 break
-            if found:
-                messages.append(_passed_on(found))
         ending = ("done", None)
     except advisor.AdvisorError as exc:
         ending = ("error", _kept_decision(str(exc), settled))
@@ -1493,6 +1512,6 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         yield schemas.ChatError(detail=ending[1])
     finally:
         status, detail = ending or ("cut", None)
-        message_id = _store_answer(turn, blocks, status, detail, **_spent(rounds))
+        message_id = _store_answer(turn, blocks, status, detail, **_spent(rounds, searches))
     if ending[0] == "done":
         yield schemas.ChatDone(model=turn.model, message_id=message_id)

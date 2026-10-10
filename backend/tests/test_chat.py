@@ -738,14 +738,15 @@ def test_the_model_is_offered_the_tools_with_schemas_it_did_not_have_to_be_told(
 
     The list is compared against the REGISTRY rather than against names written
     out here, for the same reason: a tool added and not declared, or declared
-    twice, fails without anybody having to remember this line. OpenRouter's
-    web search rides beside them for Anthropic's models (brief AG) and is not
-    one of them: nothing here runs it, so the REGISTRY has no entry for it."""
+    twice, fails without anybody having to remember this line. The web search
+    is declared beside them for Anthropic's models (brief AM) and is not one of
+    them: the chat loop answers it, so the REGISTRY has no entry for it."""
     seen = _fake_stream(monkeypatch)
     _ask(client, "hi")
 
     declared = [t for t in seen[0]["tools"] if t.get("type") == "function"]
-    assert sorted(t["function"]["name"] for t in declared) == sorted(tools.REGISTRY)
+    web = [t["function"]["name"] for t in tools.web_search(chat.default_model())]
+    assert sorted(t["function"]["name"] for t in declared) == sorted([*tools.REGISTRY, *web])
     looked = next(
         t for t in declared if t["function"]["name"] == "get_look_through"
     )["function"]["parameters"]
