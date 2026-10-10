@@ -1725,6 +1725,25 @@ def caches_on_request(model: str) -> bool:
     return model.removeprefix("~").startswith("anthropic/")
 
 
+# The session every chat request to an Anthropic model says it belongs to, as
+# OpenRouter's `session_id`: what its sticky routing keys on, so that a turn
+# goes to the provider holding what the turn before it kept (brief AM).
+#
+# Without it OpenRouter names a conversation by hashing its first system
+# message and its first other one (its page on prompt caching, read 2026-10-08
+# and 2026-10-09), and the chat's first other message is the picture, which
+# changes with every write: a confirmed card made the next turn a stranger,
+# free to go to a provider holding nothing, the tools and the system prompt
+# included. And without it routing sticks only once a cache hit has been seen;
+# with it, from the first request that succeeds.
+#
+# One for the app, not one per conversation: every conversation begins with the
+# same tools and system prompt, so a new one can read what the last one kept;
+# it says nothing about the reader; and nothing has to be stored to keep it.
+# Its price is that OpenRouter's logs show the app's chat as one session.
+SESSION_ID = "aurelio-chat"
+
+
 def _kept(message: dict) -> dict:
     """`message` with a cache marker at its end: the same words, as the
     one-part list a marker has to sit on. A message with no words of its own
@@ -1780,6 +1799,11 @@ def stream_llm(
     exchange read all 12,035 tokens the round before it had written, and a
     read was billed at a twentieth of the input price.
 
+    Every call to a model that caches only on request also names its session
+    (`SESSION_ID`), whatever `cache_at` says: the round with no tools reads
+    nothing from the cache, and still has to reach the provider that holds
+    what the next turn reads.
+
     Raises AdvisorError — before the first piece if nothing is configured or
     the call is refused, in the middle if the stream breaks. A stream that
     thinks but never answers is an empty response; a stream that asks for a
@@ -1823,7 +1847,11 @@ def stream_llm(
     model = resolve_model(model)
     system: str | list[dict] = system_prompt
     asked = messages
-    cache: dict = {}
+    # The session and the top-level marker are not parameters the SDK knows,
+    # so they travel in extra_body, which it merges into the request as it is.
+    extra: dict = {}
+    if caches_on_request(model):
+        extra["session_id"] = SESSION_ID
     if cache_at is not None and caches_on_request(model):
         if len(cache_at) > _MARKED_MESSAGES:
             raise ValueError(
@@ -1832,9 +1860,7 @@ def stream_llm(
             )
         system = [{"type": "text", "text": system_prompt, "cache_control": _EPHEMERAL}]
         asked = [_kept(m) if i in cache_at else m for i, m in enumerate(messages)]
-        # The top level is not a parameter the SDK knows, so it travels in
-        # extra_body, which the SDK merges into the request as it is.
-        cache = {"extra_body": {"cache_control": _EPHEMERAL}}
+        extra["cache_control"] = _EPHEMERAL
     try:
         stream = client.chat.completions.create(
             model=model,
@@ -1842,7 +1868,7 @@ def stream_llm(
             stream=True,
             stream_options={"include_usage": True},
             **({"tools": tools} if tools else {}),
-            **cache,
+            **({"extra_body": extra} if extra else {}),
         )
     except Exception as exc:
         raise _refused(exc, model, chat=True) from exc
