@@ -77,13 +77,14 @@ underneath.
 
 The default model is Claude Opus 5.5 ($4 per million input tokens, $20 per
 million output tokens); you can pick another in the chat. What it cost,
-measured in October 2026:
+measured in October 2026 (the chat's rows on 9 October, on a test database):
 
 | | cost |
 |---|---|
-| A first question, answered in one round | $0.11 |
-| A follow-up, answered in one round | $0.017 |
-| A request for advice with one web search | $0.16 |
+| A first question, answered in one round | $0.10 |
+| A follow-up, answered in one round | $0.013 to $0.034 |
+| A first question that searched the web twice, answered in two rounds | $0.12 |
+| Each web search, included in the row above | $0.0073 to $0.0075 |
 | An analysis | $0.33 to $0.51 |
 
 ## Development
