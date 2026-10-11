@@ -51,11 +51,16 @@ that ran it, so the chat loop answers it. It is declared here like the others
 Tools that WRITE do not run from here. They are proposed: a card the reader
 confirms, and only then does the normal write path run — `crud`, a unit of
 work, `_columns`, `test_write_contract`. The chat does not get a service door
-the form does not have. There are five — `add_real_asset`,
-`record_transaction`, `update_profile`, `run_analysis`, `suggest_instrument` —
-and one action each, because a generic `propose_change(entity, action, fields)`
-hands the model the job of knowing which fields fifteen entities have, and on
-fifteen entities it gets that wrong.
+the form does not have. Since brief AN (2026-10-10) that is said to the
+letter: each write builds the schema its page's form posts and calls the crud
+function the page's request calls, with the body that form would send, and a
+test holds the records after each card equal to the records after the form's
+request. There is one tool for each kind of record, never a generic
+`propose_change(entity, action, fields)`, which hands the model the job of
+knowing which fields fifteen entities have, and on fifteen entities it gets
+that wrong; a tool whose record has several actions (`write_flow`,
+`write_goal`, `update_profile`) takes the action as an argument, since its
+fields are the same record's in each.
 
 `suggest_instrument` is the one that goes through this machinery while writing
 nothing of the reader's: accepting it parks an idea on a watchlist that owns
@@ -512,13 +517,18 @@ def _lookup_symbol(db: Session, args: LookupSymbolArgs) -> dict:
 
 # --- The writes ---------------------------------------------------------------
 #
-# One tool per action, not one `propose_change(entity, action, fields)` for all
-# of them: a generic tool hands the model the job of knowing which fields each
-# of fifteen entities has, and on fifteen entities it gets that wrong.
+# One tool per kind of record, not one `propose_change(entity, action, fields)`
+# for all of them: a generic tool hands the model the job of knowing which
+# fields each of fifteen entities has, and on fifteen entities it gets that
+# wrong.
 #
 # What that costs is sent on every turn, so it is worth having a figure rather
 # than a feeling. `len(json.dumps(declarations()))` is 19,333 characters for all
 # nine tools, on 2026-09-17 (17,696 on 2026-09-05, before the writes grew).
+# With the web search's declaration, ten made 24,260 at brief AM's close, and
+# fifteen make 32,979 since brief AN (2026-10-10), the rules every card shares
+# being said once in the system prompt rather than in each declaration. Since
+# brief AM a conversation's later turns read them from the cache.
 #
 # In tokens — measured on 2026-09-17 against `qwen/qwen3.8-max`, as the
 # difference between the same turn asked with the declarations and without
@@ -582,15 +592,10 @@ def _institution(db: Session, name: str | None) -> models.Institution | None:
 class AddRealAssetArgs(BaseModel):
     """A possession that is not held at an institution, and what it is worth."""
 
-    name: str = Field(
-        ...,
-        min_length=1,
-        description=(
-            "What the thing is, in the language the DATA is written in rather "
-            "than the language of the question: 'mia nonna mi ha regalato una "
-            "collana d'oro' is a 'gold necklace', not 'una collana d'oro'."
-        ),
-    )
+    # What the cards share (the language of the data, names as the picture
+    # gives them, a currency with its code, today for a day not named) is said
+    # once in the system prompt, not in each declaration (brief AN).
+    name: str = Field(..., min_length=1, description="What the thing is.")
     value: float = Field(
         ...,
         ge=0,
@@ -602,10 +607,8 @@ class AddRealAssetArgs(BaseModel):
     valued_on: schemas.ObservedDate = Field(
         default_factory=datetime.date.today,
         description=(
-            "The date that valuation is true of. Today's date is the first "
-            "line of the picture you were given; use it unless the reader "
-            "named another day. It cannot be a day that has not happened yet: "
-            "a valuation records what something was OBSERVED to be worth."
+            "The date that valuation is true of. It cannot be a day that has not "
+            "happened yet: a valuation records what something was OBSERVED to be worth."
         ),
     )
     category: MaybeText = Field(
@@ -615,15 +618,7 @@ class AddRealAssetArgs(BaseModel):
             "Null when none of them fits."
         ),
     )
-    currency: schemas.StatedCurrency = Field(
-        ...,
-        description=(
-            "ISO code the value is in (EUR, USD). Required: the card shows it "
-            "and the reader confirms it, and a value with no currency cannot "
-            "be added to anything. If the reader did not say, the currency "
-            "their other figures are recorded in is the one to propose."
-        ),
-    )
+    currency: schemas.StatedCurrency = Field(..., description="ISO code the value is in.")
     acquisition_date: datetime.date | None = Field(
         default=None, description="When it was acquired, if the reader said."
     )
@@ -756,11 +751,9 @@ class RecordTransactionArgs(BaseModel):
         ...,
         min_length=1,
         description=(
-            "The instrument's own name, in the language of the DATA and not of "
-            "the question: 'ho comprato azioni Siemens' is 'Siemens', never "
-            "'Azioni Siemens'. On a sell or a close this is not a label: the "
-            "ledger matches the entry back to the position it settles by "
-            "symbol OR by this string."
+            "The instrument's own name. On a sell or a close this is not a "
+            "label: the ledger matches the entry back to the position it "
+            "settles by symbol OR by this string."
         ),
     )
     symbol: MaybeText = Field(
@@ -768,8 +761,7 @@ class RecordTransactionArgs(BaseModel):
         description=(
             "Yahoo ticker, e.g. VWCE.MI. Required for a buy, a sell and a "
             "dividend; a close may have none, because the rows that most need "
-            "an exit are the ones no ticker describes. Use the ticker exactly "
-            "as it appears in the positions you were given."
+            "an exit are the ones no ticker describes."
         ),
     )
     isin: MaybeText = Field(default=None, description="ISIN, when the reader gave one.")
@@ -794,8 +786,7 @@ class RecordTransactionArgs(BaseModel):
         ...,
         description=(
             "ISO code of the cash that moved: what the account was debited or "
-            "credited in, and what `amount` and `fees` are in. Required: the "
-            "card shows it. Usually the currency of the account's cash on record."
+            "credited in, and what `amount` and `fees` are in."
         ),
     )
     price_currency: schemas.StatedCurrency | None = Field(
@@ -804,9 +795,7 @@ class RecordTransactionArgs(BaseModel):
             "ISO code `unit_price` is in: the listing's currency, e.g. USD for "
             "a New York share, EUR for VWCE.MI. Required for a buy, a sell and a "
             "dividend; null for a close. When it differs from `currency` and "
-            "`amount` is null, the amount is worked out at the ECB rate of `date`. "
-            "A London price in pence is GBp, written exactly so: GBP is pounds, a "
-            "hundred times more, and 'gbp' is read as pounds too."
+            "`amount` is null, the amount is worked out at the ECB rate of `date`."
         ),
     )
     amount: float | None = Field(
@@ -825,19 +814,17 @@ class RecordTransactionArgs(BaseModel):
     institution: MaybeText = Field(
         default=None,
         description=(
-            "The institution holding the position, BY NAME and exactly as it "
-            "appears in the cash register and the positions you were given. "
-            "Required for a buy and for a dividend: the cash has to move "
-            "against a real account. On a sell or a close it may be left null "
-            "when the position being settled is unambiguous: it is then taken "
-            "from that position."
+            "The institution holding the position. Required for a buy and for a "
+            "dividend: the cash has to move against a real account. On a sell or "
+            "a close it may be left null when the position being settled is "
+            "unambiguous: it is then taken from that position."
         ),
     )
     cash_institution: MaybeText = Field(
         default=None,
         description=(
-            "The institution whose cash moved, by name, when it is not the one "
-            "holding the position. Null means the same one."
+            "The institution whose cash moved, when it is not the one holding "
+            "the position. Null means the same one."
         ),
     )
     note: MaybeText = Field(default=None, description="Anything else worth keeping.")
@@ -1599,10 +1586,7 @@ class WriteFlowArgs(BaseModel):
     )
     currency: schemas.StatedCurrency | None = Field(
         default=None,
-        description=(
-            "add: null proposes the account's currency on the first payment's day, as "
-            "the form does. correct, change_from: null keeps it."
-        ),
+        description="add: null proposes the account's. correct, change_from: null keeps it.",
     )
     frequency: Literal["monthly", "quarterly", "semiannual", "annual", "one_off"] | None = Field(
         default=None,
@@ -2182,11 +2166,11 @@ class RecordTransferArgs(BaseModel):
     amount: float = Field(..., gt=0, description="What left the first account, in `currency`.")
     currency: schemas.StatedCurrency | None = Field(
         default=None,
-        description="What left it in; null proposes that account's currency on the day, as the form does.",
+        description="What left it in; null proposes that account's.",
     )
     to_currency: schemas.StatedCurrency | None = Field(
         default=None,
-        description="What reached the second in; null proposes that account's currency on the day.",
+        description="What reached the second in; null proposes that account's.",
     )
     arrived: float | None = Field(
         default=None,
@@ -2307,7 +2291,7 @@ class SetCashBalanceArgs(BaseModel):
     amount: float = Field(..., ge=0, description="The cash it held that day.")
     currency: schemas.StatedCurrency | None = Field(
         default=None,
-        description="Null proposes the account's currency on that day, as the form does.",
+        description="Null proposes the account's.",
     )
 
 
@@ -2455,7 +2439,7 @@ class WriteGoalArgs(BaseModel):
     )
     currency: schemas.StatedCurrency | None = Field(
         default=None,
-        description="add: null proposes the base currency, as the form does. change: null keeps it.",
+        description="add: null proposes the base. change: null keeps it.",
     )
     target_amount: float | None = Field(default=None, ge=0, description="target_amount only: what they want to reach.")
     target_date: datetime.date | None = Field(default=None, description="target_amount only: by when.")
@@ -3380,8 +3364,7 @@ REGISTRY: dict[str, Tool] = {
                 "the asset, and the dated valuation that says what it is "
                 "worth, because a possession with no valuation counts as zero "
                 "everywhere it is totalled. Use it when the reader tells you "
-                "they have or were given something that is not in the picture. "
-                "It does not write: it draws a card they confirm."
+                "they have or were given something that is not in the picture."
             ),
             arguments=AddRealAssetArgs,
             run=_add_real_asset,
@@ -3398,8 +3381,7 @@ REGISTRY: dict[str, Tool] = {
                 "connected to this app, so nothing here places a trade: "
                 "'buying from the chat' means recording the purchase you "
                 "already made, after the fact. Use it when the reader says "
-                "they bought, sold, closed something or were paid a dividend. "
-                "It does not write: it draws a card they confirm."
+                "they bought, sold, closed something or were paid a dividend."
             ),
             arguments=RecordTransactionArgs,
             run=_record_transaction,
@@ -3418,9 +3400,7 @@ REGISTRY: dict[str, Tool] = {
                 "boxes; a temperament does not fit in a box. Use it when the "
                 "conversation tells you something durable about them (how "
                 "they behaved when the market fell, what they would never give "
-                "up), not for a passing remark. It does not write: it draws a "
-                "card they confirm, and changing an answer that already exists "
-                "shows them what it would replace. A question of the Profile "
+                "up), not for a passing remark. A question of the Profile "
                 "form takes only the kind of answer the form offers (listed "
                 "under question_key); anything else is refused. Never a goal: "
                 "goals are a list of their own, written with `write_goal`. It "
