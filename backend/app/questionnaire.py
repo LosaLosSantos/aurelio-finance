@@ -271,6 +271,14 @@ def choices(question: schemas.SurveyQuestion) -> list[str]:
     return []
 
 
+def visible(question: schemas.SurveyQuestion, answers: dict[str, str]) -> bool:
+    """Whether the Profile form shows `question` with these answers: always,
+    or, for a follow-up, while the answer it follows is the one it waits for.
+    `isVisible` in the frontend's `questionnaire.ts`, which the form draws and
+    saves by: a follow-up it does not show is left out of its Save."""
+    return question.show_if is None or answers.get(question.show_if.key) == question.show_if.equals
+
+
 def takes(question: schemas.SurveyQuestion) -> str:
     """The kind of answer `question` takes, in words: what a refusal says, and
     what the chat is told under each question it can answer."""

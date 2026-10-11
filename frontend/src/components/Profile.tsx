@@ -14,6 +14,7 @@ import {
 } from "../api/tax";
 import { getBaseCurrency, saveBaseCurrency, type BaseCurrencySetting } from "../api/baseCurrency";
 import { choicesOf, isVisible, topicsOf, unshownAnswer } from "./questionnaire";
+import { askedAs, othersOf, toSave } from "./profileAnswers";
 import { apiError, btnClass, cardClass, inputClass } from "./ui";
 
 /* The questions are the backend's (`GET /api/survey/questions`, app/questionnaire.py):
@@ -28,13 +29,16 @@ import { apiError, btnClass, cardClass, inputClass } from "./ui";
 export default function Profile() {
   const [questions, setQuestions] = useState<SurveyQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  /* Answers stored under keys this form does not render, kept so they can be
-     posted back untouched. PUT /api/survey replaces the WHOLE set — it deletes
-     what its payload does not name — which is correct for a caller that reads
+  /* Answers stored under keys this form does not ask, posted back with every
+     Save. PUT /api/survey replaces the WHOLE set (it deletes what its payload
+     does not name), which is correct for a caller that reads
      everything and writes everything back, and is only correct while this form
      IS that caller. Without this, pressing Save here would silently delete
-     every question the chat had recorded in conversation. */
+     every question the chat had recorded in conversation. Shown since brief AN
+     (`OtherAnswers`), each changed or deleted here (`profileAnswers.ts`). */
   const [carried, setCarried] = useState<SurveyAnswer[]>([]);
+  // The ones deleted here and not saved yet, said under the list with a way back.
+  const [dropped, setDropped] = useState<SurveyAnswer[]>([]);
   /* The tax settings are a different resource from the questionnaire — three
      keys in `settings`, not survey answers — but they share this page's ONE
      save button on purpose. Two save buttons on one screen is how an edit gets
@@ -81,17 +85,8 @@ export default function Profile() {
       const map: Record<string, string> = {};
       for (const a of existing) if (a.answer != null) map[a.question_key] = a.answer;
       setAnswers(map);
-      const own = new Set(asked.map((q) => q.key));
-      setCarried(
-        existing
-          .filter((a) => !own.has(a.question_key) && a.answer != null)
-          .map(({ question_key, topic, question, answer }) => ({
-            question_key,
-            topic,
-            question,
-            answer,
-          })),
-      );
+      setCarried(othersOf(asked, existing));
+      setDropped([]);
     } catch (err) {
       setError(apiError(err, "Could not reach the backend. Is it running on :8000?"));
     } finally {
@@ -108,15 +103,10 @@ export default function Profile() {
     setSaving(true);
     setError(null);
     try {
-      const payload: SurveyAnswer[] = questions.filter(
-        (q) => isVisible(q, answers) && (answers[q.key] ?? "") !== "",
-      ).map((q) => ({
-        question_key: q.key,
-        topic: q.topic,
-        question: q.text,
-        answer: answers[q.key],
-      }));
-      await saveSurvey([...payload, ...carried]);
+      await saveSurvey(toSave(questions, answers, carried));
+      // What the save kept: an answer emptied in its box went with it.
+      setCarried((kept) => kept.filter((a) => (a.answer ?? "").trim() !== ""));
+      setDropped([]);
       // An empty field CLEARS the key rather than storing 0. The backend
       // deletes it, so "not said" has one representation instead of three
       // that look identical on screen.
@@ -173,6 +163,26 @@ export default function Profile() {
         );
       })}
 
+      <OtherAnswers
+        answers={carried}
+        dropped={dropped}
+        onChange={(key, value) => {
+          setSaved(false);
+          setCarried((all) => all.map((a) => (a.question_key === key ? { ...a, answer: value } : a)));
+        }}
+        onDelete={(key) => {
+          setSaved(false);
+          const gone = carried.find((a) => a.question_key === key);
+          setCarried((all) => all.filter((a) => a.question_key !== key));
+          if (gone) setDropped((all) => [...all, gone]);
+        }}
+        onRestore={(key) => {
+          const back = dropped.find((a) => a.question_key === key);
+          setDropped((all) => all.filter((a) => a.question_key !== key));
+          if (back) setCarried((all) => [...all, back]);
+        }}
+      />
+
       <TaxSection
         known={tax?.known_countries ?? []}
         country={taxCountry}
@@ -208,6 +218,82 @@ export default function Profile() {
         {saved && <span className="text-sm text-up">Saved ✓</span>}
       </div>
     </div>
+  );
+}
+
+/* The answers on record to questions this form does not ask (brief AN).
+
+   The chat records them, and the chat and the analyses read them like every
+   other answer, so the reader is owed seeing them and correcting them where
+   they correct the rest: each in a box of its own, a delete beside it, all
+   saved with the page's one button. A deleted one stays listed under the
+   others until the save, with a way back. */
+function OtherAnswers({
+  answers,
+  dropped,
+  onChange,
+  onDelete,
+  onRestore,
+}: {
+  answers: SurveyAnswer[];
+  dropped: SurveyAnswer[];
+  onChange: (key: string, value: string) => void;
+  onDelete: (key: string) => void;
+  onRestore: (key: string) => void;
+}) {
+  if (answers.length === 0 && dropped.length === 0) return null;
+  return (
+    <section className={cardClass + " space-y-4 p-5"}>
+      <div>
+        <h3 className="text-sm font-semibold text-ink">Other answers</h3>
+        <p className="mt-1 text-sm text-ink-soft">
+          Answers to questions this form does not ask, recorded in the chat. The chat and
+          the analyses read them like the rest: change one or delete it here, then save.
+        </p>
+      </div>
+      {answers.map((a) => (
+        <div key={a.question_key} className="space-y-1">
+          <label className="block text-sm text-ink" htmlFor={`other-${a.question_key}`}>
+            {askedAs(a)}
+            {a.topic && <span className="ml-2 text-xs text-ink-faint">{a.topic}</span>}
+          </label>
+          <div className="flex items-start gap-2">
+            <textarea
+              id={`other-${a.question_key}`}
+              className={inputClass + " min-h-16 w-full"}
+              value={a.answer ?? ""}
+              onChange={(e) => onChange(a.question_key, e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => onDelete(a.question_key)}
+              className="shrink-0 rounded-sm px-3 py-2 text-sm text-ink-soft transition hover:text-down"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      ))}
+      {dropped.length > 0 && (
+        <div className="text-xs text-warn">
+          <p>Deleted when you save:</p>
+          <ul className="mt-1 space-y-1">
+            {dropped.map((a) => (
+              <li key={a.question_key}>
+                {askedAs(a)}{" "}
+                <button
+                  type="button"
+                  onClick={() => onRestore(a.question_key)}
+                  className="text-olive underline-offset-2 hover:underline"
+                >
+                  Keep it
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 

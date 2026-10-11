@@ -1121,8 +1121,15 @@ _FORM_QUESTIONS = "; ".join(
 
 
 class UpdateProfileArgs(BaseModel):
-    """One answer in the reader's questionnaire, written by key."""
+    """One answer in the reader's questionnaire, written by key, or deleted."""
 
+    # Brief AN: an answer the chat recorded was shown nowhere and could not be
+    # taken back. The Profile page shows them now, and the chat deletes one
+    # as the page's Save would.
+    action: Literal["answer", "delete"] = Field(
+        default="answer",
+        description="answer: record or change the answer. delete: take the answer on record away.",
+    )
     question: str = Field(
         ...,
         min_length=1,
@@ -1135,15 +1142,16 @@ class UpdateProfileArgs(BaseModel):
             "asked, write the question you actually put to the reader."
         ),
     )
-    answer: str = Field(
-        ...,
+    # Not `MaybeText`: "none" can be an answer ("How many dependants?").
+    answer: str | None = Field(
+        default=None,
         min_length=1,
         description=(
             "What they said, in their words, not summarised into a category. "
             "The questionnaire is already full of boxes; what it is missing is "
             "what a box cannot hold. A question of the Profile form takes only "
             "what its entry under question_key says, written as it is written "
-            "there, and anything else is refused."
+            "there, and anything else is refused. Required to answer; null to delete."
         ),
     )
     topic: MaybeText = Field(
@@ -1163,6 +1171,12 @@ class UpdateProfileArgs(BaseModel):
             "questions, as key, wording and what each takes: " + _FORM_QUESTIONS + "."
         ),
     )
+
+    @model_validator(mode="after")
+    def _an_answer_to_record(self):
+        if self.action == "answer" and not (self.answer or "").strip():
+            raise ValueError("answer needs the answer; to take one away, the action is delete.")
+        return self
 
 
 def _key(text: str) -> str:
@@ -1234,7 +1248,15 @@ def _propose_profile(db: Session, args: UpdateProfileArgs) -> Proposal:
 
     A question of the Profile form is drawn with the form's own wording, and
     only with an answer it takes: anything else is refused before any card is
-    drawn (`questionnaire.AnswerRefused`)."""
+    drawn (`questionnaire.AnswerRefused`).
+
+    A delete is the third shape, with its diff (`_propose_profile_delete`).
+
+    A follow-up the form hides with the answers on record is refused, naming
+    the question to answer first; an answer that hides a follow-up answered
+    on record takes it away as the page's Save would (`_follow_ups`)."""
+    if args.action == "delete":
+        return _propose_profile_delete(db, args)
     key, row = _profile_row(db, args)
     answer = _stored_answer(key, args.answer)
     form = questionnaire.BY_KEY.get(key)
@@ -1243,6 +1265,9 @@ def _propose_profile(db: Session, args: UpdateProfileArgs) -> Proposal:
     else:
         asked = (form.text if form is not None else args.question).strip()
     touches = f'the answer to "{asked}"'
+    hidden = _follow_ups(db, key, answer)
+    if hidden:
+        return _propose_profile_hiding(db, row, asked, answer, hidden, touches)
     if row is None or not (row.answer or "").strip():
         return Proposal(
             title=f"profile · {asked}: {answer}",
@@ -1271,7 +1296,14 @@ def _update_profile(db: Session, args: UpdateProfileArgs) -> dict:
     form owns those, and letting a paraphrase from a conversation rewrite the
     label would change the question under an answer given to the old one. A
     question of the Profile form answered for the first time takes the form's
-    wording and topic, and only an answer the form would store."""
+    wording and topic, and only an answer the form would store.
+
+    A delete goes through the page's own write instead (`_delete_profile`),
+    and so does an answer that hides a follow-up answered on record: the
+    page's Save drops that follow-up, so the card writes what the Save
+    writes."""
+    if args.action == "delete":
+        return _delete_profile(db, args)
     key, row = _profile_row(db, args)
     answer = _stored_answer(key, args.answer)
     form = questionnaire.BY_KEY.get(key)
@@ -1281,6 +1313,20 @@ def _update_profile(db: Session, args: UpdateProfileArgs) -> dict:
     # say returns what it says now — a receipt that reports the change as
     # having replaced itself.
     replaced = row.answer if row is not None else None
+    hidden = _follow_ups(db, key, answer)
+    if hidden:
+        crud.replace_survey_responses(db, _profile_as_saved(db, answered=(key, answer)))
+        return {
+            "question_key": key,
+            "topic": form.topic,
+            "question": form.text,
+            "answer": answer,
+            "replaced": replaced,
+            "deleted": [
+                {"question_key": r.question_key, "question": r.question, "answer": r.answer}
+                for r in hidden
+            ],
+        }
     if form is not None:
         question, topic = form.text, form.topic
     else:
@@ -1301,7 +1347,159 @@ def _update_profile(db: Session, args: UpdateProfileArgs) -> dict:
     }
 
 
+def _follow_ups(db: Session, key: str, answer: str) -> list[models.SurveyResponse]:
+    """The answers on record to follow-ups that `answer` under `key` would
+    hide, or a refusal when `key` is itself a follow-up the form hides with
+    the answers on record.
+
+    The Profile page's Save sends only the questions the form shows, so an
+    answer to a hidden follow-up was dropped at the next Save of anything on
+    that page, said nowhere (found by brief AN). The chat therefore never
+    writes one: it names the question to answer first. And an answer that
+    hides a follow-up already answered (home_buy from yes to no) takes that
+    answer away as the Save would, the card saying so."""
+    rows = crud.get_survey_responses(db)
+    answers = {r.question_key: r.answer for r in rows if (r.answer or "").strip()}
+    asked = questionnaire.BY_KEY.get(key)
+    if asked is not None and not questionnaire.visible(asked, answers):
+        first = questionnaire.BY_KEY[asked.show_if.key]
+        said = answers.get(first.key)
+        now = f'the answer on record is "{said}"' if said else "nothing is on record for it"
+        raise questionnaire.AnswerRefused(
+            f'"{asked.text}" is asked by the Profile form only when "{first.text}" is '
+            f'"{asked.show_if.equals}", and {now}: answer "{first.text}" first, so no '
+            "card was drawn."
+        )
+    waiting = {
+        q.key for q in questionnaire.QUESTIONS
+        if q.show_if is not None and q.show_if.key == key and answer != q.show_if.equals
+    }
+    return [r for r in rows if r.question_key in waiting and (r.answer or "").strip()]
+
+
+def _propose_profile_hiding(
+    db: Session, row, asked: str, answer: str, hidden: list, touches: str
+) -> Proposal:
+    """An answer that hides follow-ups answered on record: its diff names them
+    going, and its fingerprint is the whole questionnaire, which the Save's
+    body is drawn from."""
+    form = questionnaire.BY_KEY[hidden[0].question_key]
+    names = " and ".join(f'"{(r.question or r.question_key).strip()}"' for r in hidden)
+    answers = "its answer goes" if len(hidden) == 1 else "their answers go"
+    drops = "drops it" if len(hidden) == 1 else "drops them"
+    replaced = row is not None and (row.answer or "").strip()
+    return Proposal(
+        title=(
+            f"profile · {asked}: {row.answer} → {answer}" if replaced else f"profile · {asked}: {answer}"
+        ),
+        fingerprint=json.dumps(
+            [(r.question_key, r.question, r.answer) for r in crud.get_survey_responses(db)]
+        ),
+        confirmation="diff",
+        consequence=(
+            (f"{_PROFILE_CONSEQUENCE} " if replaced else "")
+            + f'The form asks {names} only when "{asked}" is "{form.show_if.equals}", so '
+            f"{answers} too, as the Profile page's Save {drops}."
+        ),
+        diff=[
+            {"field": asked, "now": row.answer if replaced else None, "proposed": answer},
+            *(
+                {"field": (r.question or r.question_key).strip(), "now": r.answer, "proposed": "deleted"}
+                for r in hidden
+            ),
+        ],
+        touches=touches,
+    )
+
+
+def _profile_as_saved(
+    db: Session, without: str | None = None, answered: tuple[str, str] | None = None
+) -> list[schemas.SurveyAnswer]:
+    """What the Profile page's Save sends once the answer under `without` is
+    taken away, or the form's question `answered[0]` is answered
+    `answered[1]`, and nothing else is touched (`save` in `Profile.tsx`): the
+    form's questions it shows with an answer, in its order, with its wording
+    and topic; then every other answer on record, as stored. A follow-up the
+    form no longer shows is left out, as the form leaves it out."""
+    rows = crud.get_survey_responses(db)
+    answers = {
+        r.question_key: r.answer for r in rows if r.answer is not None and r.question_key != without
+    }
+    if answered is not None:
+        answers[answered[0]] = answered[1]
+    own = {q.key for q in questionnaire.QUESTIONS}
+    form = [
+        schemas.SurveyAnswer(question_key=q.key, topic=q.topic, question=q.text, answer=answers[q.key])
+        for q in questionnaire.QUESTIONS
+        if questionnaire.visible(q, answers) and (answers.get(q.key) or "") != ""
+    ]
+    others = [
+        schemas.SurveyAnswer(question_key=r.question_key, topic=r.topic, question=r.question, answer=r.answer)
+        for r in rows
+        if r.question_key not in own and r.question_key != without and (r.answer or "").strip()
+    ]
+    return form + others
+
+
+def _profile_delete(db: Session, args: UpdateProfileArgs) -> tuple[models.SurveyResponse, list, list]:
+    """The answer to delete, the Save's body without it, and every answer that
+    body leaves out (the one asked for first), or a refusal."""
+    key, row = _profile_row(db, args)
+    if row is None or not (row.answer or "").strip():
+        raise LookupError(f"There is no answer on record to {args.question!r}, so there is nothing to delete.")
+    body = _profile_as_saved(db, without=key)
+    kept = {a.question_key for a in body}
+    gone = [row] + [
+        r for r in crud.get_survey_responses(db)
+        if r.question_key != key and (r.answer or "").strip() and r.question_key not in kept
+    ]
+    return row, body, gone
+
+
+def _propose_profile_delete(db: Session, args: UpdateProfileArgs) -> Proposal:
+    """A delete takes away the only copy of what the reader said, so its diff
+    and the sentence that nothing brings it back. The fingerprint is the whole
+    questionnaire, which the Save's body is drawn from."""
+    row, _, gone = _profile_delete(db, args)
+    asked = (row.question or row.question_key).strip()
+    also = ""
+    if len(gone) > 1:
+        follow = "; ".join(f'"{(r.question or r.question_key).strip()}"' for r in gone[1:])
+        also = (
+            " Taken away as the Profile page saves, it takes with it the answers to "
+            f"questions the form no longer shows without it: {follow}."
+        )
+    return Proposal(
+        title=f"profile · delete the answer to {asked}",
+        fingerprint=json.dumps(
+            [(r.question_key, r.question, r.answer) for r in crud.get_survey_responses(db)]
+        ),
+        confirmation="diff",
+        consequence=(
+            "The answer goes from their questionnaire, and nothing brings it back: the "
+            f"chat and the analyses no longer read it.{also}"
+        ),
+        diff=[
+            {"field": (r.question or r.question_key).strip(), "now": r.answer, "proposed": "deleted"}
+            for r in gone
+        ],
+        touches=f'the answer to "{asked}"',
+    )
+
+
+def _delete_profile(db: Session, args: UpdateProfileArgs) -> dict:
+    """The Profile page's own write, `crud.replace_survey_responses`, with
+    the body its Save sends without this answer."""
+    row, body, gone = _profile_delete(db, args)
+    deleted = [
+        {"question_key": r.question_key, "question": r.question, "answer": r.answer} for r in gone
+    ]
+    crud.replace_survey_responses(db, body)
+    return {"deleted": deleted}
+
+
 _PROFILE_LABELS = {
+    "action": "",
     "question": "Question",
     "answer": "Answer",
     "topic": "Topic",
@@ -1311,10 +1509,21 @@ _PROFILE_LABELS = {
 
 
 def _profile_receipt(result: dict) -> list[tuple]:
+    gone = [
+        ("Deleted", (r.get("question") or r.get("question_key")), "text")
+        for r in result.get("deleted") or []
+    ]
+    if "answer" not in result:
+        return gone
     return [
         ("Answer now", result.get("answer"), "text"),
         ("It replaced", result.get("replaced") or "nothing, it is a new answer", "text"),
+        *gone,
     ]
+
+
+def _profile_done(card: dict) -> str:
+    return "Deleted" if (card.get("arguments") or {}).get("action") == "delete" else "Recorded"
 
 
 # --- write_flow ----------------------------------------------------------------
@@ -3214,13 +3423,16 @@ REGISTRY: dict[str, Tool] = {
                 "shows them what it would replace. A question of the Profile "
                 "form takes only the kind of answer the form offers (listed "
                 "under question_key); anything else is refused. Never a goal: "
-                "goals are a list of their own, written with `write_goal`."
+                "goals are a list of their own, written with `write_goal`. It "
+                "also deletes an answer they want gone (action delete), as the "
+                "Profile page's Save would."
             ),
             arguments=UpdateProfileArgs,
             run=_update_profile,
             propose=_propose_profile,
             labels=_PROFILE_LABELS,
             receipt=_profile_receipt,
+            done=_profile_done,
         ),
         Tool(
             name="write_flow",
