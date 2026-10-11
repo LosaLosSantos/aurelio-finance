@@ -860,13 +860,11 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 paid_in = d.get("currency") or listing.get(h.symbol) or h.currency
                 # Credited in the currency the account keeps its cash in: the
                 # anchor in force on the ex-date, or the account's first one
-                # when the dividend predates them all. An account with no
-                # anchor has no balance to be wrong against, and the dividend
-                # is recorded in the currency it was paid in.
-                cash_anchors = db.get(models.Institution, inst_id).cash_anchors
-                anchor = dated.latest_on_or_before(cash_anchors, d["date"]) or min(
-                    cash_anchors, key=lambda a: a.date, default=None
-                )
+                # when the dividend predates them all (`crud.account_currency_on`,
+                # the rule every form proposes a currency by). An account with
+                # no anchor has no balance to be wrong against, and the
+                # dividend is recorded in the currency it was paid in.
+                held_in = crud.account_currency_on(db, inst_id, d["date"])
                 # Converted at the ex-date's rate by `crud`, which records that
                 # day as `fx_as_of` beside `estimated` — the dividend is gross
                 # AND converted, and the credit from the statement corrects both.
@@ -888,7 +886,7 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                         quantity=shares,
                         unit_price=d["dps"],
                         fees=0.0,
-                        currency=anchor.currency if anchor is not None else paid_in,
+                        currency=held_in or paid_in,
                         price_currency=paid_in,
                         # Where the row came from, and nothing an edit can make
                         # false: the reader corrects the amount with the broker's

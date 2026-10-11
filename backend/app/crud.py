@@ -713,6 +713,23 @@ def get_cash_anchor(db: Session, anchor_id: int) -> models.CashAnchor | None:
     return db.get(models.CashAnchor, anchor_id)
 
 
+def account_currency_on(db: Session, institution_id: int | None, day: str) -> str | None:
+    """The currency an account keeps its cash in on `day`: that of its anchor
+    in force then (the latest dated on or before it), or of its first anchor
+    when the day comes before them all. None for no account, and for one with
+    no anchor: nothing then says what its money is in.
+
+    The rule every form proposes a currency by (`accountCurrencyOn` in the
+    frontend's `proposedCurrency.ts`), which the chat's cards follow too, and
+    the one the dividend catch-up credits an account by."""
+    if institution_id is None:
+        return None
+    anchors = get_cash_anchors_for_institution(db, institution_id)
+    if not anchors:
+        return None
+    return (dated.latest_on_or_before(anchors, day) or anchors[0]).currency
+
+
 def update_cash_anchor(
     db: Session, anchor_id: int, data: schemas.CashAnchorCreate
 ) -> models.CashAnchor | None:

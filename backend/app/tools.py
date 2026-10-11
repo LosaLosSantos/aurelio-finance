@@ -85,9 +85,13 @@ from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field, ValidationError, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import advisor, catalogue, chain, composition, crud, dated, fx, models, positions, prices, questionnaire, schemas
+from app import (
+    advisor, analytics, catalogue, chain, composition, crud, dated, fx, models, positions,
+    prices, questionnaire, schemas,
+)
 from app.database import unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -244,8 +248,9 @@ class Tool:
     # value, kind), kind "date" for a day the panel writes in the reader's
     # language. The result itself stays as it is, for the model.
     receipt: Callable[[dict], list[tuple[str, str, str]]] | None = None
-    # What a confirmed card says it is now.
-    done: str = "Recorded"
+    # What a confirmed card says it is now, or how to tell it from the card
+    # (a tool with several actions: "Ended", "Deleted").
+    done: str | Callable[[dict], str] = "Recorded"
 
     def __post_init__(self) -> None:
         if (self.run is None) == (self.walk is None):
@@ -1311,6 +1316,624 @@ def _profile_receipt(result: dict) -> list[tuple]:
     ]
 
 
+# --- write_flow ----------------------------------------------------------------
+#
+# An income or an expense, written as the Cash flow page writes it (brief AN):
+# through the schema its form posts (`IncomeSourceCreate`, `ExpenseCreate`) and
+# the crud function its request calls, with the body the form would send built
+# from the line as it is stored (`_form_body`). The form sends every field it
+# has a box for and no note, so a card writes the same, and a note on a line
+# survives every card as it survives every save of the form.
+#
+# Five actions on one kind of record, in one tool: the fields are the same
+# record's in each, and five declarations would be paid for by the first turn
+# of every conversation.
+
+# The form's choices (`CashFlow.tsx`), which the schemas' descriptions list too.
+_FLOW_CATEGORIES = {
+    "income": ("salary", "freelance", "business", "rental", "dividends", "interest", "pension", "other"),
+    "expense": (
+        "housing", "food", "transport", "utilities", "health", "insurance", "debt",
+        "leisure", "education", "other",
+    ),
+}
+_ANY_FLOW_CATEGORY = Literal[
+    "salary", "freelance", "business", "rental", "dividends", "interest", "pension",
+    "housing", "food", "transport", "utilities", "health", "insurance", "debt",
+    "leisure", "education", "other",
+]
+
+
+class WriteFlowArgs(BaseModel):
+    """One income or expense: added, corrected, changed from a day, ended or
+    deleted."""
+
+    action: Literal["add", "correct", "change_from", "end", "delete"] = Field(
+        ...,
+        description=(
+            "add: a new line. correct: the line was recorded wrong from the start, so "
+            "every payment it counts takes the new figures, past ones included. "
+            "change_from: its figures changed on a day (a raise, a new rent): the line "
+            "on record keeps its past and ends with its last payment before "
+            "first_payment, and a new line starts on first_payment. end: it stops, its "
+            "last payment being the last one on or before `end`. delete: the line goes "
+            "with every payment it counts. When their words could be a correction or a "
+            "change from a day, ask which before drawing a card."
+        ),
+    )
+    side: Literal["income", "expense"]
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="add: the new line's name. Otherwise the line on record, as the picture names it.",
+    )
+    on_record_from: datetime.date | None = Field(
+        default=None,
+        description=(
+            "Only when two lines on record share the name: the first payment of the "
+            "one meant, as the picture shows it."
+        ),
+    )
+    account: MaybeText = Field(
+        default=None,
+        description=(
+            "The institution its cash is credited to (income) or paid from "
+            "(expense). add: null for a line on no account. correct, change_from: "
+            "an account other than the line's moves it there."
+        ),
+    )
+    amount: float | None = Field(
+        default=None,
+        ge=0,
+        description="Per payment. add: required. correct, change_from: the new figure, or null to keep it.",
+    )
+    currency: schemas.StatedCurrency | None = Field(
+        default=None,
+        description=(
+            "add: null proposes the account's currency on the first payment's day, as "
+            "the form does. correct, change_from: null keeps it."
+        ),
+    )
+    frequency: Literal["monthly", "quarterly", "semiannual", "annual", "one_off"] | None = Field(
+        default=None,
+        description="add: null is monthly, as on the form. correct, change_from: null keeps it.",
+    )
+    first_payment: datetime.date | None = Field(
+        default=None,
+        description=(
+            "The day it is first paid, which is also the day of the month it repeats "
+            "on. add: required. change_from: required, the first payment at the new "
+            "figures. correct: a corrected first payment, or null."
+        ),
+    )
+    end: datetime.date | None = Field(
+        default=None,
+        description="The last day it can be paid. end: required. add, correct: optional.",
+    )
+    kind: Literal["active", "passive"] | None = Field(
+        default=None, description="An income's: active stops when they stop working, passive does not."
+    )
+    nature: Literal["essential", "discretionary"] | None = Field(
+        default=None, description="An expense's: whether they could stop paying it."
+    )
+    category: _ANY_FLOW_CATEGORY | None = Field(
+        default=None, description="One of the side's categories, as the form lists them."
+    )
+
+    @model_validator(mode="after")
+    def _what_each_action_needs(self):
+        changes = (
+            self.amount, self.currency, self.frequency, self.account,
+            self.kind, self.nature, self.category,
+        )
+        if self.action == "add" and (self.amount is None or self.first_payment is None):
+            raise ValueError("add needs the amount and the first payment.")
+        if self.action == "change_from":
+            if self.first_payment is None:
+                raise ValueError("change_from needs first_payment, the first payment at the new figures.")
+            if all(c is None for c in changes):
+                raise ValueError("change_from needs at least one new figure.")
+        if self.action == "correct" and all(
+            c is None for c in (*changes, self.first_payment, self.end)
+        ):
+            raise ValueError("correct needs at least one corrected field.")
+        if self.action == "end" and self.end is None:
+            raise ValueError("end needs `end`, the last day it can be paid.")
+        if self.side == "income" and self.nature is not None:
+            raise ValueError("nature is an expense's; an income is active or passive (kind).")
+        if self.side == "expense" and self.kind is not None:
+            raise ValueError("kind is an income's; an expense is essential or discretionary (nature).")
+        if self.category is not None and self.category not in _FLOW_CATEGORIES[self.side]:
+            raise ValueError(
+                f"{self.category!r} is not an {self.side} category. The form's: "
+                + ", ".join(_FLOW_CATEGORIES[self.side])
+                + "."
+            )
+        return self
+
+
+@dataclass(frozen=True)
+class _FlowSide:
+    """What tells an income from an expense, for the one tool that writes both."""
+
+    model: type
+    schema: type[BaseModel]
+    create: Callable
+    update: Callable
+    delete: Callable
+    tag: str  # the field the two vocabularies disagree on: kind | nature
+    noun: str
+    moves: str  # how its cash moves on its account
+
+
+_FLOW_SIDES = {
+    "income": _FlowSide(
+        models.IncomeSource, schemas.IncomeSourceCreate, crud.create_income_source,
+        crud.update_income_source, crud.delete_income_source, "kind", "income", "credited to",
+    ),
+    "expense": _FlowSide(
+        models.Expense, schemas.ExpenseCreate, crud.create_expense,
+        crud.update_expense, crud.delete_expense, "nature", "expense", "paid from",
+    ),
+}
+
+
+def _form_body(row, side: _FlowSide) -> dict:
+    """The body the Cash flow form sends for a line as stored, when nothing in
+    it is touched (`toPayload` in `CashFlow.tsx`): every field it has a box
+    for, a blank one as null, and no note."""
+    return {
+        "name": row.name.strip(),
+        "category": row.category or None,
+        "amount": row.amount,
+        "currency": row.currency,
+        "frequency": row.frequency or None,
+        "institution_id": row.institution_id,
+        "start_date": row.start_date or None,
+        "end_date": row.end_date or None,
+        side.tag: getattr(row, side.tag) or None,
+    }
+
+
+def _flow_line_text(row, side: _FlowSide, db: Session) -> str:
+    """A line as the picture shows it, for a refusal the model reads."""
+    account = crud.get_institution(db, row.institution_id) if row.institution_id else None
+    where = f", {side.moves} {account.name}" if account is not None else ", on no account"
+    since = f", first paid {row.start_date}" if row.start_date else ""
+    until = f", until {row.end_date}" if row.end_date else ""
+    return f"{row.name} {row.amount:.2f} {row.currency} {row.frequency or 'monthly'}{where}{since}{until}"
+
+
+def _flow_row(db: Session, args: WriteFlowArgs, side: _FlowSide):
+    """The line on record the card is about, or a refusal the model can act on.
+
+    By name, as the picture names it; then, where two lines share it, by the
+    first payment the picture shows for each, by the account, and by being
+    still in force or to come (a raise leaves the old line ended beside the
+    new one, under one name)."""
+    rows = list(db.scalars(select(side.model).order_by(side.model.id)))
+    wanted = args.name.strip().casefold()
+    hits = [r for r in rows if r.name.strip().casefold() == wanted]
+    if not hits:
+        names = ", ".join(sorted({r.name for r in rows})) or "none"
+        raise LookupError(f"There is no {side.noun} called {args.name!r}. On record: {names}.")
+    if len(hits) > 1 and args.on_record_from is not None:
+        hits = [r for r in hits if r.start_date == args.on_record_from.isoformat()] or hits
+    if len(hits) > 1 and args.account:
+        inst = _institution(db, args.account)
+        hits = [r for r in hits if r.institution_id == inst.id] or hits
+    if len(hits) > 1:
+        today = dated.today()
+        hits = [r for r in hits if analytics.flow_status(r, today) != "ended"] or hits
+    if len(hits) > 1:
+        lines = "; ".join(_flow_line_text(r, side, db) for r in hits)
+        raise LookupError(
+            f"{len(hits)} {side.noun} lines are called {args.name!r}: {lines}. Say which "
+            "by its first payment (on_record_from)."
+        )
+    return hits[0]
+
+
+def _payment_days(first: datetime.date, frequency: str | None) -> str:
+    """When a line is paid, from its first payment, in words."""
+    if frequency == "one_off":
+        return f"Paid once, on {first.isoformat()}."
+    every = {
+        "quarterly": "every three months",
+        "semiannual": "every six months",
+        "annual": "every year",
+    }.get(frequency or "monthly", "every month")
+    if frequency == "annual":
+        return f"First paid on {first.isoformat()}, then on the same day {every}."
+    short = " (the last day of a shorter month)" if first.day > 28 else ""
+    return f"First paid on {first.isoformat()}, then on day {first.day}{short} {every}."
+
+
+def _in_the_balance(db: Session, institution_id: int | None) -> str:
+    """What a line's payments do to its account's cash, as the projection
+    counts them: those up to the account's latest balance are already in it."""
+    if institution_id is None:
+        return (
+            "It is on no account, so it moves no account's cash; it counts in the "
+            "monthly figures."
+        )
+    account = crud.get_institution(db, institution_id)
+    anchors = crud.get_cash_anchors_for_institution(db, institution_id)
+    if not anchors:
+        return f"{account.name} has no balance on record yet, so no cash is projected from it."
+    latest = anchors[-1].date
+    return (
+        f"Payments dated up to {latest}, the day of {account.name}'s latest balance, "
+        "are already in that balance; only those after it move its cash."
+    )
+
+
+def _last_payment(row, on_or_before: datetime.date) -> datetime.date | None:
+    """A line's last payment on or before a day, as the projection places its
+    payments (`analytics.recurrence`, a blank frequency as monthly), or None
+    when it has none by then."""
+    if not row.start_date:
+        return None
+    first = datetime.date.fromisoformat(row.start_date)
+    if first > on_or_before:
+        return None
+    if row.frequency == "one_off":
+        return first
+    step = analytics.STEP_MONTHS.get(row.frequency or "monthly", 1)
+    last = None
+    for day in analytics.recurrence(first, step, on_or_before):
+        last = day
+    return last
+
+
+@dataclass(frozen=True)
+class _FlowChange:
+    """One card's change to the income or the expenses, worked out once and read
+    by both the card and the write, as `_Ledger` is for an entry."""
+
+    side: _FlowSide
+    row: object | None  # the line on record; None for an add
+    update: dict | None  # the form's body for that line, as this change leaves it
+    create: dict | None  # the form's body for a new line
+    delete: bool
+    last_payment: datetime.date | None  # of the line on record, when it ends
+    account_id: int | None  # whose cash the line the card is about moves
+
+
+def _flow_change(db: Session, args: WriteFlowArgs) -> _FlowChange:
+    """The writes a card stands for, each body validated by the schema the
+    form posts through, or a refusal saying why there are none."""
+    side = _FLOW_SIDES[args.side]
+    if args.action == "add":
+        inst = _institution(db, args.account)
+        iid = inst.id if inst is not None else None
+        first = args.first_payment.isoformat()
+        body = {
+            "name": args.name.strip(),
+            "category": args.category,
+            "amount": args.amount,
+            "currency": _stored_currency(args.currency)
+            if args.currency
+            else crud.account_currency_on(db, iid, first) or fx.base_currency(db),
+            "frequency": args.frequency or "monthly",
+            "institution_id": iid,
+            "start_date": first,
+            "end_date": args.end.isoformat() if args.end else None,
+            side.tag: args.kind if args.side == "income" else args.nature,
+        }
+        side.schema(**body)
+        return _FlowChange(side, None, None, body, False, None, iid)
+
+    row = _flow_row(db, args, side)
+    if args.action == "delete":
+        return _FlowChange(side, row, None, None, True, None, row.institution_id)
+
+    stored = _form_body(row, side)
+    changed = dict(stored)
+    if args.amount is not None:
+        changed["amount"] = args.amount
+    if args.currency:
+        changed["currency"] = _stored_currency(args.currency)
+    if args.frequency is not None:
+        changed["frequency"] = args.frequency
+    if args.account:
+        changed["institution_id"] = _institution(db, args.account).id
+    if args.category is not None:
+        changed["category"] = args.category
+    tag = args.kind if args.side == "income" else args.nature
+    if tag is not None:
+        changed[side.tag] = tag
+
+    if args.action == "end":
+        if row.frequency == "one_off":
+            raise LookupError(
+                f"{row.name!r} is paid once, on its day: delete it, or correct its day."
+            )
+        last = _last_payment(row, args.end) if row.start_date else args.end
+        if last is None:
+            raise LookupError(
+                f"{row.name!r} is first paid on {row.start_date}, after {args.end.isoformat()}: "
+                "ending it before its first payment is deleting it."
+            )
+        ended = {**stored, "end_date": last.isoformat()}
+        side.schema(**ended)
+        return _FlowChange(side, row, ended, None, False, last, row.institution_id)
+
+    if args.action == "correct":
+        if args.first_payment is not None:
+            changed["start_date"] = args.first_payment.isoformat()
+        if args.end is not None:
+            changed["end_date"] = args.end.isoformat()
+        side.schema(**changed)
+        return _FlowChange(side, row, changed, None, False, None, changed["institution_id"])
+
+    # change_from: the line on record ends with its last payment before the new
+    # first one, and keeps its past; a new line starts on it.
+    first = args.first_payment
+    if row.frequency == "one_off":
+        raise LookupError(f"{row.name!r} is paid once: correct it instead.")
+    if row.start_date and first.isoformat() <= row.start_date:
+        raise LookupError(
+            f"{row.name!r} is first paid on {row.start_date}, so a change from "
+            f"{first.isoformat()} is a change of the whole line: that is a correction. "
+            "If it is not clear which they mean, ask."
+        )
+    if row.end_date and row.end_date < first.isoformat():
+        raise LookupError(
+            f"{row.name!r} ended on {row.end_date}, before {first.isoformat()}: there is "
+            "nothing to change from that day. Add a new line instead."
+        )
+    before = first - datetime.timedelta(days=1)
+    last = _last_payment(row, before) if row.start_date else before
+    ended = {**stored, "end_date": (last or before).isoformat()}
+    started = {**changed, "start_date": first.isoformat(), "end_date": row.end_date or None}
+    side.schema(**ended)
+    side.schema(**started)
+    return _FlowChange(side, row, ended, started, False, last or before, started["institution_id"])
+
+
+_FLOW_FIELDS = (
+    ("name", "Name"),
+    ("amount", "Amount"),
+    ("currency", "Currency"),
+    ("frequency", "How often"),
+    ("institution_id", "Account"),
+    ("start_date", "First payment"),
+    ("end_date", "Last payment"),
+    ("category", "Category"),
+)
+
+
+def _shown(db: Session, field: str, value) -> str | None:
+    """A field of a line as the card shows it: an account by its name."""
+    if value is None:
+        return None
+    if field == "institution_id":
+        inst = crud.get_institution(db, value)
+        return inst.name if inst is not None else None
+    if field == "amount":
+        return f"{value:.2f}"
+    return str(value)
+
+
+def _flow_diff(db: Session, side: _FlowSide, now: dict, then: dict) -> list[dict]:
+    """The lines of a diff: each field the change moves, now and after."""
+    fields = (*_FLOW_FIELDS, (side.tag, "Kind" if side.tag == "kind" else "Nature"))
+    return [
+        {"field": label, "now": _shown(db, f, now.get(f)), "proposed": _shown(db, f, then.get(f))}
+        for f, label in fields
+        if now.get(f) != then.get(f)
+    ]
+
+
+def _flow_fingerprint(db: Session, change: _FlowChange) -> str:
+    """What the card was drawn against: the line on record as it is (or the
+    lines of the same name, for an add), and the account's latest balance,
+    which its sentences name."""
+    parts = []
+    if change.row is not None:
+        parts.append(json.dumps(_form_body(change.row, change.side), sort_keys=True, default=str))
+    else:
+        same = [
+            r.id for r in db.scalars(select(change.side.model))
+            if r.name.strip().casefold() == change.create["name"].casefold()
+        ]
+        parts.append(f"same name={same}|currency={change.create['currency']}")
+    for iid in sorted({change.account_id, change.row.institution_id if change.row else None} - {None}):
+        anchors = crud.get_cash_anchors_for_institution(db, iid)
+        parts.append(f"account {iid} latest={anchors[-1].date if anchors else None}")
+    return "|".join(parts)
+
+
+def _propose_flow(db: Session, args: WriteFlowArgs) -> Proposal:
+    """The card for one change to the income or the expenses.
+
+    An add is an append and gets the light confirmation; anything else
+    rewrites a line on record (or deletes it) and gets the diff and the
+    sentence of what it costs. Every card says when the line is paid, in the
+    reader's terms (the first payment's day is the day it repeats on), and
+    what the account's latest balance already holds."""
+    change = _flow_change(db, args)
+    side = change.side
+    fingerprint = _flow_fingerprint(db, change)
+    if args.action == "add":
+        body = change.create
+        first = datetime.date.fromisoformat(body["start_date"])
+        inst = crud.get_institution(db, body["institution_id"]) if body["institution_id"] else None
+        where = f" · {inst.name}" if inst is not None else ""
+        twins = [
+            _flow_line_text(r, side, db)
+            for r in db.scalars(select(side.model).order_by(side.model.id))
+            if r.name.strip().casefold() == body["name"].casefold()
+        ]
+        also = (
+            f" Already on record under that name: {'; '.join(twins)}. This adds another line."
+            if twins
+            else ""
+        )
+        return Proposal(
+            title=(
+                f"add {side.noun}: {body['name']}, {body['amount']:.2f} {body['currency']} "
+                f"{body['frequency']}{where}"
+            ),
+            fingerprint=fingerprint,
+            consequence=(
+                f"{_payment_days(first, body['frequency'])} "
+                f"{_in_the_balance(db, body['institution_id'])}{also}"
+            ),
+        )
+
+    row = change.row
+    touches = f'the {side.noun} "{row.name}"' + (
+        f" first paid on {row.start_date}" if row.start_date else ""
+    )
+    now = _form_body(row, side)
+    if args.action == "delete":
+        return Proposal(
+            title=f"delete {side.noun}: {_flow_line_text(row, side, db)}",
+            fingerprint=fingerprint,
+            confirmation="diff",
+            consequence=(
+                "The line goes, with every payment it counts, the past ones too: the "
+                "cash projected for its account loses those dated after its latest "
+                "balance. Nothing brings the line back. To stop it from a day and keep "
+                "its past, end it instead."
+            ),
+            diff=[{"field": "Line", "now": _flow_line_text(row, side, db), "proposed": "deleted"}],
+            touches=touches,
+        )
+    if args.action == "end":
+        return Proposal(
+            title=f"end {side.noun}: {row.name}, last payment {change.last_payment.isoformat()}",
+            fingerprint=fingerprint,
+            confirmation="diff",
+            consequence=(
+                f"Its last payment is the one of {change.last_payment.isoformat()}, the last "
+                f"on or before {args.end.isoformat()}; none is counted after it, and the "
+                "payments before it stay as they are."
+            ),
+            diff=_flow_diff(db, side, now, change.update),
+            touches=touches,
+        )
+    if args.action == "correct":
+        first = change.update["start_date"]
+        payments = (
+            f" {_payment_days(datetime.date.fromisoformat(first), change.update['frequency'])}"
+            if first
+            else ""
+        )
+        return Proposal(
+            title=f"correct {side.noun}: {row.name}",
+            fingerprint=fingerprint,
+            confirmation="diff",
+            consequence=(
+                "A correction: the line takes these figures as if it had been recorded so "
+                "from its first payment, and every payment it counts moves with them, the "
+                "past ones too. If they changed on a day instead, the old figures stay "
+                f"true before it: that is a change from that day.{payments} "
+                f"{_in_the_balance(db, change.update['institution_id'])}"
+            ),
+            diff=_flow_diff(db, side, now, change.update),
+            touches=touches,
+        )
+    first = datetime.date.fromisoformat(change.create["start_date"])
+    diff = [
+        {
+            "field": "Last payment of the line on record",
+            "now": row.end_date,
+            "proposed": change.last_payment.isoformat(),
+        },
+        *(
+            {**d, "field": f"From {first.isoformat()}: {d['field'].lower()}"}
+            for d in _flow_diff(db, side, now, change.create)
+            if d["field"] not in ("First payment", "Last payment")
+        ),
+    ]
+    return Proposal(
+        title=f"change {side.noun} from {first.isoformat()}: {row.name}",
+        fingerprint=fingerprint,
+        confirmation="diff",
+        consequence=(
+            "A change from a day: the line on record keeps its payments up to its last "
+            f"one, on {change.last_payment.isoformat()}, at the figures they had, and a new "
+            f"line takes the new figures. {_payment_days(first, change.create['frequency'])} "
+            "If they were wrong all along instead, that is a correction of the whole "
+            f"line. {_in_the_balance(db, change.create['institution_id'])}"
+        ),
+        diff=diff,
+        touches=touches,
+    )
+
+
+def _flow_result(row, side: _FlowSide) -> dict:
+    return {"side": side.noun, "id": row.id, **_form_body(row, side)}
+
+
+def _write_flow(db: Session, args: WriteFlowArgs) -> dict:
+    """The writes, each through the crud function the page's own request
+    calls, in one unit of work: a change from a day ends one line and starts
+    the next, both or neither."""
+    change = _flow_change(db, args)
+    side = change.side
+    with unit_of_work(db):
+        if change.delete:
+            gone = _flow_result(change.row, side)
+            side.delete(db, change.row.id)
+            return {"deleted": gone}
+        result: dict = {}
+        if change.update is not None:
+            kept = side.update(db, change.row.id, side.schema(**change.update))
+            result["line"] = _flow_result(kept, side)
+        if change.create is not None:
+            made = side.create(db, side.schema(**change.create))
+            result["new_line" if change.update is not None else "line"] = _flow_result(made, side)
+    return result
+
+
+_FLOW_LABELS = {
+    "action": "",
+    "side": "",
+    "name": "Line",
+    "on_record_from": "",
+    "account": "Account",
+    "amount": "Amount",
+    "currency": "Currency",
+    "frequency": "How often",
+    "first_payment": "First payment",
+    "end": "Last day",
+    "kind": "Kind",
+    "nature": "Nature",
+    "category": "Category",
+}
+
+
+def _flow_receipt(result: dict) -> list[tuple]:
+    """What the line looks like on the Cash flow page now."""
+    if "deleted" in result:
+        return [("Deleted", result["deleted"].get("name"), "text")]
+    line, new = result.get("line") or {}, result.get("new_line")
+    if new is not None:
+        return [
+            ("Line on record, last payment", line.get("end_date"), "date"),
+            ("New line, first payment", new.get("start_date"), "date"),
+        ]
+    return [
+        ("First payment", line.get("start_date"), "date"),
+        ("Last payment", line.get("end_date"), "date"),
+    ]
+
+
+def _flow_done(card: dict) -> str:
+    """What a confirmed card says it is now, by what it did."""
+    return {
+        "add": "Recorded",
+        "correct": "Corrected",
+        "change_from": "Changed",
+        "end": "Ended",
+        "delete": "Deleted",
+    }.get((card.get("arguments") or {}).get("action"), "Recorded")
+
+
 # --- suggest_instrument -------------------------------------------------------
 #
 # The one card that is NOT a write to the reader's records. Accepting it moves
@@ -2019,6 +2642,23 @@ REGISTRY: dict[str, Tool] = {
             receipt=_profile_receipt,
         ),
         Tool(
+            name="write_flow",
+            description=(
+                "Propose a change to their income or expenses, as the Cash flow page "
+                "makes it: add a line; correct one recorded wrong from the start; "
+                "change one from a day (a raise, a new rent), which ends the line on "
+                "record with its last payment before that day and starts a new one, "
+                "both on one card; end one; delete one. A line on record is named as "
+                "the picture names it."
+            ),
+            arguments=WriteFlowArgs,
+            run=_write_flow,
+            propose=_propose_flow,
+            labels=_FLOW_LABELS,
+            receipt=_flow_receipt,
+            done=_flow_done,
+        ),
+        Tool(
             name="suggest_instrument",
             description=(
                 "Put one instrument in front of the reader as an idea, and "
@@ -2271,12 +2911,10 @@ def present(card: dict) -> dict:
                 if name != "id" and not name.endswith("_id")
             ]
         receipt = [line for line in (_card_field(*row) for row in rows) if line is not None]
-    return {
-        **card,
-        "fields": fields,
-        "receipt": receipt,
-        "done": tool.done if tool is not None else "Recorded",
-    }
+    done = "Recorded"
+    if tool is not None:
+        done = tool.done(card) if callable(tool.done) else tool.done
+    return {**card, "fields": fields, "receipt": receipt, "done": done}
 
 
 def answer(db: Session, call: advisor.ToolCall) -> dict:

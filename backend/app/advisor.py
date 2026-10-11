@@ -1062,20 +1062,28 @@ def _render_cash_beside(positions: list[dict], summary: dict) -> list[str]:
 
 def _flow_line(flow: dict, *, scheduled: bool) -> str:
     """One flow from `compute_flows_in_force`, as `_flow_text` prints it, with
-    its dates: when it started (or that nobody said) for one in force or
-    ended, when it starts for one still to come, and when it ends if it
-    does."""
+    the account its cash moves on (brief AN: the chat could not point at the
+    right line, nor add one to the right account, without it) and its dates:
+    when it started (or that nobody said) for one in force or ended, when it
+    starts for one still to come, and when it ends if it does."""
     text = _flow_text(
         flow["name"], flow["classified"], flow["category"],
         flow["amount"], flow["currency"], flow["frequency"],
     ).rstrip()
+    account = flow.get("account")
+    if account is None:
+        where = ", on no account"
+    elif flow["side"] == "income":
+        where = f", credited to {account}"
+    else:
+        where = f", paid from {account}"
     start = flow["start_date"]
     if scheduled:
         when = f", from {start}"
     else:
         when = f", since {start}" if start else ", no start date"
     until = f", until {flow['end_date']}" if flow["end_date"] else ""
-    return f"{text}{when}{until}"
+    return f"{text}{where}{when}{until}"
 
 
 def _render_flows_in_force(flows: dict) -> list[str]:

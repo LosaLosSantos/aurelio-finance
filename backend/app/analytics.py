@@ -1157,11 +1157,14 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
       say why it is not in them.
 
     `in_force`, `scheduled` and `ended` list each flow as the chat prints it,
-    with the name the reader gave it, how it is classified and its id (for
-    the page, which marks its own rows), and never its notes, which the chat
-    does not read either (the reader's choice, 2026-10-02, for the analyst to
-    read the records as the chat does)."""
+    with the name the reader gave it, how it is classified, the account its
+    cash is credited to or paid from, and its id (for the page, which marks its
+    own rows), and never its notes, which the chat does not read either (the
+    reader's choice, 2026-10-02, for the analyst to read the records as the
+    chat does). The account since brief AN: without it the chat could not
+    point at the right line, nor add one to the right account."""
     conv = fx.Converter(db)
+    accounts = {i.id: i.name for i in db.scalars(select(models.Institution))}
 
     def monthly(flow) -> float:
         return _monthly(conv.to_base_or_as_stored(flow.amount, flow.currency), flow.frequency)
@@ -1176,6 +1179,7 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
             "amount": flow.amount,
             "currency": flow.currency,
             "frequency": flow.frequency,
+            "account": accounts.get(flow.institution_id),
             "start_date": flow.start_date,
             "end_date": flow.end_date,
         }

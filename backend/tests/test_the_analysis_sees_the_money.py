@@ -139,24 +139,24 @@ def test_only_the_flows_in_force_today_are_counted_and_the_others_are_listed_apa
     assert "- 1 of these flows has no start date, so it is counted as in force." in analyst
     assert (
         "- Income in force today:\n"
-        f"  - Stipendio [active/salary] 3000.00 EUR monthly, since {LONG_AGO}"
+        f"  - Stipendio [active/salary] 3000.00 EUR monthly, on no account, since {LONG_AGO}"
     ) in analyst
     assert (
         "- Expenses in force today:\n"
-        f"  - Affitto [essential/housing] 1000.00 EUR monthly, since {LONG_AGO}\n"
-        "  - Regalo per Marta [essential/other] 200.00 EUR monthly, no start date"
+        f"  - Affitto [essential/housing] 1000.00 EUR monthly, on no account, since {LONG_AGO}\n"
+        "  - Regalo per Marta [essential/other] 200.00 EUR monthly, on no account, no start date"
     ) in analyst
     assert "- Starting after today, so NOT counted above:" in analyst
-    assert f"  - income: Nuovo lavoro [active/salary] 4000.00 EUR monthly, from {SOON}" in analyst
-    assert f"  - expense: Retta scuola [essential/education] 600.00 EUR monthly, from {SOON}" in analyst
+    assert f"  - income: Nuovo lavoro [active/salary] 4000.00 EUR monthly, on no account, from {SOON}" in analyst
+    assert f"  - expense: Retta scuola [essential/education] 600.00 EUR monthly, on no account, from {SOON}" in analyst
     assert (
-        f"  - expense: Auto nuova [discretionary/transport] 10000.00 EUR one_off, from {LATER}"
+        f"  - expense: Auto nuova [discretionary/transport] 10000.00 EUR one_off, on no account, from {LATER}"
     ) in analyst
     # Listed apart since brief AI, so the figures can be explained, and still
     # not in them; brief Z had dropped an ended flow altogether.
     assert (
         "- Ended before today, so NOT counted above:\n"
-        f"  - expense: Palestra [discretionary/leisure] 50.00 EUR monthly, since {LONG_AGO}, "
+        f"  - expense: Palestra [discretionary/leisure] 50.00 EUR monthly, on no account, since {LONG_AGO}, "
         f"until {ENDED}"
     ) in analyst
 
@@ -164,7 +164,7 @@ def test_only_the_flows_in_force_today_are_counted_and_the_others_are_listed_apa
 def test_a_flow_reaches_the_analyst_and_the_chat_as_one_line_with_its_dates(records):
     with SessionLocal() as db:
         analyst, chat = _analyst(db), advisor.build_context(db)
-    line = f"  - Affitto [essential/housing] 1000.00 EUR monthly, since {LONG_AGO}"
+    line = f"  - Affitto [essential/housing] 1000.00 EUR monthly, on no account, since {LONG_AGO}"
     assert line in chat.splitlines()
     assert line in analyst.splitlines()
 
@@ -193,7 +193,7 @@ def test_no_flow_in_force_is_said_as_none_not_as_zero(client):
         "- What is left each month cannot be said: no income and no expense is in "
         "force today."
     ) in analyst
-    assert f"  - income: Nuovo lavoro [n/a/n/a] 4000.00 EUR monthly, from {SOON}" in analyst
+    assert f"  - income: Nuovo lavoro [n/a/n/a] 4000.00 EUR monthly, on no account, from {SOON}" in analyst
 
 
 # --- Liquidity ------------------------------------------------------------------

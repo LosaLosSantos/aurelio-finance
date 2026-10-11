@@ -751,6 +751,9 @@ def test_the_write_tools_do_not_run_when_the_model_calls_them(client):
         # `propose` does not run when the model calls it, whatever it would
         # have written. Exercised in tests/test_watchlist.py.
         "suggest_instrument",
+        # Brief AN: the income and the expenses, as the Cash flow page writes
+        # them (tests/test_the_chat_writes_income_and_expenses.py).
+        "write_flow",
     }
 
     # A buy names its institution, because one that does not is now refused
