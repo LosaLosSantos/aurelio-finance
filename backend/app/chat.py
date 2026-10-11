@@ -272,14 +272,19 @@ _PROMPT_TAIL = (
     "`get_look_through`, `search_catalogue`, `lookup_symbol`, `read_analysis`. "
     "They only read, so never ask whether to run one: "
     "run it. Ask only before writing their records (a card) or spending their "
-    "money (a new analysis). Your earlier turns reach you as their words alone, "
-    "without the lookups behind them: never call a past statement invented for "
-    "that reason; when it matters, run the tool again.\n\n"
+    "money (a new analysis). Your earlier turns reach you with the tools they "
+    "called and what became of their cards, but not what the tools returned: "
+    "what they found is in the words written from them, so never call a past "
+    "statement invented because its lookup is not in front of you; when it "
+    "matters, run the tool again.\n\n"
     "You do not write; you PROPOSE. A tool that would change something drafts "
     "the change and the reader is shown it as a card to confirm or reject; "
     "nothing reaches their records until they press confirm, so say what you "
     "are proposing and then stop, rather than reporting it as done. Propose a "
-    "write only when asked for one: noticing is free, writing is not.\n\n"
+    "write only when asked for one: noticing is free, writing is not. Draw up "
+    "to three cards in one answer, of any kind, one for each change and never "
+    "two for the same record: each is confirmed on its own, and a fourth is "
+    "refused.\n\n"
     "Five things you can propose. `add_real_asset`: something owned "
     "outright and held at no institution, with what it is worth today. "
     "`record_transaction`: a buy, a sell, a dividend or a close that ALREADY "
@@ -574,52 +579,120 @@ class PreparedTurn:
 
 
 def _wire(stored: list[models.ChatMessage], now: screen.Screen | None = None) -> list[dict]:
-    """The stored turns as the model reads them: role and text, in order. A
-    turn with no text — an answer that failed before its first word — is
-    skipped; a cut one keeps the words the reader actually saw.
+    """The stored turns as the model reads them, in order. A turn with no text
+    and no call (an answer that failed before its first word) is skipped; a
+    cut one keeps the words the reader actually saw.
 
-    A thought was never for the model, and a tool block is the RECEIPT of a
-    call, not the call: replaying "you consulted the look-through" without the
-    result it returned would hand the model a memory of having known
-    something, with the something missing. What a past tool found is in the
-    words that were written from it, which do travel.
+    An answer goes back as the rounds that wrote it, in the protocol's own
+    shape (`_rounds`): the words of each round, as an assistant turn carrying
+    the calls it ended on, each call answered by a `tool` turn. A thought was
+    never for the model and does not travel.
 
-    A CARD does travel, and it has to, in the protocol's own shape: the turn
-    that proposed it goes back as an assistant turn carrying its `tool_calls`,
-    and each one is answered by a `tool` turn saying what became of it. Two
-    reasons, and both are hard. The API pairs those by `tool_call_id` and
-    refuses a conversation where one is unanswered — including a card the
-    reader simply never got round to, which is why "still waiting" is one of
-    the three things a card can say rather than a gap. And the model must know
-    which of its proposals were taken up: a rejected card that came back
-    looking like nothing had been proposed would be proposed again.
+    A CARD is answered by what became of it (`_card_state`). The API pairs a
+    call with its answer by `tool_call_id` and refuses a conversation where one
+    is unanswered, a card the reader never got round to included, which is why
+    "still waiting" is one of the things a card can say rather than a gap; and
+    the model must know which of its proposals were taken up, or a rejected
+    card would be proposed again.
+
+    A call to a READ tool is answered by one fixed line (PAST_CALL), not by its
+    result. Until brief AN such calls did not travel at all, on the argument
+    that a result replayed without its content would be a memory of having
+    known something with the something missing; and on 2026-10-02 the chat,
+    finding no trace of its own lookups behind "I searched twice", retracted
+    three true statements as invented. The call says that it happened and with
+    what; the line says that its result is not kept and that what it found is
+    in the words written from it, which travel. The bytes never change once the
+    turn is over, so the next turns read them from the cache like the words
+    around them (brief AM's test).
 
     A question goes back with WHERE it was asked, every time, and with what
     that screen showed only while it is the question being answered. The
     first because the reader moves: "e questo?" on Broker A after "cos'è?" on
     Broker B reads, without it, as two questions about Broker A. The second for
-    the reason a tool block travels as the words written from it: a situation
+    the reason a result travels as the words written from it: a situation
     pasted into every later turn is a past screen at the prominence of the
     present one."""
     out: list[dict] = []
     for m in stored:
         blocks = json.loads(m.blocks)
+        if m.role == "assistant":
+            out.extend(_answer_on_the_wire(m.id, blocks))
+            continue
         text = "".join(b.get("text", "") for b in blocks if b.get("kind") == "text")
-        cards = [b for b in blocks if b.get("kind") == "card"]
-        if cards:
-            calls = [
-                advisor.ToolCall(
-                    id=c["call_id"], name=c["tool"], arguments=json.dumps(c["arguments"])
-                )
-                for c in cards
-            ]
-            out.append(tools.request_message(text, calls))
-            for card, call in zip(cards, calls):
-                out.append(tools.result_message(call, _card_state(card)))
-        elif text.strip():
+        if text.strip():
             note = now.note if now is not None and m is stored[-1] else None
             out.append({"role": m.role, "content": _asked_on(blocks, text, note)})
     return out
+
+
+# What a past answer's call to a read tool is answered with when the
+# conversation is sent again (`_wire`): one line, the same every time, so the
+# cache keeps reading it. A call that was refused is answered by its refusal.
+PAST_CALL = (
+    "Answered when it was called. Its result is not kept here: what it found is "
+    "in the words written from it, and calling it again gives what they do not say."
+)
+
+# The same, for a call stored before the app kept a call's id and arguments:
+# it goes back with an id made from where it is stored and no arguments.
+PAST_CALL_UNKEPT = (
+    PAST_CALL + " Its arguments were not kept either: it was called before the app kept them."
+)
+
+
+def _rounds(blocks: list[dict]) -> list[tuple[str, list[tuple[int, dict]]]]:
+    """An answer's blocks as the rounds that wrote them: the words of each, and
+    the calls it ended on with their place among the blocks. Words that follow
+    a call open the next round, as the model wrote them after reading what the
+    call returned. Thoughts, a search's pages and the screen are not words of
+    the answer and are left out."""
+    rounds: list[tuple[str, list[tuple[int, dict]]]] = []
+    words: list[str] = []
+    calls: list[tuple[int, dict]] = []
+    for place, block in enumerate(blocks):
+        kind = block.get("kind")
+        if kind == "text":
+            if calls:
+                rounds.append(("".join(words), calls))
+                words, calls = [], []
+            words.append(block.get("text", ""))
+        elif kind in ("tool", "card"):
+            calls.append((place, block))
+    rounds.append(("".join(words), calls))
+    return rounds
+
+
+def _answer_on_the_wire(message_id: int, blocks: list[dict]) -> list[dict]:
+    """One stored answer as the model reads it back (see `_wire`)."""
+    out: list[dict] = []
+    for said, calls in _rounds(blocks):
+        if not calls:
+            if said.strip():
+                out.append({"role": "assistant", "content": said})
+            continue
+        asked = [_past_call(message_id, place, block) for place, block in calls]
+        out.append(tools.request_message(said, [call for call, _ in asked]))
+        out.extend(tools.result_message(call, answered) for call, answered in asked)
+    return out
+
+
+def _past_call(message_id: int, place: int, block: dict) -> tuple[advisor.ToolCall, dict]:
+    """A stored call, and what it is answered with when it goes back."""
+    if block.get("kind") == "card":
+        call = advisor.ToolCall(
+            id=block["call_id"], name=block["tool"], arguments=json.dumps(block["arguments"])
+        )
+        return call, _card_state(block)
+    kept = block.get("call_id") is not None
+    call = advisor.ToolCall(
+        id=block["call_id"] if kept else f"past_{message_id}_{place}",
+        name=block["name"],
+        arguments=json.dumps(block.get("arguments") or {}),
+    )
+    if not block.get("ok"):
+        return call, {"ok": False, "error": block.get("detail")}
+    return call, {"ok": True, "note": PAST_CALL if kept else PAST_CALL_UNKEPT}
 
 
 def _asked_on(blocks: list[dict], text: str, note: str | None) -> str:
@@ -637,10 +710,12 @@ def _asked_on(blocks: list[dict], text: str, note: str | None) -> str:
 def _card_state(card: dict) -> dict:
     """What became of one card, as the model reads it back.
 
-    Three states and no fourth. "Pending" is a real answer and not a missing
-    one: a reader who closed the tab on a card left it unanswered, that is
-    the truth of it, and the model should say so rather than assume either
-    way."""
+    Four states. "Pending" is a real answer and not a missing one: a reader
+    who closed the tab on a card left it unanswered, that is the truth of it,
+    and the model should say so rather than assume either way. "Stale" is a
+    confirmation refused because what the card was drawn against had changed
+    (brief AN): until then it was stored as nothing, and every later turn read
+    the card as still waiting."""
     outcome = card.get("outcome", "pending")
     if outcome == "confirmed":
         return {"outcome": "confirmed", "written": card.get("result")}
@@ -648,6 +723,15 @@ def _card_state(card: dict) -> dict:
         return {
             "outcome": "rejected",
             "note": "The reader rejected this. Nothing was written.",
+        }
+    if outcome == "stale":
+        return {
+            "outcome": "stale",
+            "note": (
+                "The reader pressed confirm after what this card was drawn against "
+                "had changed, so it was refused and nothing was written. Draw a "
+                "fresh one only if they ask for it again."
+            ),
         }
     return {
         "outcome": "pending",
@@ -701,6 +785,16 @@ class CardSettled(ValueError):
 
 class CardStale(ValueError):
     """What the card was drawn against has changed since it was proposed."""
+
+
+def _stored_as_stale(db: Session, card_id: str) -> None:
+    """Record on the card that its confirmation was refused as stale, in a
+    transaction of its own: the refusal writes nothing else, the card is not
+    decided again, and later turns read what became of it (brief AN). A card
+    another window decided meanwhile keeps that decision."""
+    found = crud.find_chat_card(db, card_id)
+    if found is not None and found[1].get("outcome") == "pending":
+        crud.settle_chat_card(db, found[0], card_id, "stale", None)
 
 
 # How many times a turn that answers a card may ask the model: once with the
@@ -812,6 +906,8 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
     if found is None:
         raise CardGone(card_id)
     message, card = found
+    if card.get("outcome") == "stale":
+        raise CardStale(tools.STALE)
     if card.get("outcome") != "pending":
         raise CardSettled(card["outcome"])
     # That check is the fast one and it is not the guarantee: between reading
@@ -836,21 +932,26 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
         )
 
     if decision.decision == "confirm":
-        with unit_of_work(db):
-            done = tools.finish(
-                tools.settle(db, card["tool"], card["arguments"], card["fingerprint"])
-            )
-            if not done["ok"]:
-                if done.get("stale"):
-                    raise CardStale(done["error"])
-                raise ValueError(done["error"])
-            # The claim is inside the unit with the write, and it can fail:
-            # another tab that decided this card between the check above and
-            # here wins, and losing takes the write down with it rather than
-            # leaving a second row nobody asked for.
-            decided = crud.settle_chat_card(db, message, card_id, "confirmed", done["result"])
-            if decided is None:
-                raise CardSettled("decided in another window")
+        try:
+            with unit_of_work(db):
+                done = tools.finish(
+                    tools.settle(db, card["tool"], card["arguments"], card["fingerprint"])
+                )
+                if not done["ok"]:
+                    if done.get("stale"):
+                        raise CardStale(done["error"])
+                    raise ValueError(done["error"])
+                # The claim is inside the unit with the write, and it can fail:
+                # another tab that decided this card between the check above
+                # and here wins, and losing takes the write down with it rather
+                # than leaving a second row nobody asked for.
+                decided = crud.settle_chat_card(db, message, card_id, "confirmed", done["result"])
+                if decided is None:
+                    raise CardSettled("decided in another window")
+        except CardStale:
+            # After the unit is undone, so the refusal is all that is written.
+            _stored_as_stale(db, card_id)
+            raise
     else:
         # No unit of work: rejecting is the one write, and the swap either
         # takes it or somebody else already decided.
@@ -1054,12 +1155,13 @@ def _searches(
     return answered
 
 
-# How many suggestions one answer may put up. The reader's decision
-# (2026-10-06): asked for several, the chat puts up to three cards, and never
-# one unasked. A turn ends on the round that draws a card, so they all come
+# How many cards one answer may draw, of any kind, each confirmed on its own:
+# the reader's decision (2026-10-10, brief AN), after three suggestions
+# (2026-10-06). A turn ends on the round that draws a card, so they all come
 # from one round, one call each; a fourth in that round is not drawn, and
-# neither is a second card for the same instrument.
-SUGGESTIONS_PER_ANSWER = 3
+# neither is a second card for the same instrument or for the same record
+# (`tools.Proposal.touches`), which confirming the first would leave stale.
+CARDS_PER_ANSWER = 3
 
 
 def _named(call: advisor.ToolCall) -> str | None:
@@ -1079,27 +1181,55 @@ def _named(call: advisor.ToolCall) -> str | None:
 
 
 def _past_the_cards(call: advisor.ToolCall, drawn: list[str]) -> dict | None:
-    """Why this suggestion is not drawn, given the ones this round has drawn
-    already, or None when nothing stops it. Shown to the reader where it was
-    refused and told to the model, so a proposal that never reached the screen
-    is not taken for one that did."""
-    named = _named(call)
-    if named is None:
+    """Why this call draws no card, given what the cards this round has drawn
+    already stand for (`drawn`), or None when nothing stops it before it is
+    drawn. Shown to the reader where it was refused and told to the model, so
+    a proposal that never reached the screen is not taken for one that did."""
+    tool = tools.REGISTRY.get(call.name)
+    if tool is None or tool.propose is None:
         return None
-    if named in drawn:
+    named = _named(call)
+    if named is not None and named in drawn:
         return {
             "ok": False,
             "error": f"This answer already has a card for {named}: one card per instrument.",
         }
-    if len(drawn) >= SUGGESTIONS_PER_ANSWER:
+    if len(drawn) >= CARDS_PER_ANSWER:
         return {
             "ok": False,
             "error": (
-                f"{len(drawn)} suggestions are already up in this answer, the most one "
-                f"answer holds, so this one for {named} was not drawn."
+                f"{len(drawn)} cards are already up in this answer, the most one answer "
+                "holds, so this one was not drawn: say so, and draw it in the next "
+                "answer if they still want it."
             ),
         }
     return None
+
+
+def _one_card_a_record(outcome: dict, drawn: list[str]) -> tuple[dict, str]:
+    """A drawn card's outcome as the answer keeps it, and the record it
+    touches: refused instead, never shown, when this round already has a card
+    for that record, since confirming one would leave the other stale."""
+    touches = outcome.pop("touches", "")
+    if "card" in outcome and touches and touches in drawn:
+        return {
+            "ok": False,
+            "error": (
+                f"This answer already has a card for {touches}: one card a record, "
+                "since confirming one would leave the other out of date."
+            ),
+        }, ""
+    return outcome, touches
+
+
+def _arguments(call: advisor.ToolCall) -> dict | None:
+    """A call's arguments as an object, for the block that keeps the call, or
+    None when the model's were not one (the call was refused for it)."""
+    try:
+        parsed = json.loads(call.arguments or "{}")
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _found(found: websearch.Search) -> dict:
@@ -1258,9 +1388,12 @@ def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]
         if not outcome["ok"]:
             # Including a stale card, which the ordinary path answers with a
             # 409 before the stream. There is no status code left to send by
-            # the time a minute has gone by, so it is an error event — the one
+            # the time the work has started, so it is an error event, the one
             # ending the client already knows how to show, with the reason in
-            # it, and the card still pending and still answerable.
+            # it. A stale card is stored as stale, as on the ordinary path; a
+            # card whose work failed stays pending and answerable.
+            if outcome.get("stale"):
+                _stored_as_stale(db, pending.card_id)
             raise advisor.AdvisorError(outcome["error"])
 
         found = crud.find_chat_card(db, pending.card_id)
@@ -1441,11 +1574,13 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     searched += 1
                     searches.append(found.usage)
             proposed = False
-            # The instruments this round has put on a card so far: at most
-            # SUGGESTIONS_PER_ANSWER, and none twice.
+            # The cards this round has drawn so far, by what each stands for:
+            # its instrument, the record it changes, or itself. At most
+            # CARDS_PER_ANSWER, and none twice.
             drawn: list[str] = []
             for place, call in enumerate(calls):
                 ran = None
+                touches = ""
                 if place in web:
                     outcome, ran = web[place]
                 else:
@@ -1453,12 +1588,11 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     if outcome is None:
                         with SessionLocal() as db:
                             outcome = tools.answer(db, call)
+                        outcome, touches = _one_card_a_record(outcome, drawn)
                 card = outcome.get("card")
                 if card is not None:
                     proposed = True
-                    named = _named(call)
-                    if named is not None:
-                        drawn.append(named)
+                    drawn.append(_named(call) or touches or card["card_id"])
                     blocks.append(card)
                     yield schemas.ChatCard(card=schemas.ChatCardBlock(**tools.present(card)))
                     continue
@@ -1467,12 +1601,16 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 yield schemas.ChatTool(
                     name=call.name, detail=None if outcome["ok"] else outcome.get("error")
                 )
+                # The call as the model made it, so a later turn reads what
+                # this answer called (`_wire`).
                 blocks.append(
                     {
                         "kind": "tool",
                         "name": call.name,
                         "ok": outcome["ok"],
                         "detail": outcome.get("error"),
+                        "call_id": call.id,
+                        "arguments": _arguments(call),
                     }
                 )
                 # What a search that ran found, under its line and before the

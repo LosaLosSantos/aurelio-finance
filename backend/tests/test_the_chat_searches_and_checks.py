@@ -391,10 +391,14 @@ def test_up_to_three_cards_and_never_four(registry, openrouter):
     assert [b["kind"] for b in blocks] == ["card", "card", "card", "tool"]
     refused = blocks[-1]
     assert refused["ok"] is False
+    # Three cards of any kind since brief AN (the reader, 2026-10-10), and the
+    # refused call is the fourth one, kept with its arguments.
     assert refused["detail"] == (
-        f"3 suggestions are already up in this answer, the most one answer holds, "
-        f"so this one for {FUNDS[3]} was not drawn."
+        "3 cards are already up in this answer, the most one answer holds, so this "
+        "one was not drawn: say so, and draw it in the next answer if they still "
+        "want it."
     )
+    assert refused["arguments"]["isin"] == FUNDS[3]
     assert len(openrouter.asked) == 1, "the answer ends on its cards"
     # Said on the live answer too, not only after a reload: the model never
     # gets a round to say why the fourth is missing.

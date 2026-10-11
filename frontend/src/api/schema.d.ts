@@ -2203,7 +2203,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            outcome?: "pending" | "confirmed" | "rejected";
+            outcome?: "pending" | "confirmed" | "rejected" | "stale";
             /**
              * Receipt
              * @description What a confirmed card wrote, in the reader's words; empty until then
@@ -2818,8 +2818,20 @@ export interface components {
          *     the screen that cannot be traced. `ok` is false when the tool refused or
          *     broke, and `detail` says why: an answer written after a tool failed was
          *     written with less than it asked for, and the reader is owed that.
+         *
+         *     `call_id` and `arguments` are the call as the model made it, kept so a
+         *     later turn reads what this answer called (`chat._wire`, brief AN): the
+         *     chat had retracted true statements on finding no trace of its own
+         *     lookups. Absent on the blocks stored before, and `arguments` on a call
+         *     whose arguments were not a JSON object.
          */
         ChatToolBlock: {
+            /** Arguments */
+            arguments?: {
+                [key: string]: unknown;
+            } | null;
+            /** Call Id */
+            call_id?: string | null;
             /** Detail */
             detail?: string | null;
             /**

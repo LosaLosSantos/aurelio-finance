@@ -38,6 +38,7 @@ import {
 import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
+import { STALE_LINE, heading, waiting } from "./cardOutcome";
 
 /* The chat that reads.
 
@@ -315,7 +316,10 @@ function Card({
   onDecide: (decision: "confirm" | "reject") => void;
   onOpenRun: (runId: number) => void;
 }) {
-  const pending = block.outcome !== "confirmed" && block.outcome !== "rejected";
+  // Waiting on the reader: not decided, and not refused as out of date
+  // (`cardOutcome.ts`).
+  const pending = waiting(block.outcome);
+  const stale = block.outcome === "stale";
   const diff = block.diff ?? [];
   // The proposal's arguments and, once confirmed, what was written, both as
   // the server words them (`tools.present`): a label of the reader's for each,
@@ -331,9 +335,10 @@ function Card({
   return (
     <div className="my-3 rounded-sm border border-rule bg-surface p-3">
       <p className={"text-[0.65rem] font-medium uppercase tracking-[0.14em] " + tone}>
-        {pending ? "Proposed" : block.outcome === "confirmed" ? block.done || "Recorded" : "Rejected"}
+        {heading(block.outcome, block.done)}
       </p>
       <p className="mt-1 text-sm text-ink">{block.title}</p>
+      {stale && <p className="mt-1 text-xs text-ink-faint">{STALE_LINE}</p>}
       {/* What confirming COSTS that the fields do not show, in the proposing
           tool's own words. On a diff card it sits above the table; on a light
           one it is usually empty, and it is not empty for the analyzer, which
@@ -832,8 +837,10 @@ export default function ChatPanel({
      as a decision already taken (the reader, 2026-10-08).
 
      A refusal (the card is gone, already answered, or stale) never starts a
-     stream and is stored nowhere, so it stays on screen under the
-     conversation as read, with any card still pending still answerable. */
+     stream, and stays on screen under the conversation as read. A stale card
+     is stored as stale (brief AN), so the read shows it out of date and with
+     no buttons; after any other refusal a card still pending is still
+     answerable. */
   async function decide(cardId: string, decision: "confirm" | "reject") {
     if (streaming) return;
     const answer = newMessage("assistant", [], "streaming");

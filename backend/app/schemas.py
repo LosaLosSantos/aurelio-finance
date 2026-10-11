@@ -2239,12 +2239,20 @@ class ChatToolBlock(BaseModel):
     somewhere, and a stored answer that does not say so is the one number on
     the screen that cannot be traced. `ok` is false when the tool refused or
     broke, and `detail` says why: an answer written after a tool failed was
-    written with less than it asked for, and the reader is owed that."""
+    written with less than it asked for, and the reader is owed that.
+
+    `call_id` and `arguments` are the call as the model made it, kept so a
+    later turn reads what this answer called (`chat._wire`, brief AN): the
+    chat had retracted true statements on finding no trace of its own
+    lookups. Absent on the blocks stored before, and `arguments` on a call
+    whose arguments were not a JSON object."""
 
     kind: Literal["tool"] = "tool"
     name: str
     ok: bool
     detail: str | None = None
+    call_id: str | None = None
+    arguments: dict | None = None
 
 
 class ChatCardChange(BaseModel):
@@ -2343,7 +2351,10 @@ class ChatCardBlock(BaseModel):
     )
     diff: list[ChatCardChange] = Field(default_factory=list)
     fingerprint: str = ""
-    outcome: Literal["pending", "confirmed", "rejected"] = "pending"
+    # "stale": refused at its confirmation because what it was drawn against
+    # had changed (brief AN). Nothing was written, and it is not decided again:
+    # a fresh card is drawn when the reader still wants the change.
+    outcome: Literal["pending", "confirmed", "rejected", "stale"] = "pending"
     result: dict | None = Field(
         default=None,
         description=(

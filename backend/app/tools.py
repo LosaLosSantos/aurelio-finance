@@ -163,6 +163,11 @@ class Proposal:
     everything that writes to the reader's records. It is not right for a
     suggestion — that one writes nothing of theirs, and "Confirm" over a card
     naming a security reads as approval of a purchase nobody proposed.
+
+    `touches` names the record the card changes, as the reader would ("the
+    answer to "Your age?""), or is empty for a card that only adds a row. One
+    answer draws one card a record (`chat.stream`): confirming the first of two
+    would leave the second stale. Not stored with the card.
     """
 
     title: str
@@ -171,6 +176,7 @@ class Proposal:
     consequence: str = ""
     verb: str = ""
     diff: list[dict] = field(default_factory=list)
+    touches: str = ""
 
 
 @dataclass(frozen=True)
@@ -1230,10 +1236,12 @@ def _propose_profile(db: Session, args: UpdateProfileArgs) -> Proposal:
         asked = row.question.strip()
     else:
         asked = (form.text if form is not None else args.question).strip()
+    touches = f'the answer to "{asked}"'
     if row is None or not (row.answer or "").strip():
         return Proposal(
             title=f"profile · {asked}: {answer}",
             fingerprint=f"{key}=<unanswered>",
+            touches=touches,
         )
     return Proposal(
         title=f"profile · {asked}: {row.answer} → {answer}",
@@ -1241,6 +1249,7 @@ def _propose_profile(db: Session, args: UpdateProfileArgs) -> Proposal:
         confirmation="diff",
         consequence=_PROFILE_CONSEQUENCE,
         diff=[{"field": asked, "now": row.answer, "proposed": answer}],
+        touches=touches,
     )
 
 
@@ -1750,6 +1759,7 @@ def _propose_analysis(db: Session, args: RunAnalysisArgs) -> Proposal:
     return Proposal(
         title="Run the analyzer over everything on record",
         fingerprint=_DEPENDS_ON_NOTHING,
+        touches="a new analysis",
         consequence=(
             f"{chain.MIN_STEPS} model calls, up to {chain.MAX_STEPS} if the "
             f"disagreement is real, on {' and '.join(engines)}. {last} A step "
@@ -2324,11 +2334,17 @@ def answer(db: Session, call: advisor.ToolCall) -> dict:
         logger.exception("%s drew a card that could not be stored", call.name)
         return {"ok": False, "error": f"{call.name} drew a card that cannot be stored: {exc}"}
     # Stored without the reader's words, which `present` works out each time
-    # the card is shown.
-    return {"card": card.model_dump(mode="json", exclude={"fields", "receipt", "done"})}
+    # the card is shown. What it touches travels beside it, for the answer
+    # that draws it, and is not stored.
+    return {
+        "card": card.model_dump(mode="json", exclude={"fields", "receipt", "done"}),
+        "touches": proposal.touches,
+    }
 
 
-_STALE = (
+# Said when a card is refused as stale, and again to a later press on it: the
+# card is stored as stale (`chat.resume`) and is not decided again.
+STALE = (
     "What this card was drawn against has changed since it was proposed, so "
     "what it says would happen is no longer what would happen. Ask again and a "
     "fresh one will be drawn."
@@ -2386,9 +2402,9 @@ def settle(
         # is an exception escaping into `chat.resume`'s unit of work, where a
         # merely out-of-date card becomes a 500.
         logger.info("%s could not be redrawn, so the card is stale: %s", tool_name, exc)
-        return {"ok": False, "stale": True, "error": f"{_STALE} ({exc})"}
+        return {"ok": False, "stale": True, "error": f"{STALE} ({exc})"}
     if proposal.fingerprint != fingerprint:
-        return {"ok": False, "stale": True, "error": _STALE}
+        return {"ok": False, "stale": True, "error": STALE}
     try:
         if tool.walk is not None:
             produced = yield from tool.walk(db, args)

@@ -564,11 +564,15 @@ def test_the_tool_that_was_consulted_stays_with_the_answer_it_produced(client, m
 
     answer = client.get(f"/api/chat/conversations/{cid}").json()["messages"][1]
     assert [b["kind"] for b in answer["blocks"]] == ["text", "tool", "text"]
+    # With the call as the model made it, which a later turn reads back
+    # (brief AN, `test_the_chat_knows_what_it_did.py`).
     assert answer["blocks"][1] == {
         "kind": "tool",
         "name": "get_look_through",
         "ok": True,
         "detail": None,
+        "call_id": "call_1",
+        "arguments": {},
     }
     assert _text(answer) == "Let me look inside them. Nothing could be decomposed."
     assert answer["status"] == "done"
@@ -1111,7 +1115,11 @@ def test_a_stale_card_is_refused_and_says_to_ask_again(client, monkeypatch):
     three-day-old one perfectly good. It is that what the proposal was drawn
     against changed, which is what the fingerprint is for, and a refusal is
     the only honest answer because the card is describing a write that would
-    no longer be that write."""
+    no longer be that write.
+
+    Since brief AN the refusal is what became of the card: it is stored as
+    stale, read back as stale by later turns, and a fresh card is drawn when
+    the reader still wants the change (`test_the_chat_knows_what_it_did.py`)."""
     state = _fake_tool(monkeypatch)
     _, card = _propose(client, monkeypatch)
 
@@ -1122,7 +1130,7 @@ def test_a_stale_card_is_refused_and_says_to_ask_again(client, monkeypatch):
     assert "no longer what" in refused.json()["detail"]
     assert state["written"] == [], "a stale card was written anyway"
     still = client.get("/api/chat/conversations/1").json()["messages"][1]["blocks"][1]
-    assert still["outcome"] == "pending", "a refused card must stay answerable"
+    assert still["outcome"] == "stale" and still["result"] is None
 
 
 def test_a_write_that_fails_leaves_no_card_saying_it_worked(client, monkeypatch):

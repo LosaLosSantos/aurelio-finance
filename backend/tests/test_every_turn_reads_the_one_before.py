@@ -185,6 +185,30 @@ def test_what_the_next_turn_sends_again_is_byte_identical_while_nothing_changes(
     assert _kept_up_to(openrouter.asked[2]) > _kept_up_to(openrouter.asked[0])
 
 
+def test_a_past_turns_calls_go_back_as_the_same_bytes_every_turn(client, openrouter):
+    """Brief AN: an answer goes back with the tools it called, each answered by
+    a fixed line (`chat._wire`). Four turns, the first calling a tool: from the
+    third on, the part the next turn sends again holds the first answer and
+    its call, and the fourth sends it again byte for byte."""
+    openrouter.script = [
+        _reads_run_one(1),
+        _says("Non ho trovato analisi."),
+        _says("Nessuna."),
+        _says("Prego."),
+        _says("Ciao."),
+    ]
+    conversation = _ask(client, "cosa diceva l'ultima analisi?", OPUS)
+    for question in ("e prima?", "grazie", "ciao"):
+        _ask(client, question, OPUS, conversation)
+
+    third, fourth = openrouter.asked[3], openrouter.asked[4]
+    upto = _kept_up_to(third)
+    kept = [_plain(m) for m in third["messages"][1 : upto + 1]]
+    assert any(m.get("tool_calls") for m in kept), "the first answer's call is kept"
+    again = [_plain(m) for m in fourth["messages"][1 : upto + 1]]
+    assert _bytes(again) == _bytes(kept)
+
+
 def test_a_write_changes_the_picture_and_nothing_before_it(client, openrouter):
     """A goal recorded between two turns: the picture says so, and the tools
     and the system prompt, which come before it in what a provider caches,

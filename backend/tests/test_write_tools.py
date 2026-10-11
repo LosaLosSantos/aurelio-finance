@@ -729,9 +729,10 @@ def test_a_card_that_can_no_longer_be_drawn_is_a_409_and_not_a_500(client, monke
     assert "Broker A" in refused.json()["detail"]
     assert client.get("/api/transactions").json() == []
 
+    # What became of it, since brief AN: stale, and not decided again.
     with SessionLocal() as db:
         block = crud.find_chat_card(db, card["card_id"])[1]
-    assert block["outcome"] == "pending", "a refused card is still waiting"
+    assert block["outcome"] == "stale"
 
 
 def test_the_write_tools_do_not_run_when_the_model_calls_them(client):
