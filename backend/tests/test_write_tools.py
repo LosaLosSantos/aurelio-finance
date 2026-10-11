@@ -754,6 +754,9 @@ def test_the_write_tools_do_not_run_when_the_model_calls_them(client):
         # Brief AN: the income and the expenses, as the Cash flow page writes
         # them (tests/test_the_chat_writes_income_and_expenses.py).
         "write_flow",
+        # And the cash, as its two forms write it (test_the_chat_writes_the_cash.py).
+        "record_transfer",
+        "set_cash_balance",
     }
 
     # A buy names its institution, because one that does not is now refused

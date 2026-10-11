@@ -1934,6 +1934,275 @@ def _flow_done(card: dict) -> str:
     }.get((card.get("arguments") or {}).get("action"), "Recorded")
 
 
+# --- record_transfer and set_cash_balance ---------------------------------------
+#
+# The cash, written as the Cash flow page records a transfer and an account's
+# page records a balance (brief AN): the schema each form posts, the crud
+# function its request calls, and each currency proposed as the form proposes
+# it, from the account's balance in force on the day (`crud.account_currency_on`).
+
+
+def _account(db: Session, name: str) -> models.Institution:
+    """An account the reader named: these two cards always need one."""
+    inst = _institution(db, name)
+    if inst is None:
+        raise LookupError("Name the account, as the picture names it.")
+    return inst
+
+
+def _currency_on(db: Session, inst: models.Institution, day: str, said: str | None) -> str:
+    """The currency stated, or the one the form proposes for this account on
+    this day: its balance in force then, else the base."""
+    if said:
+        return _stored_currency(said)
+    return crud.account_currency_on(db, inst.id, day) or fx.base_currency(db)
+
+
+def _latest_balance(db: Session, inst: models.Institution) -> str | None:
+    anchors = crud.get_cash_anchors_for_institution(db, inst.id)
+    return anchors[-1].date if anchors else None
+
+
+class RecordTransferArgs(BaseModel):
+    """Cash moved from one of their accounts to another."""
+
+    date: datetime.date = Field(..., description="The day it moved.")
+    from_account: str = Field(..., min_length=1, description="The account it left, by name.")
+    to_account: str = Field(..., min_length=1, description="The account it reached, by name.")
+    amount: float = Field(..., gt=0, description="What left the first account, in `currency`.")
+    currency: schemas.StatedCurrency | None = Field(
+        default=None,
+        description="What left it in; null proposes that account's currency on the day, as the form does.",
+    )
+    to_currency: schemas.StatedCurrency | None = Field(
+        default=None,
+        description="What reached the second in; null proposes that account's currency on the day.",
+    )
+    arrived: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "What reached the second account, from its statement, when the two "
+            "currencies differ. Null works it out at the ECB rate of the day, and is "
+            "refused when that day has no final rate yet."
+        ),
+    )
+
+
+def _transfer_body(db: Session, args: RecordTransferArgs) -> tuple[dict, models.Institution, models.Institution]:
+    """The body the Cash flow form posts for this transfer (`TransferSection`'s
+    `submit`): both accounts, both currencies, and what arrived when it was
+    typed, else null for the app to work out."""
+    source, target = _account(db, args.from_account), _account(db, args.to_account)
+    if source.id == target.id:
+        raise LookupError("A transfer moves cash between two accounts: name two.")
+    day = args.date.isoformat()
+    body = {
+        "date": day,
+        "from_institution_id": source.id,
+        "to_institution_id": target.id,
+        "amount": args.amount,
+        "currency": _currency_on(db, source, day, args.currency),
+        "to_currency": _currency_on(db, target, day, args.to_currency),
+        "to_amount": args.arrived,
+    }
+    return body, source, target
+
+
+def _already_in(db: Session, inst: models.Institution, day: str) -> str:
+    """Whether a movement of `day` is already in the account's latest balance."""
+    latest = _latest_balance(db, inst)
+    if latest is not None and day <= latest:
+        return (
+            f" {inst.name}'s latest balance, of {latest}, already holds it, so its "
+            "cash today does not move."
+        )
+    return ""
+
+
+def _propose_transfer(db: Session, args: RecordTransferArgs) -> Proposal:
+    """A transfer as the reader will read it, with what arrived worked out by
+    the function that stores it (`crud._transfer_payload`), or the form's
+    refusal in words when its day has no final rate."""
+    body, source, target = _transfer_body(db, args)
+    try:
+        stored = crud._transfer_payload(db, schemas.TransferCreate(**body))
+    except crud.TransferRateUnknown as exc:
+        raise LookupError(str(exc)) from exc
+    left = f"{body['amount']:.2f} {body['currency']}"
+    reached = f"{stored['to_amount']:.2f} {body['to_currency']}"
+    rate = f" (at the ECB rate of {stored['fx_as_of']})" if stored.get("fx_as_of") else ""
+    moved = left if left == reached else f"{left} → {reached}{rate}"
+    return Proposal(
+        title=f"transfer: {moved}, {source.name} to {target.name}, {body['date']}",
+        fingerprint=(
+            f"{source.id}>{target.id}|{body['currency']}>{body['to_currency']}|"
+            f"{stored['to_amount']}|{stored.get('fx_as_of')}|"
+            f"{_latest_balance(db, source)}|{_latest_balance(db, target)}"
+        ),
+        consequence=(
+            f"It lowers {source.name}'s cash by {left} and raises {target.name}'s by "
+            f"{reached} from {body['date']}."
+            + _already_in(db, source, body["date"])
+            + _already_in(db, target, body["date"])
+        ),
+    )
+
+
+def _record_transfer(db: Session, args: RecordTransferArgs) -> dict:
+    """The row, through the function the form's request calls."""
+    body, source, target = _transfer_body(db, args)
+    made = crud.create_transfer(db, schemas.TransferCreate(**body))
+    return {
+        "transfer_id": made.id,
+        "date": made.date,
+        "from": source.name,
+        "to": target.name,
+        "amount": made.amount,
+        "currency": made.currency,
+        "to_amount": made.to_amount,
+        "to_currency": made.to_currency,
+        "fx_as_of": made.fx_as_of,
+    }
+
+
+_TRANSFER_LABELS = {
+    "date": "On",
+    "from_account": "From",
+    "to_account": "To",
+    "amount": "Left",
+    "currency": "In",
+    "to_currency": "Reached in",
+    "arrived": "Reached",
+}
+
+
+def _transfer_receipt(result: dict) -> list[tuple]:
+    return [
+        ("Reached", result.get("to_amount"), "amount", result.get("to_currency")),
+        ("At the ECB rate of", result.get("fx_as_of"), "date"),
+    ]
+
+
+class SetCashBalanceArgs(BaseModel):
+    """What one of their accounts held on a day."""
+
+    account: str = Field(..., min_length=1, description="The account, by name.")
+    # `ObservedDate`, so a day that has not happened is refused while the card
+    # is drawn, as the account page's form refuses it.
+    date: schemas.ObservedDate = Field(
+        default_factory=datetime.date.today,
+        description="The day of the balance, never after today; today when they said none.",
+    )
+    amount: float = Field(..., ge=0, description="The cash it held that day.")
+    currency: schemas.StatedCurrency | None = Field(
+        default=None,
+        description="Null proposes the account's currency on that day, as the form does.",
+    )
+
+
+@dataclass(frozen=True)
+class _Balance:
+    """One balance card, worked out once for the card and the write."""
+
+    account: models.Institution
+    body: dict
+    existing: models.CashAnchor | None
+
+
+def _balance(db: Session, args: SetCashBalanceArgs) -> _Balance:
+    """The account, the body the account page's form sends (`toPayload`: the
+    day, the amount, the currency), and the balance already on that day."""
+    inst = _account(db, args.account)
+    day = args.date.isoformat()
+    existing = next(
+        (a for a in crud.get_cash_anchors_for_institution(db, inst.id) if a.date == day), None
+    )
+    said = args.currency or (existing.currency if existing is not None else None)
+    body = {"date": day, "amount": args.amount, "currency": _currency_on(db, inst, day, said)}
+    schemas.CashAnchorCreate(**body)
+    return _Balance(inst, body, existing)
+
+
+def _propose_balance(db: Session, args: SetCashBalanceArgs) -> Proposal:
+    """A new balance appends a day to the account's series and is light; one
+    on a day that has a balance already replaces it, with the diff."""
+    b = _balance(db, args)
+    day, name = b.body["date"], b.account.name
+    held = f"{b.body['amount']:.2f} {b.body['currency']}"
+    latest = _latest_balance(db, b.account)
+    later = (
+        f" Its balance of {latest}, after this day, stays the one its cash today is "
+        "projected from."
+        if latest is not None and latest > day
+        else ""
+    )
+    said = (
+        f"From {day} {name} holds {held}: the income, expenses, transfers and ledger "
+        f"entries dated up to {day} count as already in it, and only those after it "
+        f"move its cash.{later}"
+    )
+    fingerprint = (
+        f"{b.account.id}|{day}|"
+        + (f"{b.existing.amount}|{b.existing.currency}" if b.existing else "none")
+        + f"|latest={latest}"
+    )
+    touches = f"{name}'s balance on {day}"
+    if b.existing is None:
+        return Proposal(
+            title=f"cash balance: {name} held {held} on {day}",
+            fingerprint=fingerprint,
+            consequence=said,
+            touches=touches,
+        )
+    return Proposal(
+        title=f"cash balance: {name} on {day}, {b.existing.amount:.2f} → {held}",
+        fingerprint=fingerprint,
+        confirmation="diff",
+        consequence=(
+            f"This replaces the balance already on {day}, which does not come back. {said}"
+        ),
+        diff=[
+            {
+                "field": f"Balance on {day}",
+                "now": f"{b.existing.amount:.2f} {b.existing.currency}",
+                "proposed": held,
+            }
+        ],
+        touches=touches,
+    )
+
+
+def _set_cash_balance(db: Session, args: SetCashBalanceArgs) -> dict:
+    """The balance, through the function the form's request calls: a new day
+    is added, a day that has one is edited."""
+    b = _balance(db, args)
+    data = schemas.CashAnchorCreate(**b.body)
+    if b.existing is None:
+        anchor = crud.create_cash_anchor(db, b.account.id, data)
+    else:
+        anchor = crud.update_cash_anchor(db, b.existing.id, data)
+    return {
+        "account": b.account.name,
+        "date": anchor.date,
+        "amount": anchor.amount,
+        "currency": anchor.currency,
+        "replaced": (
+            f"{b.existing.amount:.2f} {b.existing.currency}" if b.existing is not None else None
+        ),
+    }
+
+
+_BALANCE_LABELS = {"account": "Account", "date": "On", "amount": "Held", "currency": "In"}
+
+
+def _balance_receipt(result: dict) -> list[tuple]:
+    return [
+        ("Held", result.get("amount"), "amount", result.get("currency")),
+        ("It replaced", result.get("replaced") or "nothing, a new day", "text"),
+    ]
+
+
 # --- suggest_instrument -------------------------------------------------------
 #
 # The one card that is NOT a write to the reader's records. Accepting it moves
@@ -2657,6 +2926,33 @@ REGISTRY: dict[str, Tool] = {
             labels=_FLOW_LABELS,
             receipt=_flow_receipt,
             done=_flow_done,
+        ),
+        Tool(
+            name="record_transfer",
+            description=(
+                "Propose recording cash moved from one of their accounts to another, "
+                "as the Cash flow page records a transfer: both sides, and what reached "
+                "the second account when the currencies differ."
+            ),
+            arguments=RecordTransferArgs,
+            run=_record_transfer,
+            propose=_propose_transfer,
+            labels=_TRANSFER_LABELS,
+            receipt=_transfer_receipt,
+        ),
+        Tool(
+            name="set_cash_balance",
+            description=(
+                "Propose what one of their accounts held on a day, as its page records "
+                "a balance: a new day is added, a day that has one already is replaced. "
+                "From that day the account holds that figure, and everything dated up "
+                "to it counts as already in it."
+            ),
+            arguments=SetCashBalanceArgs,
+            run=_set_cash_balance,
+            propose=_propose_balance,
+            labels=_BALANCE_LABELS,
+            receipt=_balance_receipt,
         ),
         Tool(
             name="suggest_instrument",
