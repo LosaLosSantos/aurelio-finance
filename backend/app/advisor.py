@@ -848,9 +848,9 @@ def build_context(db: Session) -> str:
     lines.append("")
     lines.append("## Goals")
     if not goals:
-        # Said rather than left out, under its own heading: the model is told
-        # that no tool writes a goal (the system prompt), and a goal asked for
-        # in the chat was filed in the questionnaire instead (brief AL).
+        # Said rather than left out, under its own heading: a goal asked for
+        # in the chat was once filed in the questionnaire instead (brief AL),
+        # and goals are written with their own tool (`write_goal`, brief AN).
         lines.append("- (none recorded)")
     else:
         for g in goals:

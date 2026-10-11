@@ -757,6 +757,8 @@ def test_the_write_tools_do_not_run_when_the_model_calls_them(client):
         # And the cash, as its two forms write it (test_the_chat_writes_the_cash.py).
         "record_transfer",
         "set_cash_balance",
+        # And the goals (test_the_chat_writes_a_goal.py).
+        "write_goal",
     }
 
     # A buy names its institution, because one that does not is now refused

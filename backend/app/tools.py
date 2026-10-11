@@ -2203,6 +2203,234 @@ def _balance_receipt(result: dict) -> list[tuple]:
     ]
 
 
+# --- write_goal ----------------------------------------------------------------
+#
+# A goal, written as the Profile page's Goals form writes it (brief AN): the
+# schema it posts (`GoalCreate`) and the crud function its request calls. It
+# replaces brief AL's rule, which told the chat that no tool writes a goal and
+# kept it from filing one as an answer in the questionnaire.
+
+# The form's types and their labels (`GOAL_TYPES` in `Goals.tsx`): a goal saved
+# with no name of its own is named by its type's label there.
+_GOAL_TYPES = {
+    "protect_inflation": "Protect from inflation",
+    "stable_income": "Stable / passive income",
+    "long_term_growth": "Long-term growth",
+    "emergency_fund": "Emergency fund",
+    "target_amount": "Target amount by a date",
+    "other": "Something else (describe it)",
+}
+_GOAL_TARGET = ("target_amount", "target_date", "current_amount", "monthly_contribution")
+
+
+class WriteGoalArgs(BaseModel):
+    """One of their goals: added, changed or deleted."""
+
+    action: Literal["add", "change", "delete"]
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="add: the goal's name. change, delete: the goal on record, as the picture names it.",
+    )
+    new_name: MaybeText = Field(default=None, description="change: a new name, or null to keep it.")
+    type: Literal[
+        "protect_inflation", "stable_income", "long_term_growth", "emergency_fund",
+        "target_amount", "other",
+    ] | None = Field(
+        default=None,
+        description=(
+            "What it is for, as the form lists it. add: required. change: null keeps it. "
+            "Only target_amount carries an amount and a date."
+        ),
+    )
+    currency: schemas.StatedCurrency | None = Field(
+        default=None,
+        description="add: null proposes the base currency, as the form does. change: null keeps it.",
+    )
+    target_amount: float | None = Field(default=None, ge=0, description="target_amount only: what they want to reach.")
+    target_date: datetime.date | None = Field(default=None, description="target_amount only: by when.")
+    current_amount: float | None = Field(default=None, ge=0, description="target_amount only: what is set aside for it now.")
+    monthly_contribution: float | None = Field(
+        default=None, ge=0, description="target_amount only: what they add to it each month."
+    )
+
+    @model_validator(mode="after")
+    def _what_each_action_needs(self):
+        if self.action == "add" and self.type is None:
+            raise ValueError("add needs the goal's type, as the form lists them.")
+        if self.action == "change" and all(
+            getattr(self, f) is None for f in ("new_name", "type", "currency", *_GOAL_TARGET)
+        ):
+            raise ValueError("change needs at least one new value.")
+        return self
+
+
+def _goal_body(goal) -> dict:
+    """The body the Goals form sends for a goal as stored, when nothing in it
+    is touched: the target's four figures only for a target_amount goal, no
+    note."""
+    target = goal.type == "target_amount"
+    return {
+        "name": goal.name.strip() or _GOAL_TYPES.get(goal.type, goal.type),
+        "type": goal.type,
+        "currency": goal.currency,
+        **{f: (getattr(goal, f) if target else None) for f in _GOAL_TARGET},
+    }
+
+
+@dataclass(frozen=True)
+class _GoalChange:
+    goal: models.Goal | None
+    body: dict | None
+
+
+def _goal_named(db: Session, args: WriteGoalArgs) -> models.Goal:
+    goals = crud.get_goals(db)
+    wanted = args.name.strip().casefold()
+    hits = [g for g in goals if g.name.strip().casefold() == wanted]
+    if len(hits) > 1 and args.type is not None:
+        hits = [g for g in hits if g.type == args.type] or hits
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        have = ", ".join(g.name for g in goals) or "none"
+        raise LookupError(f"There is no goal called {args.name!r}. On record: {have}.")
+    raise LookupError(f"{len(hits)} goals are called {args.name!r}: say which by its type.")
+
+
+def _goal_change(db: Session, args: WriteGoalArgs) -> _GoalChange:
+    """The goal on record and the body the form would send, validated by the
+    schema it posts through, or a refusal saying why."""
+    if args.action == "delete":
+        return _GoalChange(_goal_named(db, args), None)
+    goal = _goal_named(db, args) if args.action == "change" else None
+    if goal is None:
+        body = {"name": args.name.strip(), "type": args.type,
+                "currency": _stored_currency(args.currency) if args.currency else fx.base_currency(db)}
+        body.update({f: getattr(args, f) for f in _GOAL_TARGET})
+    else:
+        body = _goal_body(goal)
+        if args.new_name:
+            body["name"] = args.new_name.strip()
+        if args.type is not None:
+            body["type"] = args.type
+        if args.currency:
+            body["currency"] = _stored_currency(args.currency)
+        for f in _GOAL_TARGET:
+            if getattr(args, f) is not None:
+                body[f] = getattr(args, f)
+    if body["type"] != "target_amount":
+        given = [f for f in _GOAL_TARGET if getattr(args, f) is not None]
+        if given:
+            raise LookupError(
+                f"A goal of type {body['type']} stores no {', '.join(given)}: only a "
+                "target_amount goal has an amount and a date to reach it by."
+            )
+        body.update({f: None for f in _GOAL_TARGET})
+    body = {k: (v.isoformat() if isinstance(v, datetime.date) else v) for k, v in body.items()}
+    schemas.GoalCreate(**body)
+    return _GoalChange(goal, body)
+
+
+def _goal_text(body: dict) -> str:
+    """A goal in a line: its name, and its target when it has one."""
+    if body.get("type") == "target_amount" and body.get("target_amount") is not None:
+        by = f" by {body['target_date']}" if body.get("target_date") else ""
+        return f"{body['name']}, {body['target_amount']:.2f} {body['currency']}{by}"
+    return f"{body['name']} ({_GOAL_TYPES.get(body.get('type'), body.get('type'))})"
+
+
+_GOAL_FIELDS = (
+    ("name", "Name"), ("type", "For"), ("currency", "Currency"),
+    ("target_amount", "Target"), ("target_date", "By"),
+    ("current_amount", "Set aside now"), ("monthly_contribution", "Each month"),
+)
+
+
+def _propose_goal(db: Session, args: WriteGoalArgs) -> Proposal:
+    """A new goal is an append and gets the light confirmation; changing or
+    deleting one rewrites what is on record, with the diff."""
+    change = _goal_change(db, args)
+    if change.goal is None:
+        same = sorted(g.id for g in crud.get_goals(db) if g.name.strip().casefold() == change.body["name"].casefold())
+        return Proposal(
+            title=f"add goal: {_goal_text(change.body)}",
+            fingerprint=f"same name={same}|currency={change.body['currency']}",
+            consequence="It joins their goals on the Profile page, and the analyses read it.",
+        )
+    now = _goal_body(change.goal)
+    fingerprint = json.dumps(now, sort_keys=True, default=str)
+    touches = f'the goal "{change.goal.name}"'
+    if change.body is None:
+        return Proposal(
+            title=f"delete goal: {_goal_text(now)}",
+            fingerprint=fingerprint,
+            confirmation="diff",
+            consequence="The goal goes from their list, and nothing brings it back.",
+            diff=[{"field": "Goal", "now": _goal_text(now), "proposed": "deleted"}],
+            touches=touches,
+        )
+
+    def shown(value):
+        if value is None:
+            return None
+        return f"{value:.2f}" if isinstance(value, float) else str(value)
+
+    return Proposal(
+        title=f"change goal: {change.goal.name}",
+        fingerprint=fingerprint,
+        confirmation="diff",
+        consequence="This replaces what the goal says on record, and the old values do not come back.",
+        diff=[
+            {"field": label, "now": shown(now.get(f)), "proposed": shown(change.body.get(f))}
+            for f, label in _GOAL_FIELDS
+            if now.get(f) != change.body.get(f)
+        ],
+        touches=touches,
+    )
+
+
+def _write_goal(db: Session, args: WriteGoalArgs) -> dict:
+    """The goal, through the crud function the form's request calls."""
+    change = _goal_change(db, args)
+    if change.body is None:
+        gone = _goal_body(change.goal)
+        crud.delete_goal(db, change.goal.id)
+        return {"deleted": gone}
+    data = schemas.GoalCreate(**change.body)
+    goal = crud.create_goal(db, data) if change.goal is None else crud.update_goal(db, change.goal.id, data)
+    return {"goal_id": goal.id, **_goal_body(goal)}
+
+
+_GOAL_LABELS = {
+    "action": "",
+    "name": "Goal",
+    "new_name": "New name",
+    "type": "For",
+    "currency": "Currency",
+    "target_amount": "Target",
+    "target_date": "By",
+    "current_amount": "Set aside now",
+    "monthly_contribution": "Each month",
+}
+
+
+def _goal_receipt(result: dict) -> list[tuple]:
+    if "deleted" in result:
+        return [("Deleted", result["deleted"].get("name"), "text")]
+    return [
+        ("Goal", result.get("name"), "text"),
+        ("Target", result.get("target_amount"), "amount", result.get("currency")),
+        ("By", result.get("target_date"), "date"),
+    ]
+
+
+def _goal_done(card: dict) -> str:
+    return {"add": "Recorded", "change": "Changed", "delete": "Deleted"}.get(
+        (card.get("arguments") or {}).get("action"), "Recorded"
+    )
+
+
 # --- suggest_instrument -------------------------------------------------------
 #
 # The one card that is NOT a write to the reader's records. Accepting it moves
@@ -2901,8 +3129,7 @@ REGISTRY: dict[str, Tool] = {
                 "shows them what it would replace. A question of the Profile "
                 "form takes only the kind of answer the form offers (listed "
                 "under question_key); anything else is refused. Never a goal: "
-                "goals are a list of their own, which no tool writes yet, so "
-                "say that instead of filing one as an answer here."
+                "goals are a list of their own, written with `write_goal`."
             ),
             arguments=UpdateProfileArgs,
             run=_update_profile,
@@ -2953,6 +3180,20 @@ REGISTRY: dict[str, Tool] = {
             propose=_propose_balance,
             labels=_BALANCE_LABELS,
             receipt=_balance_receipt,
+        ),
+        Tool(
+            name="write_goal",
+            description=(
+                "Propose adding, changing or deleting one of their goals, as the Goals "
+                "form on the Profile page writes it. A goal is its own list and never an "
+                "answer in the questionnaire."
+            ),
+            arguments=WriteGoalArgs,
+            run=_write_goal,
+            propose=_propose_goal,
+            labels=_GOAL_LABELS,
+            receipt=_goal_receipt,
+            done=_goal_done,
         ),
         Tool(
             name="suggest_instrument",
