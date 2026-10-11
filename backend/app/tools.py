@@ -1752,7 +1752,9 @@ def _propose_analysis(db: Session, args: RunAnalysisArgs) -> Proposal:
         fingerprint=_DEPENDS_ON_NOTHING,
         consequence=(
             f"{chain.MIN_STEPS} model calls, up to {chain.MAX_STEPS} if the "
-            f"disagreement is real, on {' and '.join(engines)}. {last}"
+            f"disagreement is real, on {' and '.join(engines)}. {last} A step "
+            "OpenRouter turns away with 500, 502 or 503, which it says it does not "
+            "bill, is asked once more."
         ),
     )
 
@@ -1779,7 +1781,10 @@ def _walk_analysis(db: Session, args: RunAnalysisArgs) -> Iterator[Working]:
         except StopIteration as done:
             run = done.value
             break
-        yield Working(step_no=step.step_no, label=step.title, duration_ms=step.duration_ms)
+        # A step OpenRouter turned away once and that was asked again says so
+        # on its own line, where the reader reads the run as it goes.
+        label = f"{step.title} ({step.asked_again})" if step.asked_again else step.title
+        yield Working(step_no=step.step_no, label=label, duration_ms=step.duration_ms)
 
     return {
         "run_id": run.id,

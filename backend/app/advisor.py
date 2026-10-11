@@ -1323,7 +1323,15 @@ def sdk():
 def _client():
     """The configured OpenRouter client, or an AdvisorError saying what is
     missing. Shared by the one-shot call and the streaming one so the two
-    cannot disagree about what "configured" means."""
+    cannot disagree about what "configured" means.
+
+    It sends each request once (brief AN, 2026-10-10). The SDK's default sends
+    a failed one up to twice more by itself (after a connection error, a
+    timeout, a 408, 409, 429 or any 5xx: openai 2.41.0, read in its
+    `_constants.py` and `_base_client.py`), with nothing said to the reader,
+    and whatever an attempt before the last one cost was in no record. A
+    failure is said instead (`_refused`), and the one second ask the app makes
+    is its own and said too (`call_llm`, ASKED_AGAIN_ON)."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise AdvisorError(
@@ -1334,6 +1342,7 @@ def _client():
         base_url=OPENROUTER_BASE_URL,
         api_key=api_key,
         default_headers={"X-Title": "Aurelio"},
+        max_retries=0,
     )
 
 
@@ -1566,11 +1575,28 @@ def _failed_partway(failure, cost: float | None) -> Unfinished:
     )
 
 
+# The statuses a step of the analysis is asked again on, once (brief AN). A
+# failed step stops the run, and the next run starts from its first step, so a
+# refusal that would have passed in a second costs the reader a whole
+# analysis. OpenRouter answers 200 as soon as a provider accepts a request
+# (its page on errors, read 2026-10-10), so one of these statuses means that no
+# provider took it, and its page on failover (updated 2026-09-24) says that a
+# request which fails is not billed. Not a 429: the same page reports 429s
+# that consumed credits. Not a timeout (408, 504, or the SDK's own) nor a
+# dropped connection, where a provider may have been at work.
+ASKED_AGAIN_ON = (500, 502, 503)
+
+
 def call_llm(system_prompt: str, user_content: str, model: str | None = None) -> dict:
     """Shared OpenRouter call. `model` overrides the configured default, so a
     chain can give each role its own model. Returns {"analysis", "model",
-    "cost"}; raises AdvisorError, and `Unfinished` for an answer that did not
-    end on a normal stop.
+    "cost", "asked_again"}; raises AdvisorError, and `Unfinished` for an
+    answer that did not end on a normal stop.
+
+    Asked once, or twice when the first ask is turned away with a status of
+    ASKED_AGAIN_ON. `asked_again` is then the words the step's line carries,
+    and None otherwise. A second refusal stops the step with its own sentence
+    and says that it was the second ask.
 
     How the answer ended is read before what it says. A token cap ends it on
     `length` (measured on 2026-10-02, on Anthropic and on Alibaba), and the
@@ -1586,16 +1612,27 @@ def call_llm(system_prompt: str, user_content: str, model: str | None = None) ->
     runs that get that far."""
     client = _client()
     model = resolve_model(model)
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    asked_again = None
     try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-        )
+        completion = client.chat.completions.create(model=model, messages=messages)
     except Exception as exc:  # network / auth / model errors -> a sentence (_refused)
-        raise _refused(exc, model) from exc
+        status = getattr(exc, "status_code", None)
+        if not isinstance(exc, sdk().APIStatusError) or status not in ASKED_AGAIN_ON:
+            raise _refused(exc, model) from exc
+        try:
+            completion = client.chat.completions.create(model=model, messages=messages)
+        except Exception as again:
+            refused = _refused(again, model)
+            refused.args = (
+                f"{refused} The step was asked twice: OpenRouter had refused the first "
+                f"ask with {status} too, which it says it does not bill.",
+            )
+            raise refused from again
+        asked_again = f"asked again after OpenRouter's {status}, which it says it does not bill"
 
     failure = getattr(completion, "error", None)
     if failure:
@@ -1612,7 +1649,12 @@ def call_llm(system_prompt: str, user_content: str, model: str | None = None) ->
         )
     if not content:
         raise AdvisorError("The model returned an empty response.")
-    return {"analysis": content, "model": model, "cost": _cost(completion)}
+    return {
+        "analysis": content,
+        "model": model,
+        "cost": _cost(completion),
+        "asked_again": asked_again,
+    }
 
 
 def _cost(completion) -> float | None:

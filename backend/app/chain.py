@@ -182,6 +182,9 @@ class Step:
     model: str
     duration_ms: int
     cost: float | None
+    # Words for the step's line when OpenRouter turned its first ask away and
+    # it was asked once more (`advisor.call_llm`, ASKED_AGAIN_ON); else None.
+    asked_again: str | None = None
 
 
 def _steps(numbers: list[int]) -> str:
@@ -321,8 +324,11 @@ def run_chain(db: Session) -> Iterator[Step]:
     answer did not raise. Whatever stops a step, the error says, after its
     cause, which step the run stopped at, that nothing was kept, and what the
     run had cost until then, since a run that is not saved records its spend
-    nowhere. Nothing retries the step: the card the reader confirmed quoted a
-    number of calls, and a cut on the same prompt and limit would repeat.
+    nowhere. A cut is not retried: the card the reader confirmed quoted a
+    number of calls, and a cut on the same prompt and limit would repeat. The
+    one second ask is `call_llm`'s, for a request no provider took (a 500, 502
+    or 503, which OpenRouter says it does not bill); the card says so before
+    the run, and the step's line when it happens.
     """
     portfolio_ctx = advisor.build_portfolio_context(db)
     person_ctx = advisor.build_person_context(db)
@@ -351,6 +357,7 @@ def run_chain(db: Session) -> Iterator[Step]:
                 "output": result["analysis"],
                 "duration_ms": int((time.monotonic() - started) * 1000),
                 "cost": result.get("cost"),
+                "asked_again": result.get("asked_again"),
             }
         )
         return result["analysis"]
@@ -365,6 +372,7 @@ def run_chain(db: Session) -> Iterator[Step]:
             model=last["model"],
             duration_ms=last["duration_ms"],
             cost=last["cost"],
+            asked_again=last["asked_again"],
         )
 
     # 1 — the numbers, with no idea whose they are.
