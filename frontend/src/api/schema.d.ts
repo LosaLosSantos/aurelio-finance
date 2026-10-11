@@ -1259,7 +1259,8 @@ export interface paths {
          *
          *     422 for a currency the feed does not quote. 503, with nothing changed, when
          *     the rates against the new base cannot be stored first: see
-         *     `fx.choose_base` for why a base is not chosen before its rates are in.
+         *     `fx.choose_base` for why a base is not chosen before its rates are in. The
+         *     rules are `crud.change_base`'s, which the chat's card goes through too.
          */
         put: operations["put_base_currency_api_settings_base_currency_put"];
         post?: never;

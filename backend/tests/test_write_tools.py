@@ -759,6 +759,9 @@ def test_the_write_tools_do_not_run_when_the_model_calls_them(client):
         "set_cash_balance",
         # And the goals (test_the_chat_writes_a_goal.py).
         "write_goal",
+        # And the base, which asks the ECB's feed while it writes, so it walks
+        # as the analysis does (test_the_chat_changes_the_base.py).
+        "change_base_currency",
     }
 
     # A buy names its institution, because one that does not is now refused

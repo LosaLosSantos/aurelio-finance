@@ -34,3 +34,11 @@ export function heading(outcome: Outcome | undefined, done?: string | null): str
 /** Said under a stale card's title. */
 export const STALE_LINE =
   "What this card was drawn against changed before it was confirmed, so nothing was written. Ask again for a fresh one.";
+
+/** The word over a confirmed card's work, while it runs and once it is
+    done: the analysis, and since brief AN the base, whose new rates are
+    fetched from the ECB before it changes. */
+export function workHeading(tool: string | undefined, running: boolean): string {
+  if (tool === "change_base_currency") return running ? "Changing the base" : "Base changed";
+  return running ? "Analyzing" : "Analyzed";
+}

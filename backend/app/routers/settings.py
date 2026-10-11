@@ -87,21 +87,12 @@ def put_base_currency(
 
     422 for a currency the feed does not quote. 503, with nothing changed, when
     the rates against the new base cannot be stored first: see
-    `fx.choose_base` for why a base is not chosen before its rates are in."""
-    wanted = data.base_currency.strip().upper()
-    if wanted != fx.base_currency(db):
-        available = fx.feed_currencies(db)
-        if wanted not in available:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    f"{wanted} is not a currency the ECB rate feed quotes, so no "
-                    f"total could be converted into it. Choose one of: "
-                    f"{', '.join(available)}."
-                ),
-            )
-        try:
-            fx.choose_base(db, wanted, since=crud.earliest_dated_record(db))
-        except fx.BaseRatesUnavailable as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    `fx.choose_base` for why a base is not chosen before its rates are in. The
+    rules are `crud.change_base`'s, which the chat's card goes through too."""
+    try:
+        crud.change_base(db, data.base_currency)
+    except fx.BaseNotQuoted as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
+    except fx.BaseRatesUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     return _base_read(db)

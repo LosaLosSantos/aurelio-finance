@@ -79,6 +79,7 @@ import datetime
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -2431,6 +2432,90 @@ def _goal_done(card: dict) -> str:
     )
 
 
+# --- change_base_currency ----------------------------------------------------------
+#
+# The currency every total is shown in, changed as the Profile page's Save
+# changes it (brief AN): through `crud.change_base`, the function its request
+# calls. Changing it asks the ECB's feed for the new base's rates and stores
+# them before the setting moves, so it runs as the analysis runs, on the
+# stream and outside the confirmation's unit of work: a fetch inside it would
+# hold SQLite's write lock while the network answers.
+
+
+class ChangeBaseCurrencyArgs(BaseModel):
+    """The currency every total is to be shown in."""
+
+    currency: schemas.StatedCurrency = Field(
+        ..., description="An ISO code the ECB's reference rates quote, such as EUR, USD, GBP, CHF."
+    )
+
+
+def _base_change(db: Session, args: ChangeBaseCurrencyArgs) -> tuple[str, str]:
+    """(the base now, the one asked for), or a refusal in the settings
+    request's own words."""
+    now, wanted = fx.base_currency(db), args.currency.strip().upper()
+    if wanted == now:
+        raise LookupError(f"{now} is the base already: nothing would change.")
+    available = fx.feed_currencies(db)
+    if wanted not in available:
+        raise LookupError(
+            f"{wanted} is not a currency the ECB rate feed quotes, so no total could be "
+            f"converted into it. Choose one of: {', '.join(available)}."
+        )
+    return now, wanted
+
+
+def _propose_base(db: Session, args: ChangeBaseCurrencyArgs) -> Proposal:
+    """A setting rewritten, so the diff; what changes, what does not, and that
+    the ECB's feed is asked before anything moves."""
+    now, wanted = _base_change(db, args)
+    since = crud.earliest_dated_record(db)
+    reach = f"from {since} to today" if since else "for today"
+    return Proposal(
+        title=f"base currency: {now} → {wanted}",
+        fingerprint=f"base={now}",
+        confirmation="diff",
+        consequence=(
+            f"Every total and figure the app shows is shown in {wanted} from then on, "
+            "the net worth's history included. Nothing stored is rewritten: every "
+            "amount keeps the currency it was recorded in, and a sum fixed on its day "
+            "keeps its figure. Confirming asks the ECB's feed for its rates against "
+            f"{wanted} {reach} and stores them first; if the feed does not answer, "
+            "nothing changes."
+        ),
+        diff=[{"field": "Base currency", "now": now, "proposed": wanted}],
+        touches="the base currency",
+    )
+
+
+def _walk_base(db: Session, args: ChangeBaseCurrencyArgs) -> Iterator[Working]:
+    """The change, through the function the settings request calls, said as
+    one step once the rates are stored and the base has moved."""
+    started = time.monotonic()
+    try:
+        was = crud.change_base(db, args.currency)
+    except (fx.BaseRatesUnavailable, fx.BaseNotQuoted) as exc:
+        # Written for the reader already: the base is unchanged and why.
+        raise advisor.AdvisorError(str(exc)) from exc
+    base = fx.base_currency(db)
+    yield Working(
+        step_no=1,
+        label=f"The ECB's rates against {base} fetched and stored, and the base changed",
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
+    return {"base_currency": base, "was": was}
+
+
+_BASE_LABELS = {"currency": "Base currency"}
+
+
+def _base_receipt(result: dict) -> list[tuple]:
+    return [
+        ("Base currency now", result.get("base_currency"), "text"),
+        ("It was", result.get("was"), "text"),
+    ]
+
+
 # --- suggest_instrument -------------------------------------------------------
 #
 # The one card that is NOT a write to the reader's records. Accepting it moves
@@ -3194,6 +3279,20 @@ REGISTRY: dict[str, Tool] = {
             labels=_GOAL_LABELS,
             receipt=_goal_receipt,
             done=_goal_done,
+        ),
+        Tool(
+            name="change_base_currency",
+            description=(
+                "Propose changing the currency every total is shown in, as the Profile "
+                "page's Save changes it. Nothing stored is rewritten; confirming asks "
+                "the ECB's feed for the new base's rates first."
+            ),
+            arguments=ChangeBaseCurrencyArgs,
+            walk=_walk_base,
+            propose=_propose_base,
+            labels=_BASE_LABELS,
+            receipt=_base_receipt,
+            done="Base changed",
         ),
         Tool(
             name="suggest_instrument",

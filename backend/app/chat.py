@@ -305,7 +305,9 @@ _PROMPT_TAIL = (
     "of their accounts to another, both sides as the Cash flow page records "
     "them. `set_cash_balance`: what an account held on a day; from that day it "
     "holds that figure, and everything dated up to it counts as already in it. "
-    "Two rules across all of these. "
+    "`change_base_currency`: the currency every total is shown in; nothing they "
+    "recorded is rewritten, and confirming asks the ECB's feed for the new "
+    "base's rates first. Two rules across all of these. "
     "Write in the language of the DATA, not of the question: 'ho comprato "
     "azioni Siemens' is an asset called "
     "'Siemens', never 'Azioni Siemens', the same separation as between the "
@@ -538,8 +540,10 @@ def _messages(
 class Pending:
     """A card the reader has confirmed whose tool has NOT run yet.
 
-    Only for a tool that reports as it goes — today only `run_analysis`, three
-    to six model calls and a minute of them. Everything else is written before
+    Only for a tool that reports as it goes: `run_analysis`, three to six model
+    calls and a minute of them, and `change_base_currency`, which asks the
+    ECB's feed for the new base's rates before the setting moves (brief AN), and
+    must not hold SQLite's write lock while it waits. Everything else is written before
     the stream starts, which is what makes "a stream that starts at all is a
     decision already taken" true; a minute of that rule would be a minute of a
     request holding open with nothing on the wire, and the steps the reader is
@@ -1407,8 +1411,8 @@ def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]
         found = crud.find_chat_card(db, pending.card_id)
         if found is None:  # the conversation was deleted while it ran
             raise advisor.AdvisorError(
-                "The conversation this belonged to is gone. The analysis ran "
-                "and is on record."
+                "The conversation this belonged to is gone. What the card did is "
+                "done, and on record."
             )
         message, _ = found
         with unit_of_work(db):
@@ -1417,8 +1421,8 @@ def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]
             )
             if decided is None:
                 raise advisor.AdvisorError(
-                    "Another window decided this card while the analysis was "
-                    "running. It ran, and it is on record."
+                    "Another window decided this card while its work was running. "
+                    "It is done, and on record."
                 )
         messages = [*_messages(db, message.conversation), _decision_note(message, pending.card_id)]
         return messages, decided

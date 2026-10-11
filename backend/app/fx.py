@@ -59,6 +59,11 @@ class BaseRatesUnavailable(Exception):
     """The rates against a base could not be stored, so it cannot be chosen."""
 
 
+class BaseNotQuoted(ValueError):
+    """A base the ECB's feed does not quote: no total could be converted into
+    it (`crud.change_base`)."""
+
+
 # The first day the ECB published reference rates. A figure dated before it
 # has no rate in any base, and a store cannot be asked to reach further back.
 FEED_FIRST_DAY = "1999-01-04"

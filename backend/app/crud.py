@@ -1222,6 +1222,31 @@ def upsert_price_caches(db: Session, quotes: dict[str, dict]) -> None:
                 db.expire(held)
 
 
+def change_base(db: Session, wanted: str) -> str:
+    """Make `wanted` the base, as the settings page's request asks it, and
+    return the base it was.
+
+    One function for the two doors, the Profile page's Save and the chat's
+    card (brief AN), so neither can drift from the other. Upper-cased; the same
+    base again changes nothing; a code the ECB's feed does not quote is refused
+    (`fx.BaseNotQuoted`, the request's 422), since no total could be converted
+    into it; otherwise the new base's rates are fetched and stored from the
+    oldest recorded day before the setting changes, or nothing changes
+    (`fx.choose_base`, `fx.BaseRatesUnavailable`, the request's 503)."""
+    wanted = wanted.strip().upper()
+    was = fx.base_currency(db)
+    if wanted == was:
+        return was
+    available = fx.feed_currencies(db)
+    if wanted not in available:
+        raise fx.BaseNotQuoted(
+            f"{wanted} is not a currency the ECB rate feed quotes, so no total could "
+            f"be converted into it. Choose one of: {', '.join(available)}."
+        )
+    fx.choose_base(db, wanted, since=earliest_dated_record(db))
+    return was
+
+
 def earliest_dated_record(db: Session) -> str | None:
     """The oldest day any figure is recorded on — the first point the net
     worth history draws, and so the first day a reading may need a rate for."""

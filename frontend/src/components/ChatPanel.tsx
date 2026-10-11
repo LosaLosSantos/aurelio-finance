@@ -38,7 +38,7 @@ import {
 import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
-import { STALE_LINE, heading, waiting } from "./cardOutcome";
+import { STALE_LINE, heading, waiting, workHeading } from "./cardOutcome";
 
 /* The chat that reads.
 
@@ -245,8 +245,9 @@ function Sources({ block }: { block: ChatSourcesBlock }) {
    is renamed — and what it unlocks is a link and nothing else. */
 const ANALYZER = "run_analysis";
 
-/* What the analyzer has finished, while it is finishing it. Three to six model
-   calls and a minute of them, and the page this replaced would not fake a
+/* What a confirmed card's work has finished, while it is finishing it: the
+   analyzer's three to six model calls, or, since brief AN, the base's new
+   rates fetched from the ECB. The page this replaced would not fake a
    progress bar because it could not: the chain wrote nothing until all of it
    had finished, so "step 2 of 4" was a sentence nobody had been told. Each of
    these arrived as an event saying a step is done, so every line here is
@@ -256,7 +257,7 @@ function Steps({ steps, running }: { steps: ChatStepEvent[]; running: boolean })
     <div className="my-2 border-l border-hair pl-3">
       <p className="flex items-baseline gap-2 text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">
         {running ? <Spinner className="h-3 w-3" /> : null}
-        <span>{running ? "Analyzing" : "Analyzed"}</span>
+        <span>{workHeading(steps[0]?.tool, running)}</span>
       </p>
       <ol className="mt-1 space-y-0.5">
         {steps.map((s) => (

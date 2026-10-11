@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { STALE_LINE, heading, waiting } from "../src/components/cardOutcome.ts";
+import { STALE_LINE, heading, waiting, workHeading } from "../src/components/cardOutcome.ts";
 
 test("a card waits only while nothing became of it", () => {
   assert.equal(waiting("pending"), true);
@@ -23,4 +23,11 @@ test("a stale card says nothing was written and how to get a fresh one", () => {
   assert.match(STALE_LINE, /nothing was written/);
   assert.match(STALE_LINE, /Ask again for a fresh one/);
   assert.equal(STALE_LINE.includes(String.fromCharCode(0x2014)), false, "no em dash");
+});
+
+test("the work a confirmed card does is named by its tool", () => {
+  assert.equal(workHeading("run_analysis", true), "Analyzing");
+  assert.equal(workHeading("run_analysis", false), "Analyzed");
+  assert.equal(workHeading("change_base_currency", true), "Changing the base");
+  assert.equal(workHeading("change_base_currency", false), "Base changed");
 });
