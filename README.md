@@ -77,14 +77,16 @@ underneath.
 
 The default model is Claude Opus 5.5 ($4 per million input tokens, $20 per
 million output tokens); you can pick another in the chat. What it cost,
-measured in October 2026 (the chat's rows on 9 October, on a test database):
+measured in October 2026 (the chat's rows on 10 October, a web search on 9
+October, on a test database):
 
 | | cost |
 |---|---|
-| A first question, answered in one round | $0.10 |
-| A follow-up, answered in one round | $0.013 to $0.034 |
-| A first question that searched the web twice, answered in two rounds | $0.12 |
-| Each web search, included in the row above | $0.0073 to $0.0075 |
+| A first question that drew two cards, answered in one round | $0.11 |
+| A follow-up, answered in one round | $0.028 |
+| A follow-up that drew a card, answered in one round | $0.013 to $0.020 |
+| Confirming a card, with the reply after it | $0.026 to $0.057 |
+| Each web search, on top of the round that asked for it | $0.0073 to $0.0075 |
 | An analysis | $0.33 to $0.51 |
 
 ## Development
