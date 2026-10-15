@@ -1208,7 +1208,10 @@ class Portfolio(BaseModel):
     the cache); `prices_as_of` is the OLDEST close date among the priced rows,
     so the user knows how stale the view can be. `total_realized` /
     `total_dividends` sum the gains locked in by sells and the dividends
-    collected since each position's snapshot anchor."""
+    collected since each account's first situation: every stretch between its
+    situations, read as each was stored, and what follows the latest (brief
+    AW). A row's own `realized_pl` and `dividends` cover only what follows its
+    situation."""
 
     model_config = API_OUT
 
@@ -1234,16 +1237,29 @@ class Portfolio(BaseModel):
     priced: bool
     prices_as_of: str | None
     base_currency: BaseCurrency
-    total_realized: float
+    total_realized: float = Field(
+        ...,
+        description=(
+            "What sells and closes realized on the units paid for, since each "
+            "account's first situation; a row's own realized_pl covers only "
+            "what follows its situation"
+        ),
+    )
     total_realized_movement: float = Field(
         ...,
         description=(
             "What sells and closes realized on situations' values that no "
             "purchase price was recorded for (see PortfolioRow.realized_movement), "
-            "beside total_realized and never inside it"
+            "beside total_realized and never inside it, over the same window"
         ),
     )
-    total_dividends: float
+    total_dividends: float = Field(
+        ...,
+        description=(
+            "The dividends collected since each account's first situation; a "
+            "row's own dividends cover only what follows its situation"
+        ),
+    )
     total_dividends_estimated: float = Field(
         ...,
         description=(

@@ -284,7 +284,10 @@ def test_the_row_and_the_totals_read_by_the_chat_say_the_movement(client):
         "realized P/L +15.00 on the units paid for, and movement +50.00 on a situation's "
         "value with no purchase price on record (NOT profit)"
     ) in ctx
-    assert "- TOTAL realized P/L: +15.00 on the units paid for; realized movement +50.00" in ctx
+    assert (
+        "- TOTAL realized P/L (since each account's first situation; each row's own figure "
+        "since its situation): +15.00 on the units paid for; realized movement +50.00"
+    ) in ctx
 
 
 def test_a_position_all_paid_keeps_its_result_to_the_bit(client):

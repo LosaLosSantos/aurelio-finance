@@ -421,6 +421,13 @@ def _age(day: str) -> str:
     return f"{days} day{'' if days == 1 else 's'} before today"
 
 
+# The window of the realized and dividend TOTAL lines (brief AW): every stretch
+# since each account's first situation, while each position's own figures
+# cover only what follows its situation. Both said in one clause, so a model
+# adding up the rows is not surprised by the total.
+_TOTALS_WINDOW = "since each account's first situation; each row's own figure since its situation"
+
+
 def _render_positions(portfolio: dict, funds: dict) -> list[str]:
     """The investment positions as prose: one line per row, then the totals.
 
@@ -523,14 +530,15 @@ def _render_positions(portfolio: dict, funds: dict) -> list[str]:
         lines.append(line)
     if portfolio["total_realized_movement"]:
         lines.append(
-            f"- TOTAL realized P/L: {portfolio['total_realized']:+.2f} on the units paid for; "
-            f"realized movement {portfolio['total_realized_movement']:+.2f} on situations' "
-            "values with no purchase price on record (NOT profit, and no tax is estimated on it)"
+            f"- TOTAL realized P/L ({_TOTALS_WINDOW}): {portfolio['total_realized']:+.2f} on "
+            f"the units paid for; realized movement {portfolio['total_realized_movement']:+.2f} "
+            "on situations' values with no purchase price on record (NOT profit, and no tax is "
+            "estimated on it)"
         )
     elif portfolio["total_realized"]:
-        lines.append(f"- TOTAL realized P/L: {portfolio['total_realized']:+.2f}")
+        lines.append(f"- TOTAL realized P/L ({_TOTALS_WINDOW}): {portfolio['total_realized']:+.2f}")
     if portfolio["total_dividends"]:
-        line = f"- TOTAL dividends collected: {portfolio['total_dividends']:.2f}"
+        line = f"- TOTAL dividends collected ({_TOTALS_WINDOW}): {portfolio['total_dividends']:.2f}"
         gross = portfolio["total_dividends_estimated"]
         if gross:
             line += (

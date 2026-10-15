@@ -210,8 +210,10 @@ BASIS_CAVEATS = (
     "The realized gain is computed at AVERAGE cost. Tax authorities generally "
     "are not: Italy matches disposals LIFO, Germany FIFO, so the gain a real "
     "return reports will differ from this one even at the same rate.",
-    "It covers the whole recorded ledger, not a tax year, and nothing here "
-    "carries losses forward or offsets them against gains across years.",
+    "It covers the ledger from each account's first situation on, not a tax "
+    "year: what is dated on or before an account's first situation is in that "
+    "situation and is not read. Nothing here carries losses forward or offsets "
+    "them against gains across years.",
 )
 
 

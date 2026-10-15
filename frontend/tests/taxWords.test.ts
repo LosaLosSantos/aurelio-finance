@@ -12,6 +12,7 @@ import { test } from "node:test";
 import type { Schemas } from "../src/api/types";
 import { money } from "../src/components/money.ts";
 import {
+  TOTALS_WINDOW,
   estimatedTotal,
   movementLine,
   realizedMovement,
@@ -88,4 +89,10 @@ test("the realized line names the movement beside the P/L", () => {
     `movement +${eur.format(100)} (no purchase price on record)`,
   );
   assert.equal(realizedMovement(0, "EUR"), null);
+});
+
+test("the realized line says the window its totals cover", () => {
+  /* Brief AW: the totals read every stretch since each account's first
+     situation, where they read only what followed its latest. */
+  assert.equal(TOTALS_WINDOW, "since each account's first situation");
 });

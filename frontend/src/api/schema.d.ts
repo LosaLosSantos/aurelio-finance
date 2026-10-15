@@ -4140,7 +4140,10 @@ export interface components {
          *     the cache); `prices_as_of` is the OLDEST close date among the priced rows,
          *     so the user knows how stale the view can be. `total_realized` /
          *     `total_dividends` sum the gains locked in by sells and the dividends
-         *     collected since each position's snapshot anchor.
+         *     collected since each account's first situation: every stretch between its
+         *     situations, read as each was stored, and what follows the latest (brief
+         *     AW). A row's own `realized_pl` and `dividends` cover only what follows its
+         *     situation.
          */
         Portfolio: {
             /**
@@ -4185,7 +4188,10 @@ export interface components {
              * @description Of total_book, the money paid: the rest is situations' values that no purchase price was recorded for (see PortfolioRow.book_paid).
              */
             total_book_paid: number;
-            /** Total Dividends */
+            /**
+             * Total Dividends
+             * @description The dividends collected since each account's first situation; a row's own dividends cover only what follows its situation
+             */
             total_dividends: number;
             /**
              * Total Dividends Estimated
@@ -4197,11 +4203,14 @@ export interface components {
              * @description Sum of what they are WORTH: the market price where there is one, the last observed value where there is not. Null when nothing at all is priced. It is deliberately not the sum of the delta column: the rows the market could not price contribute their observation here, and no P/L.
              */
             total_market: number | null;
-            /** Total Realized */
+            /**
+             * Total Realized
+             * @description What sells and closes realized on the units paid for, since each account's first situation; a row's own realized_pl covers only what follows its situation
+             */
             total_realized: number;
             /**
              * Total Realized Movement
-             * @description What sells and closes realized on situations' values that no purchase price was recorded for (see PortfolioRow.realized_movement), beside total_realized and never inside it
+             * @description What sells and closes realized on situations' values that no purchase price was recorded for (see PortfolioRow.realized_movement), beside total_realized and never inside it, over the same window
              */
             total_realized_movement: number;
             /**

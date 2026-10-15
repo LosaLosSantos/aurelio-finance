@@ -16,6 +16,13 @@ import { money } from "./money.ts";
 
 type TaxEstimate = Schemas["TaxEstimate"];
 
+/** The window the realized P/L, the dividends collected and the tax estimate
+    cover (brief AW): every stretch of the ledger since each account's first
+    situation. They covered only what followed each account's latest one, so a
+    new situation took out of all three what had been realized and collected
+    since the one before (measured: 208.33, 12.00 and 54.17 to 0.00). */
+export const TOTALS_WINDOW = "since each account's first situation";
+
 /** An amount with its sign always said: a movement goes up or down. */
 function signed(amount: number, base: string): string {
   return (amount > 0 ? "+" : "") + money(base).format(amount);

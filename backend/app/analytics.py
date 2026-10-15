@@ -381,7 +381,7 @@ def _units_claimed(p: positions.Position, units: dict[str, float | None]) -> flo
     return None
 
 
-def _unaccounted(db: Session, conv: fx.Converter | None = None) -> dict[str, list[dict]]:
+def _unaccounted(db: Session, conv: fx.Converter | None = None) -> dict:
     """Value the app believed an institution held that its photographs do not
     account for — and, where a situation did not account for it, what that same
     situation declared instead.
@@ -424,14 +424,23 @@ def _unaccounted(db: Session, conv: fx.Converter | None = None) -> dict[str, lis
     that, and saying which row replaced which needs a stable identity this
     schema does not have yet. It puts both numbers in the
     reader's hands, which is the whole of what is needed to tell a
-    reformulation from a loss at a glance."""
+    reformulation from a loss at a glance.
+
+    It also returns `earlier`: what each stretch of the ledger between two of
+    an account's situations realized and collected (brief AW), read here
+    because this walk already projects every situation from the one before
+    it, as stored. The Portfolio adds it to its totals, which `project` reads
+    only after each account's latest situation, and the tax estimate reads
+    those totals. Measured before: a new situation took out of all three what
+    had been realized and collected since the one before (208.33, 12.00 and
+    54.17 to 0.00)."""
     if conv is None:
         conv = fx.Converter(db)
     with conv.not_recording():
         return _unaccounted_walk(db, conv)
 
 
-def _unaccounted_walk(db: Session, conv: fx.Converter) -> dict[str, list[dict]]:
+def _unaccounted_walk(db: Session, conv: fx.Converter) -> dict:
     """`_unaccounted`'s body, run with the converter not recording what it could
     not convert — see `fx.Converter.not_recording` for why: this walk replays
     every photograph, so a single unconvertible row would be counted once per
@@ -472,6 +481,7 @@ def _unaccounted_walk(db: Session, conv: fx.Converter) -> dict[str, list[dict]]:
 
     missing: dict[tuple[int | None, str], dict] = {}
     instead: dict[tuple[int | None, str], dict] = {}
+    earlier = {"realized": 0.0, "movement": 0.0, "dividends": 0.0, "dividends_estimated": 0.0}
     for inst_id, snaps in by_inst.items():
         snaps.sort(key=lambda s: (s.date, s.id))
         inst_txs = [t for t in txs if t.institution_id == inst_id]
@@ -517,9 +527,20 @@ def _unaccounted_walk(db: Session, conv: fx.Converter) -> dict[str, list[dict]]:
                 listing=listing,
                 quotes={},
             )
+            read = positions.project(db, conv, as_of=photo.date, inputs=inputs)
+            if photo is not snaps[0]:
+                # The stretch that ends at this situation, as `project` read
+                # it while the one before was the latest (brief AW): what it
+                # realized and collected. Before the account's first situation
+                # there is no stretch: that ledger is in the photograph.
+                for p in read:
+                    earlier["realized"] += p.realized_pl
+                    earlier["movement"] += p.realized_movement
+                    earlier["dividends"] += p.dividends
+                    earlier["dividends_estimated"] += p.dividends_estimated
             believed = [
                 p
-                for p in positions.project(db, conv, as_of=photo.date, inputs=inputs)
+                for p in read
                 # A position the ledger has already taken out is not missing
                 # from the photograph — it is gone, and where it went is on
                 # record. That is a disposal, which is the thing this whole
@@ -613,7 +634,7 @@ def _unaccounted_walk(db: Session, conv: fx.Converter) -> dict[str, list[dict]]:
 
     gone = sorted(missing.values(), key=lambda r: -r["last_value"])
     arrived = sorted(instead.values(), key=lambda r: -r["value"])
-    return {"omissions": gone, "arrivals": arrived}
+    return {"omissions": gone, "arrivals": arrived, "earlier": earlier}
 
 
 def _unresolved_omissions(db: Session, conv: fx.Converter | None = None) -> list[dict]:
@@ -1217,6 +1238,15 @@ def compute_portfolio(db: Session, live: bool = False) -> dict:
         )
     any_priced = bool(as_of_dates)
     unaccounted = _unaccounted(db, conv)
+    # And what was realized and collected before each account's latest
+    # situation, every stretch read as its situations were stored (brief AW):
+    # the rows above read only what follows their own situation. The tax
+    # estimate below reads these totals, so its window is theirs.
+    earlier = unaccounted["earlier"]
+    total_realized += earlier["realized"]
+    total_realized_movement += earlier["movement"]
+    total_dividends += earlier["dividends"]
+    total_dividends_estimated += earlier["dividends_estimated"]
     # What the ledger paid before each account's latest situation that its
     # rows do not say, proposed (brief AW). The walk reads every situation, so
     # it does not record what it could not convert: the projection above has

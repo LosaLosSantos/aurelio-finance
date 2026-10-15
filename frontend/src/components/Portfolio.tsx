@@ -41,7 +41,7 @@ import { Row, RowsOrEmpty, Section, apiError, btnClass, cardClass, inputClass, l
 import { dividendWord } from "./dividendLine";
 import { ageWords } from "./calendarDays";
 import { COST_WORDS, paidShare, plSplit, pricedPaid } from "./costWords";
-import { estimatedTotal, movementLine, realizedMovement, taxPanelShown } from "./taxWords";
+import { TOTALS_WINDOW, estimatedTotal, movementLine, realizedMovement, taxPanelShown } from "./taxWords";
 import { readReason } from "./lookThroughReason";
 import {
   SHOWN,
@@ -490,6 +490,9 @@ export default function Portfolio({
             {data.total_dividends !== 0 && (
               <> · dividends collected {money(data.base_currency).format(data.total_dividends)}</>
             )}
+            {/* The window all three cover, the tax estimate's too (brief AW):
+                every stretch since each account's first situation. */}
+            <span className="text-xs text-ink-faint">, {TOTALS_WINDOW}</span>
           </span>
         )}
       </div>
