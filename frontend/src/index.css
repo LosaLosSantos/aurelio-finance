@@ -105,6 +105,27 @@
   --color-chart-1: #2a5fa8;
   --color-chart-2: #b8801a;
   --color-chart-3: #8a3f7a;
+
+  /* Text on the accent: a primary button's label, the Send button's arrow. */
+  --color-on-accent: #fff;
+
+  /* The chat's rail while the chat is open (and the closed rail under the
+     pointer, which shows what a press opens). A surface of its own, so a
+     theme can keep the app's largest block of accent quiet while the buttons
+     keep the accent; in this theme it is the olive. */
+  --color-rail: var(--color-olive);
+  --color-rail-deep: var(--color-olive-deep);
+  --color-rail-ink: var(--color-on-accent);
+
+  /* The libella's bob (Emblem.tsx), the mark's one gold. */
+  --color-gold: #c0a06a;
+
+  /* What floats above the page casts it: a "?"'s panel (shadow-md) and the
+     instrument picker's list (shadow-lg). Tailwind's own geometry, with the
+     colour a token, so the two components keep their classes. */
+  --color-shadow: #0000001a;
+  --shadow-md: 0 4px 6px -1px var(--color-shadow), 0 2px 4px -2px var(--color-shadow);
+  --shadow-lg: 0 10px 15px -3px var(--color-shadow), 0 4px 6px -4px var(--color-shadow);
 }
 
 @layer base {

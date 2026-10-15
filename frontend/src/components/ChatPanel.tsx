@@ -420,7 +420,7 @@ function Card({
             type="button"
             disabled={busy}
             onClick={() => onDecide("confirm")}
-            className="rounded-sm bg-olive px-4 py-2 text-sm font-medium tracking-wide text-white transition hover:bg-olive-deep disabled:opacity-50"
+            className="rounded-sm bg-olive px-4 py-2 text-sm font-medium tracking-wide text-on-accent transition hover:bg-olive-deep disabled:opacity-50"
           >
             {/* The button says what pressing it DOES, in the proposing tool's
                 own words, for the same reason the sentence above the diff comes
@@ -1188,7 +1188,7 @@ export default function ChatPanel({
                   type="submit"
                   disabled={!draft.trim()}
                   aria-label="Send"
-                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-olive text-white transition hover:bg-olive-deep disabled:opacity-40 disabled:hover:bg-olive"
+                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-olive text-on-accent transition hover:bg-olive-deep disabled:opacity-40 disabled:hover:bg-olive"
                 >
                   <ArrowUpIcon />
                 </button>

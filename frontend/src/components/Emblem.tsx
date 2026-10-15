@@ -17,8 +17,12 @@ import type { ReactNode } from "react";
    reads as a T and never as a face; the gap between the bob and each eye must
    survive down to ~1.5px, which is why the bob tapers instead of running
    parallel; and the shaft has to break well below the eyes or the mark closes
-   into a solid blob at favicon size. */
-const GOLD = "#c0a06a";
+   into a solid blob at favicon size.
+
+   The gold is a token like every colour (`--color-gold`, index.css), read by
+   the SVG's own fill. The favicon (public/favicon.svg) keeps its literals: it
+   is drawn by the browser's tab, outside the page and its theme. */
+const GOLD = "var(--color-gold)";
 
 export function Mark({
   size = 28,

@@ -18,7 +18,7 @@ import { localDay } from "./calendarDays";
 export const inputClass =
   "max-w-full rounded-sm border border-rule bg-surface px-3 py-2 text-sm outline-none transition focus:border-olive focus:ring-1 focus:ring-olive";
 export const btnClass =
-  "rounded-sm bg-olive px-4 py-2 text-sm font-medium tracking-wide text-white transition hover:bg-olive-deep disabled:opacity-50";
+  "rounded-sm bg-olive px-4 py-2 text-sm font-medium tracking-wide text-on-accent transition hover:bg-olive-deep disabled:opacity-50";
 export const cardClass = "rounded-sm border border-rule bg-surface";
 
 /* The id of the one `<datalist>` of currency codes, rendered once in the app

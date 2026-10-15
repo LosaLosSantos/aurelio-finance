@@ -83,6 +83,11 @@ function TabButton({
 // ground, the speech bubble, and its name spelled out down its length; the
 // panel slides out from behind it, so the control sits where the thing it
 // controls comes from.
+//
+// Open, it wears the rail's own tokens (`--color-rail`, index.css), and so
+// does the closed rail under the pointer, which shows what a press opens. It
+// is the app's largest block of accent: a theme can keep it quieter than the
+// buttons, which keep the olive.
 function ChatRail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
     <button
@@ -92,8 +97,8 @@ function ChatRail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       className={
         "relative sticky top-0 z-10 flex h-screen w-14 shrink-0 items-center justify-center border-r transition " +
         (open
-          ? "border-olive-deep bg-olive text-white hover:bg-olive-deep"
-          : "border-rule bg-olive-tint text-olive-deep hover:bg-olive hover:text-white")
+          ? "border-rail-deep bg-rail text-rail-ink hover:bg-rail-deep"
+          : "border-rule bg-olive-tint text-olive-deep hover:bg-rail hover:text-rail-ink")
       }
     >
       <span className="absolute top-5" aria-hidden="true">
