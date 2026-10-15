@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app import crud, dated, fx, models, positions, prices, tax
+from app import crud, dated, fx, models, paid_recovery, positions, prices, tax
 
 
 # --- Date / recurrence helpers --------------------------------------------
@@ -1217,6 +1217,12 @@ def compute_portfolio(db: Session, live: bool = False) -> dict:
         )
     any_priced = bool(as_of_dates)
     unaccounted = _unaccounted(db, conv)
+    # What the ledger paid before each account's latest situation that its
+    # rows do not say, proposed (brief AW). The walk reads every situation, so
+    # it does not record what it could not convert: the projection above has
+    # said it already for the rows that count.
+    with conv.not_recording():
+        recovery = paid_recovery.payload(paid_recovery.read(db, conv), names)
     return {
         "rows": rows,
         "total_book": total_book,
@@ -1252,6 +1258,8 @@ def compute_portfolio(db: Session, live: bool = False) -> dict:
         ),
         "unresolved_omissions": unaccounted["omissions"],
         "declared_instead": unaccounted["arrivals"],
+        "paid_recovery": recovery["paid_recovery"],
+        "paid_unread": recovery["paid_unread"],
         # And what no rate could be applied to at all, which is the same
         # converter's other half — see compute_summary.
         "unconverted": conv.unconverted_amounts(),

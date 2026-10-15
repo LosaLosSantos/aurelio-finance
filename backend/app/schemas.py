@@ -558,6 +558,110 @@ class ArrivedPosition(BaseModel):
     value: float
 
 
+class PaidEntry(BaseModel):
+    """An entry of the ledger a proposal read: what it shows under the row."""
+
+    model_config = API_OUT
+
+    date: str
+    kind: str = Field(..., description="buy | sell")
+    quantity: float
+    amount: float = Field(..., description="In the base currency")
+    estimated: bool = Field(
+        ..., description="A plan's buy priced at the market close, not yet corrected"
+    )
+
+
+class PaidProposal(BaseModel):
+    """What the ledger paid for a row of an account's latest situation that the
+    row does not say (brief AW): written as the row's cost only when the reader
+    accepts it."""
+
+    model_config = API_OUT
+
+    holding_id: int
+    institution_id: int
+    institution: str | None = None
+    asset_name: str
+    symbol: str
+    situation_date: str = Field(..., description="The latest situation, which holds the row")
+    quantity: float = Field(..., description="The row's units")
+    paid: float = Field(..., description="What the ledger paid, in the base currency")
+    units: float = Field(..., description="For how many of the row's units")
+    estimated: bool = Field(
+        ..., description="Some of it is a plan's buy at the market close, not a contract note"
+    )
+    since: str = Field(..., description="The situation the ledger was read from")
+    opening_paid: float | None = Field(
+        default=None,
+        description=(
+            "A cost recorded on that situation, part of `paid`, in the base "
+            "currency; null when the reading started from no cost"
+        ),
+    )
+    opening_units: float | None = None
+    entries: list[PaidEntry] = Field(
+        ..., description="The buys and sells read since `since`, in date order"
+    )
+    row_paid: float = Field(
+        ...,
+        description=(
+            "What the row says was paid today, in the base currency: 0 when it "
+            "states no cost, or a cost a situation started from the last one "
+            "carried, which this proposal then updates"
+        ),
+    )
+    row_units: float
+    row_estimated: bool
+
+
+class UnreadPurchases(BaseModel):
+    """Purchases on record that could not be read into a row, because a
+    situation's units disagreed with the ledger's there: said, with no button,
+    so they do not leave in silence (brief AW). One per row, the most recent."""
+
+    model_config = API_OUT
+
+    holding_id: int
+    institution_id: int
+    institution: str | None = None
+    asset_name: str
+    symbol: str
+    situation_date: str = Field(..., description="The situation that disagreed")
+    stated_units: float = Field(..., description="The units it says")
+    walked_units: float = Field(..., description="The units the ledger gives there")
+    paid: float = Field(..., description="Not read, in the base currency")
+    units: float = Field(..., description="The units that money paid for")
+    since: str
+    purchases: int = Field(..., description="How many purchases are behind it")
+    opening_paid: float | None = Field(
+        default=None,
+        description=(
+            "A cost recorded on the situation the reading started from, part of "
+            "`paid`, in the base currency; null when it started from no cost"
+        ),
+    )
+
+
+class PaidAccept(BaseModel):
+    """The figures the page showed for a row's proposal. The server works the
+    proposal out again and writes its own figures; these only say which
+    proposal the reader saw, so a proposal that changed since is refused."""
+
+    paid: float
+    units: float
+
+
+class PaidAcceptRow(PaidAccept):
+    holding_id: int
+
+
+class PaidAcceptAll(BaseModel):
+    """Every proposal the page showed, accepted at once, in one transaction."""
+
+    rows: list[PaidAcceptRow] = Field(..., min_length=1)
+
+
 class UnconvertedAmount(BaseModel):
     """Value that reached a total in the currency it was written in, because the
     app has no rate to convert it with.
@@ -1163,6 +1267,21 @@ class Portfolio(BaseModel):
             "expecting. Three summary rows replaced by twenty-one positions "
             "is a portfolio described better, not their value lost, and "
             "naming only the first half cannot tell the reader which it is."
+        ),
+    )
+    paid_recovery: list[PaidProposal] = Field(
+        default_factory=list,
+        description=(
+            "What the ledger paid before each account's latest situation that "
+            "its rows do not say, proposed: written only when the reader "
+            "accepts it, never proposed again once declined"
+        ),
+    )
+    paid_unread: list[UnreadPurchases] = Field(
+        default_factory=list,
+        description=(
+            "Purchases on record left unread because a situation's units "
+            "disagreed with the ledger's there"
         ),
     )
     unconverted: list[UnconvertedAmount] = Field(

@@ -640,6 +640,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/holdings/{holding_id}/paid-recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Paid
+         * @description Write what the ledger paid onto this row, as the Portfolio proposed it
+         *     (brief AW): the figures worked out again now, the page's only saying which
+         *     proposal the reader saw. 409 with a sentence when nothing is proposed any
+         *     more, the figures changed, or no rate can state them in the row's
+         *     currency.
+         */
+        post: operations["accept_paid_api_holdings__holding_id__paid_recovery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/holdings/{holding_id}/paid-recovery/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decline Paid
+         * @description Decline this row's proposal: it is never proposed again, on this row or
+         *     on a situation started from it later. 409 when nothing is proposed.
+         */
+        post: operations["decline_paid_api_holdings__holding_id__paid_recovery_decline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/holdings/{holding_id}/refresh-price": {
         parameters: {
             query?: never;
@@ -1063,6 +1108,27 @@ export interface paths {
          * @description Delete a liability balance.
          */
         delete: operations["delete_balance_api_liability_balances__balance_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/paid-recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept All Paid
+         * @description Accept every proposal the page showed at once, in one transaction: all
+         *     written, or none (409) if any is gone or has changed.
+         */
+        post: operations["accept_all_paid_api_paid_recovery_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3862,6 +3928,60 @@ export interface components {
             pct: number;
         };
         /**
+         * PaidAccept
+         * @description The figures the page showed for a row's proposal. The server works the
+         *     proposal out again and writes its own figures; these only say which
+         *     proposal the reader saw, so a proposal that changed since is refused.
+         */
+        PaidAccept: {
+            /** Paid */
+            paid: number;
+            /** Units */
+            units: number;
+        };
+        /**
+         * PaidAcceptAll
+         * @description Every proposal the page showed, accepted at once, in one transaction.
+         */
+        PaidAcceptAll: {
+            /** Rows */
+            rows: components["schemas"]["PaidAcceptRow"][];
+        };
+        /** PaidAcceptRow */
+        PaidAcceptRow: {
+            /** Holding Id */
+            holding_id: number;
+            /** Paid */
+            paid: number;
+            /** Units */
+            units: number;
+        };
+        /**
+         * PaidEntry
+         * @description An entry of the ledger a proposal read: what it shows under the row.
+         */
+        PaidEntry: {
+            /**
+             * Amount
+             * @description In the base currency
+             */
+            amount: number;
+            /** Date */
+            date: string;
+            /**
+             * Estimated
+             * @description A plan's buy priced at the market close, not yet corrected
+             */
+            estimated: boolean;
+            /**
+             * Kind
+             * @description buy | sell
+             */
+            kind: string;
+            /** Quantity */
+            quantity: number;
+        };
+        /**
          * PaidNotKept
          * @description A row whose paid part a new situation started from the last could not
          *     keep, because nothing priced the row on that day (brief AV).
@@ -3874,6 +3994,75 @@ export interface components {
              * @description The units that paid part had bought
              */
             units_paid: number;
+        };
+        /**
+         * PaidProposal
+         * @description What the ledger paid for a row of an account's latest situation that the
+         *     row does not say (brief AW): written as the row's cost only when the reader
+         *     accepts it.
+         */
+        PaidProposal: {
+            /** Asset Name */
+            asset_name: string;
+            /**
+             * Entries
+             * @description The buys and sells read since `since`, in date order
+             */
+            entries: components["schemas"]["PaidEntry"][];
+            /**
+             * Estimated
+             * @description Some of it is a plan's buy at the market close, not a contract note
+             */
+            estimated: boolean;
+            /** Holding Id */
+            holding_id: number;
+            /** Institution */
+            institution: string | null;
+            /** Institution Id */
+            institution_id: number;
+            /**
+             * Opening Paid
+             * @description A cost recorded on that situation, part of `paid`, in the base currency; null when the reading started from no cost
+             */
+            opening_paid: number | null;
+            /** Opening Units */
+            opening_units: number | null;
+            /**
+             * Paid
+             * @description What the ledger paid, in the base currency
+             */
+            paid: number;
+            /**
+             * Quantity
+             * @description The row's units
+             */
+            quantity: number;
+            /** Row Estimated */
+            row_estimated: boolean;
+            /**
+             * Row Paid
+             * @description What the row says was paid today, in the base currency: 0 when it states no cost, or a cost a situation started from the last one carried, which this proposal then updates
+             */
+            row_paid: number;
+            /** Row Units */
+            row_units: number;
+            /**
+             * Since
+             * @description The situation the ledger was read from
+             */
+            since: string;
+            /**
+             * Situation Date
+             * @description The latest situation, which holds the row
+             */
+            situation_date: string;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Units
+             * @description For how many of the row's units
+             */
+            units: number;
         };
         /**
          * PlanTargetRead
@@ -3969,6 +4158,16 @@ export interface components {
              * @description ECB reference-rate date, present when any FX conversion was applied
              */
             fx_as_of: string | null;
+            /**
+             * Paid Recovery
+             * @description What the ledger paid before each account's latest situation that its rows do not say, proposed: written only when the reader accepts it, never proposed again once declined
+             */
+            paid_recovery: components["schemas"]["PaidProposal"][];
+            /**
+             * Paid Unread
+             * @description Purchases on record left unread because a situation's units disagreed with the ledger's there
+             */
+            paid_unread: components["schemas"]["UnreadPurchases"][];
             /** Priced */
             priced: boolean;
             /** Prices As Of */
@@ -5153,6 +5352,61 @@ export interface components {
              * @description The code as the row states it, or null for a row with none
              */
             currency: string | null;
+        };
+        /**
+         * UnreadPurchases
+         * @description Purchases on record that could not be read into a row, because a
+         *     situation's units disagreed with the ledger's there: said, with no button,
+         *     so they do not leave in silence (brief AW). One per row, the most recent.
+         */
+        UnreadPurchases: {
+            /** Asset Name */
+            asset_name: string;
+            /** Holding Id */
+            holding_id: number;
+            /** Institution */
+            institution: string | null;
+            /** Institution Id */
+            institution_id: number;
+            /**
+             * Opening Paid
+             * @description A cost recorded on the situation the reading started from, part of `paid`, in the base currency; null when it started from no cost
+             */
+            opening_paid: number | null;
+            /**
+             * Paid
+             * @description Not read, in the base currency
+             */
+            paid: number;
+            /**
+             * Purchases
+             * @description How many purchases are behind it
+             */
+            purchases: number;
+            /** Since */
+            since: string;
+            /**
+             * Situation Date
+             * @description The situation that disagreed
+             */
+            situation_date: string;
+            /**
+             * Stated Units
+             * @description The units it says
+             */
+            stated_units: number;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Units
+             * @description The units that money paid for
+             */
+            units: number;
+            /**
+             * Walked Units
+             * @description The units the ledger gives there
+             */
+            walked_units: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -6373,6 +6627,70 @@ export interface operations {
             };
         };
     };
+    accept_paid_api_holdings__holding_id__paid_recovery_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holding_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaidAccept"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HoldingRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decline_paid_api_holdings__holding_id__paid_recovery_decline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                holding_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     refresh_holding_price_api_holdings__holding_id__refresh_price_post: {
         parameters: {
             query?: never;
@@ -7292,6 +7610,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_all_paid_api_paid_recovery_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaidAcceptAll"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HoldingRead"][];
+                };
             };
             /** @description Validation Error */
             422: {

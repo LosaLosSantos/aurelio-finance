@@ -524,6 +524,66 @@ def _units_paid_for(row: dict) -> None:
         )
 
 
+def write_paid(
+    db: Session,
+    holding: models.Holding,
+    cost_basis: float,
+    cost_quantity: float | None,
+    cost_estimated: bool,
+) -> None:
+    """Write what the ledger paid onto a row, as the reader accepted it (brief
+    AW, `paid_recovery.accept`). Refused as any cost is that pays for more
+    units than the row holds. Not committed: every row the reader accepted at
+    once is written in one transaction."""
+    _units_paid_for(
+        {"cost_quantity": cost_quantity, "cost_basis": cost_basis, "quantity": holding.quantity}
+    )
+    holding.cost_basis = cost_basis
+    holding.cost_quantity = cost_quantity
+    holding.cost_estimated = cost_estimated
+
+
+# A proposal of what was paid the reader declined (brief AW): a row of
+# `settings` per holding, its value what was declined and on which day. The
+# walk starts again at that row (`positions.recover_paid`), so what was
+# declined is never proposed again, on it or on a situation started from it
+# later. Not a table of its own: that would be a migration on the reader's real
+# money for one fact a press. Deleted with its row, since SQLite can give a
+# deleted row's id to the next one, and a stale key would stop the walk on a
+# row nobody declined.
+_PAID_DECLINED = "paid_declined:{holding_id}"
+
+
+def declined_paid(db: Session) -> set[int]:
+    """The holdings whose proposal of what was paid the reader declined."""
+    prefix = _PAID_DECLINED.format(holding_id="")
+    keys = db.scalars(
+        select(models.Setting.key).where(models.Setting.key.startswith(prefix, autoescape=True))
+    )
+    return {int(key[len(prefix):]) for key in keys if key[len(prefix):].isdigit()}
+
+
+def decline_paid(db: Session, holding_id: int, declined: str) -> None:
+    """Remember that the reader declined a row's proposal; `declined` says what
+    was declined, for whoever reads the settings."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    key = _PAID_DECLINED.format(holding_id=holding_id)
+    db.execute(
+        sqlite_insert(models.Setting)
+        .values(key=key, value=declined)
+        .on_conflict_do_update(index_elements=["key"], set_={"value": declined})
+    )
+    commit(db)
+
+
+def _forget_paid_declined(db: Session, holding_ids: Collection[int]) -> None:
+    """Drop the declines of rows about to be deleted, in the same transaction."""
+    keys = [_PAID_DECLINED.format(holding_id=i) for i in holding_ids]
+    if keys:
+        db.execute(delete(models.Setting).where(models.Setting.key.in_(keys)))
+
+
 def _holding_columns(db: Session, row: dict, sent: Collection[str]) -> dict:
     """Holding columns: a cleaned ISIN, and a `value` worked out from quantity
     x unit price when it was not given. A cost that paid for more units than
@@ -916,15 +976,24 @@ def _delete(db: Session, obj: object | None) -> bool:
 
 
 def delete_institution(db: Session, institution_id: int) -> bool:
-    return _delete(db, db.get(models.Institution, institution_id))
+    institution = db.get(models.Institution, institution_id)
+    if institution is not None:
+        _forget_paid_declined(db, [h.id for s in institution.snapshots for h in s.holdings])
+    return _delete(db, institution)
 
 
 def delete_snapshot(db: Session, snapshot_id: int) -> bool:
-    return _delete(db, db.get(models.Snapshot, snapshot_id))
+    snapshot = db.get(models.Snapshot, snapshot_id)
+    if snapshot is not None:
+        _forget_paid_declined(db, [h.id for h in snapshot.holdings])
+    return _delete(db, snapshot)
 
 
 def delete_holding(db: Session, holding_id: int) -> bool:
-    return _delete(db, db.get(models.Holding, holding_id))
+    holding = db.get(models.Holding, holding_id)
+    if holding is not None:
+        _forget_paid_declined(db, [holding_id])
+    return _delete(db, holding)
 
 
 def delete_real_asset(db: Session, real_asset_id: int) -> bool:
