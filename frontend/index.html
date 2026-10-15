@@ -4,6 +4,27 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The theme, before the first paint: the reader's choice kept in this
+         browser, or the system's preference. The rule is
+         src/components/theme.ts's, and tests/theme.test.ts runs this very
+         script against it. Plain script with no import, so it runs before
+         the stylesheet and the app's own code. -->
+    <script>
+      (function () {
+        var choice = null;
+        try {
+          choice = window.localStorage.getItem("aurelio-theme");
+        } catch (refused) {
+          choice = null;
+        }
+        var dark =
+          choice === "dark" ||
+          (choice !== "light" &&
+            typeof window.matchMedia === "function" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      })();
+    </script>
     <title>Aurelio</title>
   </head>
   <body>

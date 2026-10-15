@@ -53,8 +53,20 @@
    follows: no colour literals live in the components.
 
    Contrast against the bone ground is verified for every text token:
-   ink 18.4:1 · ink-soft 5.1:1 · ink-faint 4.7:1 · olive 6.0:1 ·
+   ink 17.4:1 · ink-soft 5.1:1 · ink-faint 4.7:1 · olive 6.0:1 ·
    up 6.3:1 · down 5.7:1 · warn 4.7:1 (all pass WCAG AA).
+
+   The dark theme (the block after this one) gives the same tokens values
+   designed for an espresso ground, not inverted: the grounds rise in
+   lightness as they come forward (page, panel, quiet fill), the ink is a
+   warm bone, and every colour that carries meaning is lifted until it reads
+   at 4.5:1 or more on the lightest dark fill. Each text token against the
+   dark ground and the dark surface:
+   ink 13.4 / 12.5 · ink-soft 6.6 / 6.1 · ink-faint 5.9 / 5.5 ·
+   olive 6.8 / 6.3 · up 8.3 / 7.7 · down 6.9 / 6.4 · warn 8.7 / 8.1
+   (all pass WCAG AA; the lowest on any dark fill is ink-faint on the warn
+   tint, 4.7). Text on the accent reads 6.8 on the dark olive's buttons, and
+   the open rail's ink 8.0 on its own deep olive.
    ============================================================ */
 /* `static` matters: Tailwind v4 tree-shakes theme variables that no utility
    class references, and several of these are consumed as `var(--color-…)`
@@ -98,6 +110,11 @@
      Validated with the dataviz palette checker against surface #FFFDF9:
      all six checks PASS on both the adjacent and the all-pairs pairlists
      (worst all-pairs CVD ΔE 8.3 protan, normal-vision 16.3, contrast ≥ 3:1).
+     Their dark steps (the dark block) keep the three hues, lifted into the
+     dark band, and pass every check of the same checker with --mode dark,
+     against the dark surface #2A241E and the dark ground #231E19, on both
+     pairlists (worst all-pairs CVD ΔE 8.9 deutan, normal-vision 16.2,
+     contrast ≥ 3:1).
      Data marks carry more chroma than the UI chrome on purpose: the muted
      chrome hues measured below the 0.10 chroma floor, i.e. they read as grey
      and stop telling series apart. Single-series charts use the olive accent
@@ -126,6 +143,68 @@
   --color-shadow: #0000001a;
   --shadow-md: 0 4px 6px -1px var(--color-shadow), 0 2px 4px -2px var(--color-shadow);
   --shadow-lg: 0 10px 15px -3px var(--color-shadow), 0 4px 6px -4px var(--color-shadow);
+}
+
+/* ============================================================
+   The dark theme: the colour tokens again, for an espresso ground.
+   `data-theme` on the root says which theme a page wears. index.html sets it
+   before the first paint, from the reader's choice kept in this browser or
+   from the system's preference (components/theme.ts holds the rule), and
+   themeRoot.ts keeps it in step. The light values above are never touched.
+
+   `color-scheme: dark` makes the browser draw its own parts for a dark page:
+   a date's calendar icon, a number's spin buttons, a select's open list, a
+   datalist's suggestions, the scrollbars. The mark's gold is the same in
+   both themes.
+   ============================================================ */
+@layer base {
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --color-ground: #231e19;
+    --color-surface: #2a241e;
+    --color-tint: #322b24;
+
+    --color-ink: #eee7da;
+    --color-ink-soft: #aca394;
+    --color-ink-faint: #a3998a;
+
+    --color-hair: #3f382f;
+    --color-rule: #554b40;
+
+    --color-olive: #a1ab7c;
+    --color-olive-deep: #c0ca9e;
+    --color-olive-tint: #2d2f24;
+
+    --color-up: #7ac7a2;
+    --color-up-tint: #233229;
+    --color-down: #e39383;
+    --color-down-tint: #3b2721;
+    --color-warn: #e8b36f;
+    --color-warn-tint: #3a2f1f;
+
+    --color-chart-1: #5386d3;
+    --color-chart-2: #bf8532;
+    --color-chart-3: #af609f;
+
+    --color-on-accent: #231e19;
+
+    /* A deep olive, near the closed rail's: the lifted olive over a whole
+       strip would be the one pale block beside the dark page. */
+    --color-rail: #40462a;
+    --color-rail-deep: #4d5337;
+    --color-rail-ink: var(--color-ink);
+
+    /* A black at 10% does not show on an espresso ground. */
+    --color-shadow: #00000066;
+  }
+
+  /* The question in an empty box. Tailwind's own placeholder is the ink at
+     50%, which falls below 4.5:1 on the dark surface; the faint ink reads
+     5.5. */
+  :root[data-theme="dark"] ::placeholder {
+    color: var(--color-ink-faint);
+  }
 }
 
 @layer base {
