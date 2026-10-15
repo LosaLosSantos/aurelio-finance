@@ -40,7 +40,8 @@ so a converted figure could reach the screen with no rate date attached to it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import decimal
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 
 from sqlalchemy import select
@@ -132,6 +133,88 @@ def snapshot_values_in_base(
     lazy collection makes that a query per situation."""
     per_holding = holdings_in_base(db, [h for s in snapshots for h in s.holdings], conv)
     return {s.id: sum(per_holding[h.id] for h in s.holdings) for s in snapshots}
+
+
+@dataclass(frozen=True, slots=True)
+class Opening:
+    """How a photographed row opens, before any ledger entry is applied: what
+    it recorded, what of that was paid and for how many units.
+
+    One reading for the two walks that open a row: `project`, from the latest
+    situation, and `recover_paid`, from every situation (brief AW). Read twice,
+    the rule for a cost that paid for some of the units would have had two
+    bodies to drift apart."""
+
+    # The value the photograph recorded, in the base.
+    from_photo: float
+    # A cost typed on the row, in the base; None where none was.
+    recorded_cost: float | None
+    # The units that cost paid for, when it says it paid for some of them.
+    covered: float | None
+    book: float
+    paid: float
+    units_paid: float | None
+    estimated: bool
+
+
+def open_photographed(
+    h: models.Holding, conv: fx.Converter, quote_ccy: str | None
+) -> Opening:
+    """A photographed row's opening, in the base (see `Opening`)."""
+    # A value-only lump keeps the photograph's figures unchanged: there
+    # is no quantity to add units to or remove units from, so the
+    # ledger has nothing to merge into it.
+    from_photo = holding_book_in_base(h, conv, quote_ccy)
+    # A cost the user typed is a cost whether or not the row has units.
+    # It used to be read in one place only, the branch that DISPOSES
+    # of a position, so the same holding said "cost unknown" for as
+    # long as it was held and then measured its gain against the
+    # recorded figure the moment it was closed: one number in the
+    # database, two opposite answers, decided by whether you had sold.
+    # Answering it while held is only payable now: while `current_value`
+    # fell back to the book, making the book the cost took the
+    # difference straight out of the net worth.
+    recorded_cost = (
+        amount_in_base(h.cost_basis, h, conv, quote_ccy)
+        if h.cost_basis is not None
+        else None
+    )
+    # A cost that paid for only some of the units (`cost_quantity`,
+    # brief AV): what a new situation started from the last writes on
+    # a row partly bought since the one before. Those units open at
+    # that cost, the others at the photograph's value.
+    covered = (
+        h.cost_quantity
+        if (recorded_cost is not None and h.cost_quantity is not None and h.quantity
+            and h.cost_quantity < h.quantity and from_photo != 0)
+        else None
+    )
+    if covered is not None:
+        book = recorded_cost + from_photo * (h.quantity - covered) / h.quantity
+    else:
+        book = recorded_cost if recorded_cost is not None else from_photo
+    # What of that book was PAID, and for how many units (brief AV):
+    # all of it where a cost is recorded, the part its units cover
+    # where it says so, none where the book is a photograph's value. A
+    # photograph that recorded no value and no cost puts its units in
+    # the paid pool at zero, which is how they have always been read
+    # (as costing nothing, and cost_known once a buy joins them): kept
+    # as it was, and filed under STILL OPEN.
+    if covered is not None:
+        paid, units_paid = recorded_cost, covered
+    elif recorded_cost is not None or from_photo == 0:
+        paid, units_paid = recorded_cost or 0.0, h.quantity
+    else:
+        paid, units_paid = 0.0, (None if h.quantity is None else 0.0)
+    return Opening(
+        from_photo=from_photo,
+        recorded_cost=recorded_cost,
+        covered=covered,
+        book=book,
+        paid=paid,
+        units_paid=units_paid,
+        estimated=bool(h.cost_estimated) if recorded_cost is not None else False,
+    )
 
 
 def latest_snapshot_by_institution(
@@ -597,60 +680,18 @@ def project(
             if (h.asset_class or "") == "cash":
                 continue  # cash lives in the register
             quote_ccy = listing.get(h.symbol) if h.symbol else None
-            # A value-only lump keeps the photograph's figures unchanged: there
-            # is no quantity to add units to or remove units from, so the
-            # ledger has nothing to merge into it.
-            from_photo = holding_book_in_base(h, conv, quote_ccy)
-            quantity, observed = h.quantity, from_photo
-            # A cost the user typed is a cost whether or not the row has units.
-            # It used to be read in one place only — the branch that DISPOSES
-            # of a position — so the same holding said "cost unknown" for as
-            # long as it was held and then measured its gain against the
-            # recorded figure the moment it was closed: one number in the
-            # database, two opposite answers, decided by whether you had sold.
-            # Answering it while held is only payable now: while `current_value`
-            # fell back to the book, making the book the cost took the
-            # difference straight out of the net worth.
-            recorded_cost = (
-                amount_in_base(h.cost_basis, h, conv, quote_ccy)
-                if h.cost_basis is not None
-                else None
-            )
-            # A cost that paid for only some of the units (`cost_quantity`,
-            # brief AV): what a new situation started from the last writes on
-            # a row partly bought since the one before. Those units open at
-            # that cost, the others at the photograph's value.
-            covered = (
-                h.cost_quantity
-                if (recorded_cost is not None and h.cost_quantity is not None and h.quantity
-                    and h.cost_quantity < h.quantity and from_photo != 0)
-                else None
-            )
-            if covered is not None:
-                book = recorded_cost + from_photo * (h.quantity - covered) / h.quantity
-            else:
-                book = recorded_cost if recorded_cost is not None else from_photo
-            cost_known_from_photo = recorded_cost is not None and covered is None
+            opened = open_photographed(h, conv, quote_ccy)
+            from_photo, recorded_cost = opened.from_photo, opened.recorded_cost
+            quantity, observed, book = h.quantity, from_photo, opened.book
+            cost_known_from_photo = recorded_cost is not None and opened.covered is None
             realized = movement = dividends = dividends_estimated = 0.0
             # True once a recorded purchase contributes to the book: only then
             # is "average cost" a price actually paid rather than the price at
             # which a snapshot happened to be taken.
             cost_known = cost_known_from_photo
-            cost_estimated = bool(h.cost_estimated) if recorded_cost is not None else False
+            cost_estimated = opened.estimated
             closed_on: str | None = None
-            # What of that book was PAID, and for how many units (brief AV):
-            # all of it where a cost is recorded, the part its units cover
-            # where it says so, none where the book is a photograph's value. A
-            # photograph that recorded no value and no cost puts its units in
-            # the paid pool at zero, which is how they have always been read
-            # (as costing nothing, and cost_known once a buy joins them): kept
-            # as it was, and filed under STILL OPEN.
-            if covered is not None:
-                paid, units_paid = recorded_cost, covered
-            elif recorded_cost is not None or from_photo == 0:
-                paid, units_paid = recorded_cost or 0.0, h.quantity
-            else:
-                paid, units_paid = 0.0, (None if h.quantity is None else 0.0)
+            paid, units_paid = opened.paid, opened.units_paid
             opening = book
 
             closes = _closes(inst_id, h, snap.date)
@@ -870,3 +911,419 @@ def project(
         return conv.to_base(p.quantity * quote["price"], quote.get("currency"))
 
     return [replace(p, market_value=_market(p)) for p in out]
+
+
+# --- What was paid before the latest situation (brief AW) -------------------
+
+
+def units_agree(walked: float, stated: float) -> bool:
+    """Whether a situation holds the units the ledger walks to.
+
+    Equal but for float noise; or, for a figure typed from a statement, equal
+    at the decimals it was typed with, while half a unit at those decimals is
+    at most a thousandth of the units. A broker prints its units rounded
+    (12.7346 for the 12.734563 its contract notes add up to), and a situation
+    started from the last one writes the walk's own float, which the first
+    test takes. Measured (brief AW): typed at 2, 3 or 4 decimals against a
+    ledger of 6, an exact rule called each one a disagreement, and the
+    purchases before it went unread; typed at 0 or 1 decimal (13, 12.7 for
+    12.7346), the bound refuses what rounding alone would let through. A
+    stored float keeps no trailing zero ("12.70" reads as one decimal), which
+    can only make the rule more lenient, within the bound."""
+    if _same(walked, stated):
+        return True
+    half = 0.5 * 10.0 ** -_decimals(stated)
+    if half > 0.001 * abs(stated):
+        return False
+    return abs(walked - stated) <= half * (1 + 1e-9)
+
+
+def _same(a: float, b: float) -> bool:
+    """Equal but for the noise float arithmetic adds."""
+    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+
+
+def _decimals(figure: float) -> int:
+    """The decimals a figure was typed with, read off its shortest repr:
+    12.7346 has four, 13.0 none."""
+    exponent = decimal.Decimal(repr(figure)).normalize().as_tuple().exponent
+    return max(0, -exponent) if isinstance(exponent, int) else 0
+
+
+def typed_cost(h: models.Holding) -> bool:
+    """Whether a row's cost is the reader's own: for every unit, and not an
+    estimate.
+
+    No form writes anything else: a cost the reader changes is sent with
+    `cost_quantity` null and `cost_estimated` false (brief AV), and the chat's
+    tools write no cost. A cost for some of the units, or one still marked
+    estimated, was written by "Start from the last one" (or an API client)
+    from the ledger, which the walk can read again."""
+    return (
+        h.cost_basis is not None
+        and (h.cost_quantity is None or (h.quantity is not None and h.cost_quantity >= h.quantity))
+        and not h.cost_estimated
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LedgerLine:
+    """An entry the walk read into a paid part, as a proposal shows it."""
+
+    date: str
+    kind: str
+    quantity: float
+    amount: float  # in the base
+    estimated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PaidProposal:
+    """What the ledger paid for a row of a latest situation, where the row
+    says less, or says it from a cost the ledger has since corrected."""
+
+    holding_id: int
+    institution_id: int
+    asset_name: str
+    symbol: str
+    situation_date: str
+    quantity: float
+    # What the walk carries: money paid, in the base, and for how many units.
+    paid: float
+    units: float
+    estimated: bool
+    # Where the walk started reading, and the cost recorded there when it
+    # started from one: part of `paid`, said apart from the purchases.
+    since: str
+    opening_paid: float | None
+    opening_units: float | None
+    entries: tuple[LedgerLine, ...]
+    # What the row says today: nothing paid, or a cost "Start from the last
+    # one" carried, which the proposal then updates (both figures are said).
+    row_paid: float
+    row_units: float
+    row_estimated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UnreadPurchases:
+    """Purchases on record the walk could not read into a row of a latest
+    situation, because a situation's units disagreed with the ledger's: the
+    most recent such situation, one per row, so they do not leave in
+    silence."""
+
+    holding_id: int
+    institution_id: int
+    asset_name: str
+    symbol: str
+    situation_date: str  # the situation that disagreed
+    stated_units: float
+    walked_units: float
+    paid: float  # not read, in the base
+    units: float
+    since: str
+    purchases: int
+    # A cost recorded where the reading started, part of `paid`, said apart
+    # from the purchases.
+    opening_paid: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class Recovery:
+    """What `recover_paid` found."""
+
+    proposals: list[PaidProposal]
+    unread: list[UnreadPurchases]
+
+
+@dataclass(slots=True)
+class _Pool:
+    """A row as the walk holds it between two situations: the units, the
+    book, and the paid pool of `replay`."""
+
+    quantity: float
+    book: float
+    paid: float
+    paid_units: float
+    estimated: bool
+    # Units a photograph recorded with no value and no cost sit in the paid
+    # pool at zero (`open_photographed`, STILL OPEN): nothing bought them, so
+    # nothing is proposed from a pool that holds them.
+    unbought: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _Drop:
+    """Where a disagreement left paid units unread, kept until the walk ends."""
+
+    date: str
+    stated: float
+    walked: float
+    paid: float
+    units: float
+    since: str
+    purchases: int
+    opening_paid: float | None
+
+
+def recover_paid(
+    inputs: ProjectionInputs,
+    conv: fx.Converter,
+    *,
+    day: str,
+    declined: Collection[int] = (),
+) -> Recovery:
+    """What the ledger paid for each row of a latest situation that the row
+    does not say: one walk across every situation of each account, per row
+    with a ticker and units, in date order, with the ledger between them.
+
+    Why: `project` reads the ledger only after each account's latest
+    situation, so a purchase before it is read only through what that
+    situation recorded. On a row carried by the code before brief AV, the
+    purchases were folded into the situation's value (measured: 110.00 read as
+    paid where the ledger held 410.00). This proposes them back and writes
+    nothing; `paid_recovery` writes a proposal on the reader's press.
+
+    Each stretch of the ledger goes through `replay` and its two pools, one
+    entry at a time, so that a position emptied on the way starts its
+    purchases again. A row opens at the first situation of its account that
+    holds it, as `project` opens it (`open_photographed`); what the ledger
+    holds on or before an account's first situation is in that photograph and
+    is not read. At each later situation:
+
+    * units that agree (`units_agree`): the paid pool carries, and the other
+      units open again at that situation's value. A cost "Start from the last
+      one" carried there is read again from the same ledger.
+    * a cost the reader typed for every unit (`typed_cost`): their figure, and
+      the walk starts again from it.
+    * units that disagree: the walk cannot know what was bought there, so it
+      starts again from what the row states (the reader's rule, 2026-10-15),
+      and says when that left purchases on record unread (`UnreadPurchases`).
+    * a row the reader declined (`declined`, holding ids): the walk starts
+      again there, so what was declined is never proposed again, on it or on
+      a situation started from it later. Measured: remembered as "not this
+      row" only, the next situation brought the same proposal back.
+
+    Proposed, on a latest row with nothing paid, when the walk carries paid
+    units; on one whose cost was carried, when the walk differs in units, in
+    the estimate, or in money by more than half a cent. Money is compared only
+    when every purchase is in the row's own currency: the amounts convert at
+    today's rate, while a carried cost was converted on its own day, and a
+    rate's move alone is no correction. Never proposed: a cost the reader
+    typed, a row with no value and no cost, a ticker on two rows of one
+    situation (the walk cannot say which), units no purchase bought."""
+
+    def cash(t: models.Transaction) -> float:
+        return conv.to_base_or_as_stored(t.amount, t.currency)
+
+    by_inst: dict[int, list[models.Snapshot]] = {}
+    for snap in inputs.snapshots:
+        if snap.date <= day:
+            by_inst.setdefault(snap.institution_id, []).append(snap)
+    proposals: list[PaidProposal] = []
+    unread: list[UnreadPurchases] = []
+    for inst_id, snaps in sorted(by_inst.items()):
+        snaps.sort(key=lambda s: (s.date, s.id))
+        ledger = [
+            t for t in inputs.transactions
+            if t.institution_id == inst_id and t.symbol and t.date <= day
+        ]
+        for symbol in sorted({h.symbol for s in snaps for h in s.holdings if _walked(h)}):
+            row = _RowWalk(symbol, inputs.listing.get(symbol), conv, cash, declined)
+            prev: str | None = None
+            for snap in snaps:
+                if prev is not None:
+                    row.stretch(
+                        sorted(
+                            dated.events_after(
+                                prev, (t for t in ledger if t.symbol == symbol), until=snap.date
+                            ),
+                            key=lambda t: (t.date, t.id),
+                        ),
+                        prev,
+                    )
+                row.situation(snap)
+                prev = snap.date
+            proposal, left = row.found(snaps[-1])
+            if proposal is not None:
+                proposals.append(proposal)
+            if left is not None:
+                unread.append(left)
+    return Recovery(proposals, unread)
+
+
+def _walked(h: models.Holding) -> bool:
+    """A row the ledger can buy into: a ticker and units, and not cash."""
+    return bool(h.symbol) and h.quantity is not None and (h.asset_class or "") != "cash"
+
+
+class _RowWalk:
+    """One row's walk across its account's situations (see `recover_paid`)."""
+
+    def __init__(
+        self,
+        symbol: str,
+        quote_ccy: str | None,
+        conv: fx.Converter,
+        cash: Callable[[models.Transaction], float],
+        declined: Collection[int],
+    ):
+        self.symbol, self.quote_ccy, self.conv = symbol, quote_ccy, conv
+        self.cash, self.declined = cash, declined
+        self.pool: _Pool | None = None
+        # Where the reading starts, the cost recorded there if any, and the
+        # entries read since: what a proposal shows.
+        self.since: str | None = None
+        self.opening: tuple[float, float] | None = None
+        self.read: list[models.Transaction] = []
+        self.drop: _Drop | None = None
+        # The pool as it reached the last situation, before that situation
+        # took it: what a proposal compares with the row.
+        self.walked: _Pool | None = None
+        self.verdict = ""
+
+    def _start(self, h: models.Holding, opened: Opening, date: str) -> None:
+        """Start again at a situation, from what its row states."""
+        self.pool = _Pool(
+            h.quantity, opened.book, opened.paid, opened.units_paid or 0.0, opened.estimated,
+            unbought=opened.recorded_cost is None and opened.from_photo == 0 and h.quantity > 0,
+        )
+        self.since, self.read = date, []
+        self.opening = (
+            (opened.paid, opened.units_paid)
+            if opened.recorded_cost is not None and (opened.units_paid or 0.0) > 0
+            else None
+        )
+
+    def _forget(self) -> None:
+        self.pool, self.since, self.opening, self.read, self.drop = None, None, None, [], None
+
+    def stretch(self, entries: list[models.Transaction], after: str) -> None:
+        """The ledger between two situations, through `replay`."""
+        for t in entries:
+            if self.pool is None:
+                # Held by no situation before: read from nothing.
+                self.pool = _Pool(0.0, 0.0, 0.0, 0.0, False)
+                self.since, self.read, self.opening = after, [], None
+            state = replay(
+                [t],
+                start_qty=self.pool.quantity,
+                start_book=self.pool.book,
+                start_estimated=self.pool.estimated,
+                start_paid=self.pool.paid,
+                start_paid_units=self.pool.paid_units,
+                amount_of=self.cash,
+            )
+            self.pool = _Pool(
+                state.quantity, state.book, state.paid, state.paid_units,
+                state.cost_estimated, self.pool.unbought and state.quantity > 0,
+            )
+            if t.kind in ("buy", "sell"):
+                self.read.append(t)
+            if state.quantity <= 0:
+                # Emptied: nothing bought before stands behind a unit now.
+                self.since, self.read, self.opening = t.date, [], None
+
+    def situation(self, snap: models.Snapshot) -> None:
+        """What a situation says of the row, against what the walk holds."""
+        rows = [h for h in snap.holdings if h.symbol == self.symbol and _walked(h)]
+        self.walked = None
+        if len(rows) > 1:
+            self.verdict = "doubled"
+            self._forget()
+            return
+        if not rows:
+            self.verdict = "absent"
+            if self.pool is not None and self.pool.quantity > 0:
+                # The ledger holds what the situation does not: the omission
+                # notice speaks for it, and the walk starts again from nothing.
+                self._forget()
+            return
+        (h,) = rows
+        opened = open_photographed(h, self.conv, self.quote_ccy)
+        if h.id in self.declined:
+            self.verdict, self.drop = "declined", None
+            self._start(h, opened, snap.date)
+        elif self.pool is None:
+            self.verdict, self.drop = "opens", None
+            self._start(h, opened, snap.date)
+        elif units_agree(self.pool.quantity, h.quantity):
+            if typed_cost(h):
+                self.verdict, self.drop = "typed cost", None
+                self._start(h, opened, snap.date)
+                return
+            self.verdict, self.walked = "agrees", self.pool
+            units = min(self.pool.paid_units, h.quantity)
+            unit_value = opened.from_photo / h.quantity if h.quantity else 0.0
+            self.pool = _Pool(
+                h.quantity, self.pool.paid + unit_value * (h.quantity - units),
+                self.pool.paid, units, self.pool.estimated, self.pool.unbought,
+            )
+        else:
+            lost = self.pool.paid_units - (opened.units_paid or 0.0)
+            bought = sum(1 for t in self.read if t.kind == "buy")
+            if bought and lost > 1e-9 * max(1.0, self.pool.paid_units) and not self.pool.unbought:
+                self.drop = _Drop(
+                    snap.date, h.quantity, self.pool.quantity, self.pool.paid - opened.paid,
+                    lost, self.since or snap.date, bought,
+                    self.opening[0] if self.opening else None,
+                )
+            self.verdict = "disagrees"
+            self._start(h, opened, snap.date)
+
+    def found(
+        self, latest: models.Snapshot
+    ) -> tuple[PaidProposal | None, UnreadPurchases | None]:
+        """The proposal and the unread purchases for the row of the latest
+        situation, if it holds the row once."""
+        rows = [h for h in latest.holdings if h.symbol == self.symbol and _walked(h)]
+        if len(rows) != 1:
+            return None, None
+        (h,) = rows
+        left = None
+        if self.drop is not None:
+            d = self.drop
+            left = UnreadPurchases(
+                holding_id=h.id, institution_id=latest.institution_id,
+                asset_name=h.asset_name, symbol=self.symbol, situation_date=d.date,
+                stated_units=d.stated, walked_units=d.walked, paid=d.paid, units=d.units,
+                since=d.since, purchases=d.purchases, opening_paid=d.opening_paid,
+            )
+        w = self.walked
+        if self.verdict != "agrees" or w is None or w.unbought:
+            return None, left
+        opened = open_photographed(h, self.conv, self.quote_ccy)
+        units = min(w.paid_units, h.quantity)
+        if opened.recorded_cost is None:
+            differs = opened.from_photo != 0 and not _same(units, 0.0)
+        else:
+            row_ccy = self.quote_ccy if self.quote_ccy else h.currency
+            in_its_own = all(t.currency == row_ccy for t in self.read if t.kind == "buy")
+            differs = (
+                not _same(units, opened.units_paid or 0.0)
+                or w.estimated != opened.estimated
+                or (in_its_own and abs(w.paid - opened.paid) > 0.005)
+            )
+        if not differs:
+            return None, left
+        return PaidProposal(
+            holding_id=h.id,
+            institution_id=latest.institution_id,
+            asset_name=h.asset_name,
+            symbol=self.symbol,
+            situation_date=latest.date,
+            quantity=h.quantity,
+            paid=w.paid,
+            units=units,
+            estimated=w.estimated,
+            since=self.since or latest.date,
+            opening_paid=self.opening[0] if self.opening else None,
+            opening_units=self.opening[1] if self.opening else None,
+            entries=tuple(
+                LedgerLine(t.date, t.kind, t.quantity, self.cash(t), bool(t.estimated))
+                for t in self.read
+            ),
+            row_paid=opened.paid if opened.recorded_cost is not None else 0.0,
+            row_units=(opened.units_paid or 0.0) if opened.recorded_cost is not None else 0.0,
+            row_estimated=opened.estimated,
+        ), left
