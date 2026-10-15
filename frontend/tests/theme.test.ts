@@ -11,7 +11,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import { THEME_KEY, appliedTheme, readChoice } from "../src/components/theme.ts";
+import {
+  THEME_CHOICES,
+  THEME_KEY,
+  appliedTheme,
+  readChoice,
+  storedValue,
+} from "../src/components/theme.ts";
 
 // What the browser keeps (null: nothing; "refused": a storage that throws on
 // a read, as a blocked one does) -> the theme on a light system, on a dark one.
@@ -82,4 +88,24 @@ test("index.html's own script paints what the rule says, a refused storage inclu
     assert.equal(painted(stored, false), onLight, `stored ${stored}, a light system`);
     assert.equal(painted(stored, true), onDark, `stored ${stored}, a dark system`);
   }
+});
+
+test("the Profile offers System, Light and Dark, in that order", () => {
+  assert.deepEqual(THEME_CHOICES, ["system", "light", "dark"]);
+});
+
+test("a choice is kept as its word, and System keeps nothing", () => {
+  assert.equal(storedValue("light"), "light");
+  assert.equal(storedValue("dark"), "dark");
+  assert.equal(storedValue("system"), null);
+});
+
+test("what a choice keeps, read back on the next load, is that choice", () => {
+  assert.equal(readChoice(storedValue("system")), "system");
+  assert.equal(readChoice(storedValue("light")), "light");
+  assert.equal(readChoice(storedValue("dark")), "dark");
+  // And index.html's script paints it before the first paint.
+  assert.equal(painted(storedValue("dark"), false), "dark");
+  assert.equal(painted(storedValue("light"), true), "light");
+  assert.equal(painted(storedValue("system"), true), "dark");
 });

@@ -16,6 +16,15 @@ export type Theme = "light" | "dark";
 /** The browser storage key that keeps the choice. */
 export const THEME_KEY = "aurelio-theme";
 
+/** The three choices, in the order the Profile offers them. */
+export const THEME_CHOICES: readonly ThemeChoice[] = ["system", "light", "dark"];
+
+/** What the browser keeps for a choice: System keeps nothing, so a reader who
+    never chose and one who chose System read back the same. */
+export function storedValue(choice: ThemeChoice): string | null {
+  return choice === "system" ? null : choice;
+}
+
 /** A stored value read back. Anything but "light" or "dark", nothing stored
     included, is System. */
 export function readChoice(stored: string | null | undefined): ThemeChoice {

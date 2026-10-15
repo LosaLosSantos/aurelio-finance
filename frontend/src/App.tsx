@@ -12,6 +12,7 @@ import Portfolio from "./components/Portfolio";
 import Records, { type RecordsPage } from "./components/Records";
 import Profile from "./components/Profile";
 import Goals from "./components/Goals";
+import ThemeSection from "./components/ThemeSection";
 import Analysis from "./components/Analysis";
 import ChatPanel from "./components/ChatPanel";
 import { Mark } from "./components/Emblem";
@@ -448,9 +449,13 @@ export default function App() {
               )}
               {/* Profile and Goals are two halves of one answer — who you are,
                   and what you want measurably — so they share a page. */}
+              {/* The theme is how this browser shows the app, not part of
+                  either: its own card, between them, below the profile's
+                  save. */}
               {tab === "profile" && (
                 <div className="space-y-12">
                   <Profile />
+                  <ThemeSection />
                   <Goals />
                 </div>
               )}
