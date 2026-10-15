@@ -28,6 +28,7 @@ import {
 import { getAllCashAnchors, getCashPositions, type CashAnchor, type CashPosition } from "../api/cash";
 import { EmptyState } from "./Emblem";
 import { OmissionsNotice } from "./OmissionsNotice";
+import { PaidRecoveryNotice } from "./PaidRecoveryNotice";
 import { acrossCurrencies as isAcross, debitOnEdit, derivedAmount } from "./statedAmount";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import { getListingCurrencies, getQuote } from "../api/prices";
@@ -504,6 +505,16 @@ export default function Portfolio({
       {/* What no rate could be applied to at all — the pair to `fx_as_of` under
           the totals, which says which rate WAS applied. */}
       <UnconvertedNotice items={data.unconverted ?? []} baseCurrency={data.base_currency} />
+
+      {/* What the ledger paid before each account's latest situation that its
+          rows do not say, proposed row by row, written only on a press
+          (brief AW). Right above the shares it changes. */}
+      <PaidRecoveryNotice
+        proposals={data.paid_recovery ?? []}
+        unread={data.paid_unread ?? []}
+        baseCurrency={data.base_currency}
+        onChanged={() => load(false)}
+      />
 
       {data.rows.length === 0 ? (
         <EmptyState title="Nothing invested yet">

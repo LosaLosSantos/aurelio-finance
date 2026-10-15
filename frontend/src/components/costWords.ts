@@ -30,7 +30,7 @@ export const COST_WORDS: { question: string; text: string } = {
   text:
     "est.: the price paid is estimated in part. Some or all of it is a plan's buy priced at a market close, or a cost derived from a reported return, not a contract note, so the P/L against it is real but not verified." +
     " N% paid: of the price on record, that share is money paid, by a buy or a cost typed on a situation; the rest is the value a situation was recorded at. The P/L then shows separately the gain or loss on the units paid for and, marked since situation, the movement on the rest, which is not a profit. To make the rest a cost, type what all the units cost on the situation's row (Records, the account, the situation)." +
-    " A situation started from the last one keeps what was paid only where it could price the row, and only from this version on: otherwise what had been paid until then is in that situation's value, and the share counts what was bought after it." +
+    " A situation started from the last one keeps what was paid where it could price the row. Where it could not, or before this version, what had been paid went into that situation's value: the app reads it back from the ledger, proposes it above the table, and writes it only if you keep it." +
     " Cost unknown: no purchase price is on record. Recorded is then the value the situation was recorded at, not what you paid, and the P/L under it, marked since situation, is the movement since that situation, not a profit.",
 };
 

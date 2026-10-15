@@ -33,10 +33,12 @@ test("a share paid says what is paid, what is a situation's value, and how to ma
   );
 });
 
-test("what was paid before a situation started from the last is in its value, said", () => {
+test("what was paid before a situation started from the last is read back from the ledger, said", () => {
+  /* Brief AW: the paid part a situation folded into its value is proposed
+     back above the table, and written only on the reader's press. */
   assert.ok(
     COST_WORDS.text.includes(
-      " A situation started from the last one keeps what was paid only where it could price the row, and only from this version on: otherwise what had been paid until then is in that situation's value, and the share counts what was bought after it.",
+      " A situation started from the last one keeps what was paid where it could price the row. Where it could not, or before this version, what had been paid went into that situation's value: the app reads it back from the ledger, proposes it above the table, and writes it only if you keep it.",
     ),
   );
 });
