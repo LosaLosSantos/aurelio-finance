@@ -12,17 +12,19 @@ HONEST LIMITS, stated once here so the UI can repeat them:
 - Currency exposure is not the same as currency risk for a hedged share class:
   a EUR-hedged ETF still holds US companies, and this map will call it USD.
   We do not model hedging.
-- Names come from the composition sources (justETF / Morningstar), which use
-  plain English country names; anything unknown falls into "Other" rather than
-  being guessed.
+- Names come from sources that spell them differently (Vanguard sends an ISO
+  code, iShares writes "Korea (South)"); `canonical_country` brings each to
+  one name, and anything still unknown falls into "Other" rather than being
+  guessed.
 """
 
 from __future__ import annotations
 
-# Eurozone members share EUR; the rest carry their own currency.
+# Eurozone members share EUR; the rest carry their own currency. Bulgaria
+# joined on 2026-01-01.
 _EUROZONE = {
-    "Austria", "Belgium", "Croatia", "Cyprus", "Estonia", "Finland", "France",
-    "Germany", "Greece", "Ireland", "Italy", "Latvia", "Lithuania",
+    "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Estonia", "Finland",
+    "France", "Germany", "Greece", "Ireland", "Italy", "Latvia", "Lithuania",
     "Luxembourg", "Malta", "Netherlands", "Portugal", "Slovakia", "Slovenia",
     "Spain",
 }
@@ -46,21 +48,35 @@ _CURRENCY_BY_COUNTRY = {
     "Sweden": "SEK",
     "Norway": "NOK",
     "Denmark": "DKK",
+    "Iceland": "ISK",
     "Poland": "PLN",
     "Czech Republic": "CZK",
     "Hungary": "HUF",
+    "Romania": "RON",
+    "Russia": "RUB",
+    "Kazakhstan": "KZT",
     "Israel": "ILS",
     "Singapore": "SGD",
     "Thailand": "THB",
     "Indonesia": "IDR",
     "Malaysia": "MYR",
     "Philippines": "PHP",
+    "Vietnam": "VND",
+    "Pakistan": "PKR",
     "Turkey": "TRY",
     "Saudi Arabia": "SAR",
     "United Arab Emirates": "AED",
+    "Kuwait": "KWD",
+    "Qatar": "QAR",
+    "Bahrain": "BHD",
+    "Egypt": "EGP",
     "Chile": "CLP",
     "Colombia": "COP",
     "Peru": "PEN",
+    "Uruguay": "UYU",
+    # The Cayman Islands are in neither map: a domicile, not an economy. The
+    # companies filed there trade and earn elsewhere, mostly in China, and
+    # KYD, pegged to the dollar, would misstate them.
 }
 
 _REGION_BY_COUNTRY = {
@@ -78,6 +94,7 @@ _REGION_BY_COUNTRY = {
     "Sweden": "Europe",
     "Norway": "Europe",
     "Denmark": "Europe",
+    "Iceland": "Europe",
     "Israel": "Emerging & other",
     "China": "Emerging & other",
     "Taiwan": "Emerging & other",
@@ -88,22 +105,35 @@ _REGION_BY_COUNTRY = {
     "Indonesia": "Emerging & other",
     "Malaysia": "Emerging & other",
     "Philippines": "Emerging & other",
+    "Vietnam": "Emerging & other",
+    "Pakistan": "Emerging & other",
     "Turkey": "Emerging & other",
     "Saudi Arabia": "Emerging & other",
     "United Arab Emirates": "Emerging & other",
+    "Kuwait": "Emerging & other",
+    "Qatar": "Emerging & other",
+    "Bahrain": "Emerging & other",
+    "Egypt": "Emerging & other",
     "Poland": "Emerging & other",
     "Czech Republic": "Emerging & other",
     "Hungary": "Emerging & other",
+    "Romania": "Emerging & other",
+    "Russia": "Emerging & other",
+    "Kazakhstan": "Emerging & other",
     "Chile": "Emerging & other",
     "Colombia": "Emerging & other",
     "Peru": "Emerging & other",
+    "Uruguay": "Emerging & other",
 }
 
 UNKNOWN = "Other"
 
 # Issuers disagree on how to name a country: iShares writes "United States",
 # Vanguard sends the ISO-3166 alpha-2 code. Everything is normalised to the
-# long name so the axes from different funds actually add up together.
+# long name so the axes from different funds actually add up together. Every
+# country the maps above know has its code here (a test holds it). On
+# 2026-10-16 that covered every code Vanguard's FTSE All-World file sent but
+# "XE", one unnamed line (0.04%) that is no country and stays as written.
 _ISO2 = {
     "US": "United States", "JP": "Japan", "GB": "United Kingdom",
     "CH": "Switzerland", "CA": "Canada", "AU": "Australia", "NZ": "New Zealand",
@@ -117,7 +147,38 @@ _ISO2 = {
     "DE": "Germany", "FR": "France", "NL": "Netherlands", "IT": "Italy",
     "ES": "Spain", "IE": "Ireland", "BE": "Belgium", "AT": "Austria",
     "FI": "Finland", "PT": "Portugal", "GR": "Greece", "LU": "Luxembourg",
+    "BG": "Bulgaria", "CY": "Cyprus", "EE": "Estonia", "HR": "Croatia",
+    "LV": "Latvia", "LT": "Lithuania", "MT": "Malta", "SI": "Slovenia",
+    "SK": "Slovakia", "KW": "Kuwait", "QA": "Qatar", "RO": "Romania",
+    "IS": "Iceland", "EG": "Egypt", "VN": "Vietnam", "RU": "Russia",
+    "PK": "Pakistan", "BH": "Bahrain", "KZ": "Kazakhstan", "UY": "Uruguay",
 }
+
+# The long names disagree as well. Read live on 2026-10-16 (issue #3): iShares'
+# country of risk writes "Korea (South)", "Slovak Republic", "Croatia
+# (Hrvatska)" and "Russian Federation"; Trackinsight writes "Republic of Korea"
+# and "USA"; justETF and Yahoo write the names the maps use. Unmatched, Korea
+# (a fifth of an emerging-markets fund) read as currency Other and stood apart
+# from the same country spelt another way.
+_ALIASES = {
+    "Korea (South)": "South Korea",
+    "Republic of Korea": "South Korea",
+    "USA": "United States",
+    "Slovak Republic": "Slovakia",
+    "Croatia (Hrvatska)": "Croatia",
+    "Russian Federation": "Russia",
+}
+
+
+def canonical_country(name: str | None) -> str:
+    """One name per country, whichever source wrote it: "SK", "Slovak
+    Republic" and "Slovakia" are one country, so one row on the axis and one
+    currency. Anything unknown passes through as written."""
+    text = (name or "").strip()
+    if len(text) == 2 and text.isalpha():
+        code = text.upper()
+        return _ISO2.get(code, code)
+    return _ALIASES.get(text, text)
 
 
 def country_from_iso2(code: str | None) -> str | None:
@@ -125,14 +186,13 @@ def country_from_iso2(code: str | None) -> str | None:
     collapsed into Other, so a rare market stays visible and traceable."""
     if not code:
         return None
-    key = code.strip().upper()
-    return _ISO2.get(key, key)
+    return canonical_country(code)
 
 
 def currency_of(country: str) -> str:
     """The currency a company from this country is normally priced in.
     Unknown countries return 'Other' — never a guess."""
-    name = (country or "").strip()
+    name = canonical_country(country)
     if name in _EUROZONE:
         return "EUR"
     return _CURRENCY_BY_COUNTRY.get(name, UNKNOWN)
@@ -140,7 +200,7 @@ def currency_of(country: str) -> str:
 
 def region_of(country: str) -> str:
     """A coarse region, chosen so a matrix stays readable (5 buckets at most)."""
-    name = (country or "").strip()
+    name = canonical_country(country)
     if name in _EUROZONE:
         return "Europe"
     return _REGION_BY_COUNTRY.get(name, UNKNOWN)

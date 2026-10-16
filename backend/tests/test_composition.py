@@ -7,7 +7,7 @@ import datetime
 
 import pytest
 
-from app import composition
+from app import composition, geo
 
 TODAY = datetime.date.today().isoformat()
 
@@ -708,6 +708,76 @@ def test_currency_and_region_lenses_follow_the_country_weights(client, monkeypat
     assert abs(cells[("fund_etf", "North America")] - 50.0) < 1e-6
     assert abs(cells[("fund_etf", "Europe")] - 30.0) < 1e-6
     assert abs(cells[("fund_etf", "Developed Asia-Pacific")] - 20.0) < 1e-6
+
+
+def test_one_country_is_one_row_whichever_source_spelled_it(client, monkeypatch):
+    """Vanguard sends ISO codes, iShares writes "Korea (South)" and "Slovak
+    Republic", justETF and Yahoo "South Korea" and "Slovakia". Matched as raw
+    strings, each spelling was a row of its own, and one the maps did not know
+    read as currency Other: Korea, a fifth of an emerging-markets fund, in
+    every iShares file (issue #3 found the codes)."""
+    _portfolio(client)  # VWCE 60% of book, SWDA 40%
+
+    # VWCE as cached from Vanguard while "SK" and "KW" had no name yet, SWDA
+    # as iShares writes the same countries.
+    vanguard = dict(
+        VWCE,
+        countries=[
+            {"name": "United States", "pct": 70.0},
+            {"name": "South Korea", "pct": 10.0},
+            {"name": "SK", "pct": 10.0},
+            {"name": "KW", "pct": 10.0},
+        ],
+    )
+    ishares = dict(
+        SWDA_JE,
+        countries=[
+            {"name": "United States", "pct": 70.0},
+            {"name": "Korea (South)", "pct": 10.0},
+            {"name": "Slovak Republic", "pct": 10.0},
+            {"name": "Kuwait", "pct": 10.0},
+        ],
+    )
+    _patch_sources(monkeypatch, catalogue=CATALOGUE_MAP)
+    monkeypatch.setattr(
+        composition,
+        "_fetch_issuer",
+        lambda isin: dict(vanguard) if isin == "IE00BK5BQT80" else dict(ishares),
+    )
+
+    body = client.get("/api/dashboard/portfolio/composition").json()
+
+    countries = {c["name"]: c["pct"] for c in body["countries"]}
+    assert sorted(countries) == ["Kuwait", "Slovakia", "South Korea", "United States"]
+    for name in ("South Korea", "Slovakia", "Kuwait"):
+        assert abs(countries[name] - 10.0) < 1e-6  # 0.6*10 + 0.4*10, one row
+    currencies = {c["name"]: c["pct"] for c in body["currencies"]}
+    assert abs(currencies["KRW"] - 10.0) < 1e-6
+    assert abs(currencies["EUR"] - 10.0) < 1e-6  # Slovakia is in the euro
+    assert abs(currencies["KWD"] - 10.0) < 1e-6
+    assert "Other" not in currencies, currencies
+    cells = {(m["asset_class"], m["region"]): m["pct"] for m in body["matrix"]}
+    assert abs(cells[("fund_etf", "Developed Asia-Pacific")] - 10.0) < 1e-6
+    assert abs(cells[("fund_etf", "Europe")] - 10.0) < 1e-6
+    assert abs(cells[("fund_etf", "Emerging & other")] - 10.0) < 1e-6
+
+
+def test_every_spelling_meets_the_same_country_sent_as_its_code():
+    """Vanguard sends only codes. A country the maps classify that no code
+    reaches reads as Other from Vanguard (issue #3: eight euro members), and a
+    long name no code produces stands apart from the same country sent as one."""
+    from_codes = set(geo._ISO2.values())
+    known = geo._EUROZONE | set(geo._CURRENCY_BY_COUNTRY) | set(geo._REGION_BY_COUNTRY)
+    assert known <= from_codes, sorted(known - from_codes)
+    aliased = set(geo._ALIASES.values())
+    assert aliased <= from_codes, sorted(aliased - from_codes)
+
+
+def test_a_euro_member_sent_as_its_code_is_in_the_euro():
+    """The issue's own reproduction, and Bulgaria, in the euro since 2026."""
+    for code in ["CY", "EE", "HR", "LV", "LT", "MT", "SI", "SK", "BG"]:
+        name = geo.country_from_iso2(code)
+        assert (geo.currency_of(name), geo.region_of(name)) == ("EUR", "Europe"), (code, name)
 
 
 def test_undecomposed_share_is_reported_not_normalised_away(client, monkeypatch):

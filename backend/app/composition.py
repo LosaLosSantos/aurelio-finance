@@ -848,12 +848,15 @@ def _aggregate(
                     fund_names[comp["isin"]] = comp["name"]
             klass = p.asset_class or "unclassified"
             for c in comp["countries"]:
-                countries[c["name"]] = countries.get(c["name"], 0.0) + weight * c["pct"]
+                # One name per country whichever source wrote it, taken here
+                # rather than when fetched so an entry cached before agrees.
+                name = geo.canonical_country(c["name"])
+                countries[name] = countries.get(name, 0.0) + weight * c["pct"]
                 # Same numbers, two more useful lenses: what currency the risk
                 # is really in, and how each asset class is spread over regions.
-                cur = geo.currency_of(c["name"])
+                cur = geo.currency_of(name)
                 currencies[cur] = currencies.get(cur, 0.0) + weight * c["pct"]
-                cell = (klass, geo.region_of(c["name"]))
+                cell = (klass, geo.region_of(name))
                 matrix[cell] = matrix.get(cell, 0.0) + weight * c["pct"]
             for s in comp["sectors"]:
                 key = _canonical_sector(s["name"])
