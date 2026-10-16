@@ -35,6 +35,12 @@ import type { Money } from "./money";
    - Savings rate is a ratio against a target -> a meter, not a chart.
    - Grid and axes are solid hairlines, never dashed. */
 
+/* The net worth card's title, which also names its chart: Recharts makes the
+   chart's `svg` a stop of the Tab key (`role="application"`, `tabindex="0"`),
+   and a stop needs a name. As `aria-label`, not Recharts' `title`: an SVG
+   title is also a tooltip under the pointer (brief AY). */
+const NET_WORTH_OVER_TIME = "Net worth over time";
+
 const pctFmt = new Intl.NumberFormat(locale, {
   style: "percent",
   maximumFractionDigits: 1,
@@ -365,7 +371,7 @@ export default function Dashboard() {
 
       {series.length > 1 && (
         <ChartCard
-          title="Net worth over time"
+          title={NET_WORTH_OVER_TIME}
           subtitle="Hover for the financial / real / debt breakdown behind each point."
           table={
             <table className="w-full text-left text-sm">
@@ -393,7 +399,11 @@ export default function Dashboard() {
           }
         >
           <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={series} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            <AreaChart
+              aria-label={NET_WORTH_OVER_TIME}
+              data={series}
+              margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
+            >
               <CartesianGrid stroke="var(--color-hair)" vertical={false} />
               <XAxis
                 dataKey="date"

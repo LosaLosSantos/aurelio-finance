@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   getSurvey,
   getSurveyQuestions,
@@ -15,6 +15,7 @@ import {
 import { getBaseCurrency, saveBaseCurrency, type BaseCurrencySetting } from "../api/baseCurrency";
 import { choicesOf, isVisible, topicsOf, unshownAnswer } from "./questionnaire";
 import { askedAs, othersOf, toSave } from "./profileAnswers";
+import { choiceClass } from "./choice";
 import { apiError, btnClass, cardClass, inputClass } from "./ui";
 
 /* The questions are the backend's (`GET /api/survey/questions`, app/questionnaire.py):
@@ -392,6 +393,7 @@ function TaxSection({
     (d) => d.country.toLowerCase() === country.trim().toLowerCase(),
   );
   const nothingSet = capitalGains === "" && dividends === "";
+  const countryId = useId();
 
   return (
     <section className={cardClass + " space-y-4 p-5"}>
@@ -407,10 +409,11 @@ function TaxSection({
       </div>
 
       <div>
-        <label className="mb-1 block text-sm text-ink">
+        <label htmlFor={countryId} className="mb-1 block text-sm text-ink">
           Which country do you pay investment tax in?
         </label>
         <input
+          id={countryId}
           className={inputClass + " w-full"}
           type="text"
           list="tax-countries"
@@ -481,11 +484,15 @@ function RateField({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const id = useId();
   return (
     <div>
-      <label className="mb-1 block text-sm text-ink">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-sm text-ink">
+        {label}
+      </label>
       <div className="flex items-center gap-2">
         <input
+          id={id}
           className={inputClass + " w-28"}
           type="number"
           min={0}
@@ -514,30 +521,36 @@ function QuestionField({
   // An answer on record that no button, option or number box can show: written
   // before the chat's answers were checked against the question (brief AL).
   const unshown = unshownAnswer(q, value);
+  // The question names what answers it: its box, or the group of its answers,
+  // in which the chosen one is pressed (brief AY).
+  const id = useId();
+  const questionId = `${id}-question`;
   return (
     <div>
-      <label className="mb-1 block text-sm text-ink">{q.text}</label>
+      <label
+        id={questionId}
+        htmlFor={q.type === "boolean" ? undefined : id}
+        className="mb-1 block text-sm text-ink"
+      >
+        {q.text}
+      </label>
 
       {q.type === "boolean" ? (
-        <div className="flex gap-2">
+        <div role="group" aria-labelledby={questionId} className="flex gap-2">
           {choicesOf(q).map((opt) => (
             <button
               key={opt}
               type="button"
+              aria-pressed={value === opt}
               onClick={() => onChange(opt)}
-              className={
-                "rounded-sm border px-3 py-1.5 text-sm capitalize transition " +
-                (value === opt
-                  ? "border-olive bg-olive-tint text-olive-deep"
-                  : "border-rule text-ink-soft hover:bg-ground")
-              }
+              className={choiceClass(value === opt) + " capitalize"}
             >
               {opt}
             </button>
           ))}
         </div>
       ) : q.type === "single" ? (
-        <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
+        <select id={id} className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">choose…</option>
           {q.options.map((o) => (
             <option key={o} value={o}>
@@ -547,6 +560,7 @@ function QuestionField({
         </select>
       ) : q.type === "number" ? (
         <input
+          id={id}
           className={inputClass + " w-32"}
           type="number"
           value={value}
@@ -554,6 +568,7 @@ function QuestionField({
         />
       ) : q.type === "longtext" ? (
         <textarea
+          id={id}
           className={inputClass + " min-h-40 w-full leading-relaxed"}
           rows={8}
           value={value}
@@ -561,6 +576,7 @@ function QuestionField({
         />
       ) : (
         <input
+          id={id}
           className={inputClass + " w-full"}
           type="text"
           value={value}

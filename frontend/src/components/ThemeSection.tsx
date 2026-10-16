@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { chooseTheme, currentChoice, onChoiceChange } from "../themeRoot.ts";
 import { THEME_CHOICES, type ThemeChoice } from "./theme.ts";
+import { choiceClass } from "./choice";
 import { cardClass } from "./ui";
 
 const LABEL: Record<ThemeChoice, string> = { system: "System", light: "Light", dark: "Dark" };
@@ -40,12 +41,7 @@ export default function ThemeSection() {
             type="button"
             aria-pressed={choice === c}
             onClick={() => pick(c)}
-            className={
-              "rounded-sm border px-3 py-1.5 text-sm transition " +
-              (choice === c
-                ? "border-olive bg-olive-tint text-olive-deep"
-                : "border-rule text-ink-soft hover:bg-ground")
-            }
+            className={choiceClass(choice === c)}
           >
             {LABEL[c]}
           </button>
