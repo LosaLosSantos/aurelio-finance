@@ -24,6 +24,7 @@ export type LedgerEntry = {
   institution_id: number | null;
   plan_id: number | null;
   plan_occurrence: string | null;
+  ex_date: string | null;
 };
 
 const asIs = (iso: string) => iso;
@@ -50,7 +51,12 @@ export function deleteQuestion(
     return `${asked} ${settled} What the PAC carries goes to zero, and that money stays in the account's cash. If your broker did buy it, correct it with the figures from your statement instead.`;
   }
   if (entry.kind === "dividend" && entry.symbol && entry.institution_id != null) {
-    return `${asked} The app will not record a dividend of ${entry.symbol} at this account on ${fmt(entry.date)} again. If your broker paid it, correct it with the credit from your statement instead.`;
+    // By its ex-date where the row keeps one (brief AZ): a dividend moved to
+    // the day its money arrived is still the dividend of its ex-date.
+    const which = entry.ex_date
+      ? `the dividend of ${entry.symbol} with ex-date ${fmt(entry.ex_date)} at this account`
+      : `a dividend of ${entry.symbol} at this account on ${fmt(entry.date)}`;
+    return `${asked} The app will not record ${which} again. If your broker paid it, correct it with the credit from your statement instead.`;
   }
   return `${asked} Nothing brings it back.`;
 }

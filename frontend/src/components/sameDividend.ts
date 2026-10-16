@@ -15,10 +15,14 @@
    still-estimated dividend of that account and ticker dated on or before the
    typed date is offered, newest first.
 
-   The ex-date is also how the catch-up knows a dividend is recorded: a row
-   moved off it leaves that day empty, and the next start records the dividend
-   there again (measured the same day). So a correction keeps the row's own
-   date, and moving the date of a row the app recorded is said, not refused.
+   The ex-date is also how the catch-up knows a dividend is recorded. Until
+   brief AZ it was the row's date, so a row moved off it left that day empty
+   and the next start recorded the dividend there again (measured 2026-10-07,
+   and again the same day at `eaa89fc`). A row now keeps its ex-date in a
+   column of its own, which no form sends, so a correction takes the date
+   typed, the day the broker credited it, and says the ex-date stays. Only a
+   row of the app's that has not been given its ex-date yet is still found by
+   its date, and moving it is said, not refused.
 
    Pure, so `tests/sameDividend.test.ts` runs it under Node without a
    bundler. Dates go in as ISO strings; `fmt` is how the page prints them. */
@@ -34,6 +38,7 @@ export type LedgerRow = {
   currency: string;
   estimated: boolean;
   note: string | null;
+  ex_date: string | null;
 };
 
 /** How many estimated rows are named; any older ones are counted. */
@@ -78,12 +83,30 @@ export function olderLine(count: number): string | null {
   return older === 1 ? "And 1 older one." : `And ${older} older ones.`;
 }
 
-/** Said once the form has become the correction of a row. */
-export function correctingLine(rowDate: string, typedDate: string, fmt = asIs): string {
-  const said = `Correcting the dividend of ${fmt(rowDate)} with your figures: save to replace its own.`;
-  return typedDate && typedDate !== rowDate
-    ? `${said} Its date stays ${fmt(rowDate)}, the ex-date the app finds it by, so ${fmt(typedDate)} is not used.`
+/** The day the catch-up finds a dividend by: its ex-date where the row keeps
+    one, otherwise its own date. */
+export function keyDay(row: Pick<LedgerRow, "date" | "ex_date">): string {
+  return row.ex_date ?? row.date;
+}
+
+/** Said once the form has become the correction of a row: it keeps its
+    ex-date and takes the date in the box, the day the broker credited it. */
+export function correctingLine(exDate: string, typedDate: string, fmt = asIs): string {
+  const said = `Correcting the dividend with ex-date ${fmt(exDate)} with your figures: save to replace its own.`;
+  return typedDate && typedDate !== exDate
+    ? `${said} It will be dated ${fmt(typedDate)}, the day your broker credited it, and keep its ex-date.`
     : said;
+}
+
+/** The line under the form when a dividend that keeps its ex-date is dated
+    on another day, or null. */
+export function exDateStays(
+  row: Pick<LedgerRow, "kind" | "ex_date">,
+  date: string,
+  fmt = asIs,
+): string | null {
+  if (row.kind !== "dividend" || !row.ex_date || !date || date === row.ex_date) return null;
+  return `Its ex-date stays ${fmt(row.ex_date)}: the app finds this dividend by that day, whatever day it is dated.`;
 }
 
 /** Whether the app's catch-up recorded this row, by the stamp it wrote. */
@@ -91,13 +114,14 @@ export function recordedByTheApp(row: Pick<LedgerRow, "kind" | "note">): boolean
   return row.kind === "dividend" && (row.note ?? "").startsWith(AUTO_STAMP);
 }
 
-/** The line under the form when a dividend the app recorded is being moved
-    off its ex-date, or null. */
+/** The line under the form when a dividend the app recorded, and has not
+    given its ex-date yet, is being moved off the day it was recorded on, or
+    null. */
 export function movedOffItsDay(
-  row: Pick<LedgerRow, "kind" | "note" | "date">,
+  row: Pick<LedgerRow, "kind" | "note" | "date" | "ex_date">,
   date: string,
   fmt = asIs,
 ): string | null {
-  if (!recordedByTheApp(row) || !date || date === row.date) return null;
+  if (row.ex_date || !recordedByTheApp(row) || !date || date === row.date) return null;
   return `The app recorded this dividend on its ex-date, ${fmt(row.date)}, and finds it by that day. Moved to ${fmt(date)}, the dividend of ${fmt(row.date)} is recorded again at the next start, unless this account has a situation dated on or after it.`;
 }

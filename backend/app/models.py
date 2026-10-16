@@ -576,6 +576,15 @@ class Transaction(Base):
         index=True,
     )
     plan_occurrence: Mapped[str | None] = mapped_column(String, nullable=True)  # YYYY-MM-DD
+    # A dividend's ex-date, the day the catch-up finds it by, whatever day the
+    # row is dated: the reader moves a dividend to the day its money arrived,
+    # and before this column the catch-up then found its ex-date empty and
+    # recorded it again (brief AZ). Written by the catch-up on every dividend it
+    # records, adopted onto one of its older rows still on its ex-date, and set
+    # on the reader's own entry when it is recognised as that dividend or the
+    # reader says it is. Null on every other row, which the catch-up finds by
+    # its date, as it always did. No form sends it, so no edit clears it.
+    ex_date: Mapped[str | None] = mapped_column(String, nullable=True)  # YYYY-MM-DD
     estimated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso, nullable=False)

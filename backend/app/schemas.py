@@ -2228,6 +2228,14 @@ class TransactionRead(TransactionBase):
     )
     plan_id: int | None
     plan_occurrence: str | None
+    ex_date: str | None = Field(
+        ...,
+        description=(
+            "A dividend's ex-date, the day the catch-up finds it by, whatever day "
+            "the row is dated (the day its money arrived, once corrected). Set by "
+            "the app, never by a form; null on every other entry."
+        ),
+    )
     estimated: bool = Field(
         ..., description="Priced at the market close, not a real broker fill"
     )

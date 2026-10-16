@@ -21,6 +21,7 @@ function row(over: Partial<LedgerEntry>): LedgerEntry {
     institution_id: 7,
     plan_id: null,
     plan_occurrence: null,
+    ex_date: null,
     ...over,
   };
 }
@@ -55,11 +56,22 @@ test("a buy whose PAC is gone is the reader's to delete like any other", () => {
   assert.match(deleteQuestion(orphan, [orphan]), /\? Nothing brings it back\.$/);
 });
 
-test("a dividend says the app will not record one on its day again", () => {
+test("a dividend that keeps no ex-date says the app will not record one on its day again", () => {
   const paid = row({ kind: "dividend", date: "2026-09-23", symbol: "XDIV.MI", asset_name: "Example Dividend Share" });
   assert.equal(
     deleteQuestion(paid, [paid]),
     'Delete dividend "Example Dividend Share" of 2026-09-23? The app will not record a dividend of XDIV.MI at this account on 2026-09-23 again. If your broker paid it, correct it with the credit from your statement instead.',
+  );
+});
+
+test("a dividend moved to the day it was paid is named by the ex-date it keeps (brief AZ)", () => {
+  const moved = row({
+    kind: "dividend", date: "2026-09-30", ex_date: "2026-09-23", symbol: "XDIV.MI", asset_name: "Example Dividend Share",
+  });
+  const fmt = (iso: string) => iso.split("-").reverse().join("/");
+  assert.equal(
+    deleteQuestion(moved, [moved], fmt),
+    'Delete dividend "Example Dividend Share" of 30/09/2026? The app will not record the dividend of XDIV.MI with ex-date 23/09/2026 at this account again. If your broker paid it, correct it with the credit from your statement instead.',
   );
 });
 

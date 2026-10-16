@@ -24,7 +24,7 @@ from sqlalchemy import delete, func, select, union, update
 from sqlalchemy.orm import Session, selectinload
 
 from app import dated, fx, models, schemas
-from app.database import commit, unit_of_work
+from app.database import commit, sole_writer, unit_of_work
 
 if TYPE_CHECKING:  # `positions` imports this module for the price cache
     from app.positions import Position
@@ -1326,6 +1326,11 @@ def amount_was_stated(tx: models.Transaction) -> bool:
 # which shares its table. Read by the picture, and pinned by the tests.
 DELETED_FROM_THE_LEDGER = "Its buy was deleted from the ledger"
 
+# How every dividend the catch-up records starts its note: where the row came
+# from, which no edit makes false (`pac.AUTO_RECORDED` is this string). Read
+# here to tell the catch-up's own rows from the reader's (`adopt_ex_dates`).
+AUTO_DIVIDEND_NOTE = "Auto-recorded from market data"
+
 # A dividend deleted from the ledger, remembered so the catch-up does not
 # record one again on that account, ticker and day: a row of `settings`, as
 # the catch-up's other memories are (`pac._DIVIDENDS_ASKED`), its value the
@@ -1364,7 +1369,10 @@ def delete_transaction(db: Session, tx_id: int) -> bool:
       money never left the account's cash.
     - A dividend deleted is remembered by its account, ticker and day
       (`get_dividend_dates_settled`), any dividend row there having settled the
-      day for the catch-up, the reader's own included.
+      day for the catch-up, the reader's own included. The day is its ex-date
+      where the row keeps one (brief AZ): a dividend moved to the day its money
+      arrived and then deleted is the dividend of its ex-date, and that is the
+      day the catch-up would record it on again.
 
     The row goes first, so the questions after it are asked holding SQLite's
     write lock, as `database.sole_writer` would hold it; this one cannot take
@@ -1396,7 +1404,7 @@ def delete_transaction(db: Session, tx_id: int) -> bool:
                 )
         if tx.kind == "dividend" and tx.symbol and tx.institution_id is not None:
             key = _DIVIDEND_DELETED.format(
-                institution_id=tx.institution_id, symbol=tx.symbol, day=tx.date
+                institution_id=tx.institution_id, symbol=tx.symbol, day=tx.ex_date or tx.date
             )
             remembered = sqlite_insert(models.Setting).values(key=key, value=dated.today())
             db.execute(
@@ -1442,13 +1450,48 @@ def get_dividend_dates_recorded(
     db: Session, institution_id: int | None, symbol: str
 ) -> set[str]:
     """Ex-dates already recorded as dividend transactions for a position
-    (institution + symbol)."""
-    stmt = select(models.Transaction.date).where(
+    (institution + symbol): a row's ex-date where it keeps one, whatever day
+    the row is dated, and otherwise its date, the one key there was before
+    rows kept their ex-date (brief AZ)."""
+    stmt = select(func.coalesce(models.Transaction.ex_date, models.Transaction.date)).where(
         models.Transaction.kind == "dividend",
         models.Transaction.symbol == symbol,
         models.Transaction.institution_id == institution_id,
     )
     return set(db.scalars(stmt))
+
+
+def adopt_ex_dates(
+    db: Session, institution_id: int, symbol: str, listed: Collection[str]
+) -> int:
+    """Give the ex-date to every dividend of this position the catch-up wrote
+    that keeps none and is dated on a day Yahoo lists as one of its ex-dates,
+    which is the day the catch-up wrote it on. How many it gave it to.
+
+    The migration gave it only to the rows still marked estimated, the ones
+    certainly on their ex-date without asking anyone; a row the reader has
+    corrected kept null and its date as its key, and a move would have lost
+    it. Written under SQLite's write lock (`database.sole_writer`), as every
+    write of the catch-up is, and asked first without it, so a position with
+    nothing to adopt, which is every one after the first catch-up, takes no
+    lock. No figure moves, so nothing is said."""
+    if not listed:
+        return 0
+    unkeyed = select(models.Transaction).where(
+        models.Transaction.kind == "dividend",
+        models.Transaction.institution_id == institution_id,
+        models.Transaction.symbol == symbol,
+        models.Transaction.ex_date.is_(None),
+        models.Transaction.note.startswith(AUTO_DIVIDEND_NOTE, autoescape=True),
+        models.Transaction.date.in_(sorted(listed)),
+    )
+    if db.scalars(unkeyed.with_only_columns(models.Transaction.id)).first() is None:
+        return 0
+    with sole_writer(db):
+        rows = list(db.scalars(unkeyed))
+        for row in rows:
+            row.ex_date = row.date
+    return len(rows)
 
 
 def get_dividend_dates_deleted(

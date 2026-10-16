@@ -1360,7 +1360,8 @@ class ChangeLedgerEntryArgs(BaseModel):
         ...,
         description=(
             "The entry's day, as the ledger in the picture shows it; for a PAC's buy, the "
-            "day it was bought or the occurrence it is for."
+            "day it was bought or the occurrence it is for; for a dividend, its day or its "
+            "ex-date."
         ),
     )
     kind: Literal["buy", "sell", "dividend", "close"] = Field(
@@ -1380,7 +1381,10 @@ class ChangeLedgerEntryArgs(BaseModel):
     )
     new_date: datetime.date | None = Field(
         default=None,
-        description="correct: the day it happened, or null to keep it. A dividend the app recorded keeps its day.",
+        description=(
+            "correct: the day it happened, or null to keep it. For a dividend, the day the "
+            "broker credited it; its ex-date stays, and the app finds it by that."
+        ),
     )
     new_quantity: float | None = Field(
         default=None, gt=0, description="correct: the units, or null to keep them."
@@ -1423,14 +1427,16 @@ def _entry_text(t: models.Transaction) -> str:
         line = f"{t.date} close {what}: {t.amount:.2f} {t.currency} back"
     else:
         line = f"{t.date} {t.kind} {t.quantity:g} x {what} = {t.amount:.2f} {t.currency}"
+    if t.kind == "dividend" and t.ex_date and t.ex_date != t.date:
+        line += f", ex-date {t.ex_date}"
     return line + (" (estimated)" if t.estimated else "")
 
 
 def _ledger_row(db: Session, args: ChangeLedgerEntryArgs) -> models.Transaction:
     """The entry the reader means, by what they see, or a refusal the model
     can act on. A PAC's buy answers to its occurrence's day as well as its
-    own, both being on its line in the picture; an entry dated that day is
-    preferred."""
+    own, and a dividend to its ex-date (brief AZ), each being on its line in
+    the picture; an entry dated that day is preferred."""
     rows = crud.get_transactions(db)
     wanted = args.instrument.strip().casefold()
     day = args.date.isoformat()
@@ -1438,7 +1444,10 @@ def _ledger_row(db: Session, args: ChangeLedgerEntryArgs) -> models.Transaction:
     def named(t: models.Transaction) -> bool:
         return (t.symbol or "").strip().casefold() == wanted or t.asset_name.strip().casefold() == wanted
 
-    hits = [t for t in rows if t.kind == args.kind and named(t) and day in (t.date, t.plan_occurrence)]
+    hits = [
+        t for t in rows
+        if t.kind == args.kind and named(t) and day in (t.date, t.plan_occurrence, t.ex_date)
+    ]
     hits = [t for t in hits if t.date == day] or hits
     if len(hits) > 1 and args.amount is not None:
         hits = [t for t in hits if abs(t.amount - args.amount) < 0.005] or hits
@@ -1522,12 +1531,16 @@ def _ledger_change(db: Session, args: ChangeLedgerEntryArgs) -> _LedgerChange:
         args.new_date is not None
         and args.new_date.isoformat() != tx.date
         and tx.kind == "dividend"
+        and tx.ex_date is None
         and (tx.note or "").startswith(pac.AUTO_RECORDED)
     ):
+        # The app's own row that has not been given its ex-date yet (the
+        # market has not answered since it was corrected): its date is still
+        # the only key, and moving it would bring the dividend back.
         raise LookupError(
-            f"The dividend of {tx.date} keeps its day: the app recorded it on its ex-date and "
-            "finds it by that day. Correct its figures; a dividend paid on another day is "
-            "entered on the ledger form."
+            f"The dividend of {tx.date} keeps its day for now: the app finds it by that day "
+            "until it has read the dividend's ex-date from the market again. Correct its "
+            "figures; its day can be moved after the next start."
         )
     body = _ledger_body(tx)
     for field_name, value in (
@@ -1694,9 +1707,14 @@ def _propose_ledger_change(db: Session, args: ChangeLedgerEntryArgs) -> Proposal
             said.append("If your broker did buy it, correct the entry with the figures from your statement instead.")
         elif tx.kind == "dividend" and tx.symbol and tx.institution_id is not None:
             holder = crud.get_institution(db, tx.institution_id)
+            which = (
+                f"the dividend of {tx.symbol} with ex-date {tx.ex_date} at {holder.name}"
+                if tx.ex_date
+                else f"a dividend of {tx.symbol} at {holder.name} on {tx.date}"
+            )
             said.append(
-                f"The app will not record a dividend of {tx.symbol} at {holder.name} on {tx.date} "
-                "again. If your broker paid it, correct it with the credit from your statement instead."
+                f"The app will not record {which} again. If your broker paid it, correct it "
+                "with the credit from your statement instead."
             )
         said.extend(why)
         title = f"delete {tx.kind}: {_entry_text(tx)}"
@@ -1742,8 +1760,13 @@ def _propose_ledger_change(db: Session, args: ChangeLedgerEntryArgs) -> Proposal
                     "it is: the plan's own reckoning of what whole units could not place at the estimate"
                 )
             said.append(keeps + ".")
-        if tx.kind == "dividend" and (tx.note or "").startswith(pac.AUTO_RECORDED):
-            said.append(f"Its day stays {tx.date}, the ex-date the app finds it by.")
+        if tx.kind == "dividend" and tx.ex_date and after.date != tx.date:
+            said.append(
+                f"Its ex-date stays {tx.ex_date}: the app finds this dividend by that day, "
+                "whatever day it is dated."
+            )
+        elif tx.kind == "dividend" and tx.ex_date is None and (tx.note or "").startswith(pac.AUTO_RECORDED):
+            said.append(f"Its day stays {tx.date}, the day the app finds it by.")
         said.extend(why)
         title = f"correct {tx.kind}: {tx.date} {what}" + (
             f", {tx.amount:.2f} → {after.amount:.2f} {tx.currency}" if after.amount != tx.amount else ""

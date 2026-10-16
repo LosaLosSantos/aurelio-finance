@@ -479,9 +479,9 @@ def test_a_dividend_deleted_says_the_app_will_not_record_it_again(client, monkey
         {"field": "Cash at Broker A today", "now": "10006.00 EUR", "proposed": "10000.00 EUR"},
     ]
     assert card["consequence"] == (
-        "The entry goes, and nothing brings it back. The app will not record a dividend of XDIV.MI "
-        "at Broker A on 2026-09-23 again. If your broker paid it, correct it with the credit from "
-        "your statement instead."
+        "The entry goes, and nothing brings it back. The app will not record the dividend of "
+        "XDIV.MI with ex-date 2026-09-23 at Broker A again. If your broker paid it, correct it "
+        "with the credit from your statement instead."
     )
 
 
@@ -535,11 +535,42 @@ def test_a_price_keeps_the_decimals_it_has(client, monkeypatch, market):
 # --- Refused --------------------------------------------------------------------------------
 
 
-def test_a_dividend_the_app_recorded_keeps_its_day(client, monkeypatch, market):
+def test_a_dividend_the_app_recorded_moves_to_the_day_it_was_paid_and_keeps_its_ex_date(
+    client, monkeypatch, market
+):
+    """Brief AZ: the row keeps its ex-date in a column of its own, so the card
+    moves it to the day the broker credited it, and the next start does not
+    record it again on the ex-date it left. Until then the card refused the
+    move, the ex-date being the only key the catch-up had."""
     _holder(client)
+    card = _draw(client, monkeypatch, action="correct", date="2026-09-23", kind="dividend",
+                 instrument="XDIV.MI", new_date="2026-09-30", new_amount=4.41)
+    assert {"field": "Day", "now": "2026-09-23", "proposed": "2026-09-30"} in card["diff"]
     assert (
-        "The dividend of 2026-09-23 keeps its day: the app recorded it on its ex-date and finds it "
-        "by that day. Correct its figures; a dividend paid on another day is entered on the ledger form."
+        "Its ex-date stays 2026-09-23: the app finds this dividend by that day, whatever day it "
+        "is dated."
+    ) in card["consequence"]
+    assert _confirm(client, monkeypatch, card).status_code == 200
+    row = _row(client, "dividend", "2026-09-30", "XDIV.MI")
+    assert (row["ex_date"], row["amount"], row["estimated"]) == ("2026-09-23", 4.41, False)
+    assert _catch_up(client) == []
+    market("2026-10-12")
+    assert _catch_up(client) == []
+
+
+def test_a_dividend_of_the_apps_with_no_ex_date_yet_keeps_its_day(client, monkeypatch, market):
+    """One the reader corrected before rows kept their ex-date, on a day the
+    market has not answered since: its date is still its only key, so the
+    card corrects its figures and leaves its day."""
+    _holder(client)
+    with SessionLocal() as db:
+        row = db.scalars(select(models.Transaction).where(models.Transaction.kind == "dividend")).one()
+        row.ex_date, row.estimated = None, False
+        db.commit()
+    assert (
+        "The dividend of 2026-09-23 keeps its day for now: the app finds it by that day until it "
+        "has read the dividend's ex-date from the market again. Correct its figures; its day can "
+        "be moved after the next start."
     ) in _refused(client, monkeypatch, action="correct", date="2026-09-23", kind="dividend",
                   instrument="XDIV.MI", new_date="2026-09-30", new_amount=4.41)
 

@@ -313,7 +313,11 @@ def _plan_executed(db: Session, plan, txs: list) -> str:
 def _settles(t, named: dict[int, str]) -> str:
     """What a buy a PAC made says about it on its ledger line: the plan, the
     occurrence it settles and the day it was bought, which is the occurrence's
-    own day or the first session after it. Nothing for any other entry."""
+    own day or the first session after it. A dividend dated on another day
+    than its ex-date (the day its money arrived, brief AZ) says its ex-date.
+    Nothing for any other entry."""
+    if t.kind == "dividend" and t.ex_date and t.ex_date != t.date:
+        return f", the dividend with ex-date {t.ex_date}"
     if not t.plan_occurrence:
         return ""
     plan = f'the PAC "{named[t.plan_id]}"' if t.plan_id in named else "a PAC no longer on record"

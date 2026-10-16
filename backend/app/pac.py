@@ -785,9 +785,10 @@ def _follows_dividends(h: models.Holding) -> bool:
 
 # How every dividend the catch-up records starts its note: where the row came
 # from, which no edit makes false. The ledger form reads it (`sameDividend.ts`,
-# `AUTO_STAMP`) and so does the chat's card for a correction, to keep such a
-# dividend on its ex-date (brief AO).
-AUTO_RECORDED = "Auto-recorded from market data"
+# `AUTO_STAMP`) and so does the chat's card for a correction (brief AO), and
+# `crud` keeps the string, since it tells the catch-up's own rows from the
+# reader's when it gives them their ex-date (brief AZ).
+AUTO_RECORDED = crud.AUTO_DIVIDEND_NOTE
 
 
 def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
@@ -849,10 +850,15 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 # Nobody answered. Not kept, so the next catch-up asks again,
                 # and said nowhere, as before: the next start retries by itself.
                 continue
+            # A row this catch-up wrote, still on the ex-date it was written on
+            # but keeping none (one the reader corrected before rows kept their
+            # ex-date), takes it now, before the reader can move it (brief AZ).
+            crud.adopt_ex_dates(db, inst_id, h.symbol, {d["date"] for d in window.dividends})
             # Strictly after the anchor, the cut `get_dividends_since` makes:
             # the situation already accounts for its own day.
             divs = [d for d in window.dividends if d["date"] > snap.date]
-            # Recorded, or deleted by the reader, which stays deleted (brief AO).
+            # Recorded (by its ex-date wherever its row is dated, brief AZ), or
+            # deleted by the reader, which stays deleted (brief AO).
             done = crud.get_dividend_dates_settled(db, inst_id, h.symbol)
             position_txs = dated.events_after(
                 snap,
@@ -959,11 +965,14 @@ def _record_dividend(
     and the write. Asked here, the second finds the first one's row and writes
     nothing; the first reports it. Any dividend row on that account, ticker and
     ex-date counts, the reader's own included, and so does one the reader
-    deleted from that day, exactly as `done` does."""
+    deleted from that day, exactly as `done` does.
+
+    The row keeps its ex-date (brief AZ), so the reader can move it to the day
+    its money arrived and the catch-up still finds it by that day."""
     with sole_writer(db):
         if ex_date in crud.get_dividend_dates_settled(db, institution_id, symbol):
             return None
-        return crud.store_transaction(db, columns, estimated=True)
+        return crud.store_transaction(db, columns, estimated=True, ex_date=ex_date)
 
 
 # Symbols the day's batch asked about and Yahoo priced nothing for, while it

@@ -47,11 +47,14 @@ import {
   SHOWN,
   correctingLine,
   estimatedDividends,
+  exDateStays,
+  keyDay,
   movedOffItsDay,
   offerLine,
   olderLine,
 } from "./sameDividend";
 import { deleteQuestion } from "./ledgerDelete";
+import { ledgerDetail } from "./ledgerDetail";
 import { marks, refusal, transaction } from "./required";
 import type { Focus } from "../nav";
 
@@ -1160,8 +1163,8 @@ function BuysSection({
   const [newType, setNewType] = useState("");
   const [creatingInstitution, setCreatingInstitution] = useState(false);
   // Set by "Correct this one" (brief AI): the form is correcting a dividend
-  // the app recorded, and remembers the date that was typed for a new one.
-  const [correcting, setCorrecting] = useState<{ id: number; typedDate: string } | null>(null);
+  // the app recorded, with the figures and the date typed for a new one.
+  const [correcting, setCorrecting] = useState<{ id: number } | null>(null);
   const formRef = useRef<HTMLDivElement | null>(null);
   const quantityRef = useRef<HTMLInputElement | null>(null);
   const newNameRef = useRef<HTMLInputElement | null>(null);
@@ -1289,12 +1292,15 @@ function BuysSection({
      recorded was stored beside it and counted twice, so the form offers that
      row instead, and this turns the form into its correction: what the reader
      typed for the new one goes onto it, a box they left empty keeps the row's
-     figure, and the row keeps its own date, the ex-date the catch-up finds it
-     by. A price typed brings its currency with it; a per-share figure in
-     euros does not belong beside the row's dollars. */
+     figure. The date typed goes onto it too since brief AZ: the row keeps its
+     ex-date in a field of its own, the day the catch-up finds it by, so it can
+     be dated on the day the broker credited it. A price typed brings its
+     currency with it; a per-share figure in euros does not belong beside the
+     row's dollars. */
   function correctInstead(t: Transaction) {
     const typed = { quantity, unitPrice, fees, debit, date, priceCurrency, currencyChoice };
     startEdit(t);
+    if (typed.date) setDate(typed.date);
     if (typed.quantity) setQuantity(typed.quantity);
     if (typed.unitPrice) {
       setUnitPrice(typed.unitPrice);
@@ -1303,7 +1309,7 @@ function BuysSection({
     if (typed.fees) setFees(typed.fees);
     if (typed.debit) setDebit(typed.debit);
     if (typed.currencyChoice) setCurrencyChoice(typed.currencyChoice);
-    setCorrecting({ id: t.id, typedDate: typed.date });
+    setCorrecting({ id: t.id });
   }
 
   /* The first institution, made from inside the form that needs one.
@@ -1438,10 +1444,13 @@ function BuysSection({
   const editing = editId != null ? items.find((t) => t.id === editId) : undefined;
   const correctingNote =
     correcting && editing && correcting.id === editing.id
-      ? correctingLine(editing.date, correcting.typedDate, fmtDate)
+      ? correctingLine(keyDay(editing), date, fmtDate)
       : null;
-  // Said, not refused: moved off its ex-date, a dividend the app recorded is
-  // recorded again at the next start.
+  // A dividend dated on another day than its ex-date keeps it, and the line
+  // says so, unless the correction's own line already does.
+  const exDateNote = editing && !correctingNote ? exDateStays(editing, date, fmtDate) : null;
+  // Said, not refused: one of the app's that has no ex-date yet is still found
+  // by its date, and moved off it is recorded again at the next start.
   const movedNote = editing ? movedOffItsDay(editing, date, fmtDate) : null;
   // An entry is matched to its position by the exact ticker. One no position
   // carries is right for a first buy and a typo otherwise, so it is said in
@@ -1779,6 +1788,7 @@ function BuysSection({
         </div>
       )}
       {correctingNote && <p className="mt-2 text-xs text-olive">{correctingNote}</p>}
+      {exDateNote && <p className="mt-2 text-xs text-olive">{exDateNote}</p>}
       {movedNote && <p className="mt-2 text-xs text-warn">{movedNote}</p>}
       {unknownSymbol && (
         <p className="mt-2 text-xs text-warn">
@@ -1821,7 +1831,8 @@ function BuysSection({
             ]
               .filter(Boolean)
               .join(" · ")}
-            detail={t.currency_note ? `⚠ ${t.currency_note}` : undefined}
+            // A dividend's ex-date, on a line that is never clipped (brief AZ).
+            detail={ledgerDetail(t, fmtDate)}
             note={t.note}
             value={(t.kind === "buy" ? "−" : "+") + money(t.currency).format(t.amount)}
           />

@@ -74,8 +74,9 @@ def update_transaction(
 def delete_transaction(tx_id: int, db: Session = Depends(get_db)) -> None:
     """Delete an entry, and the catch-up leaves it deleted: a PAC's occurrence
     whose last buy goes stays settled and is never bought again, the plan's
-    carry going to zero; a dividend is not recorded again on its day. The chat's
-    card deletes through the same function (`crud.delete_transaction`)."""
+    carry going to zero; a dividend is not recorded again, by its ex-date
+    wherever its row was dated. The chat's card deletes through the same
+    function (`crud.delete_transaction`)."""
     get_or_404(db, models.Transaction, tx_id)
     crud.delete_transaction(db, tx_id)
 
