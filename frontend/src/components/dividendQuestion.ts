@@ -8,8 +8,11 @@
    until it is answered: two entries one dividend could be, one entry two
    dividends could be, an entry beside the app's own estimate of the same
    dividend (two rows for one dividend, which the cash and the tax estimate
-   both counted). Each answer is a request to `/api/transactions/dividend-
-   answer`: "link" (this entry is that dividend) or "apart" (it is not).
+   both counted). And a dividend whose window holds the account's latest
+   balance, with no payment date known: whether its money was already in that
+   balance, which only the reader's statement says. Each answer is a request
+   to `/api/transactions/dividend-answer`: "link" (this entry is that
+   dividend), "apart" (it is not), "in_balance" or "after_balance".
 
    Pure, and with no runtime imports, so `tests/dividendQuestion.test.ts` runs
    it under Node without a bundler. Dates go in as ISO strings; the page says
@@ -35,16 +38,19 @@ export type Question = {
   symbol: string;
   dividends: Listed[];
   entries: Entry[];
+  balance_date?: string | null;
+  first_situation?: string | null;
 };
 
 /** The body of an answer (`DividendAnswer`). */
 export type Answer = {
   institution_id: number;
   symbol: string;
-  answer: "link" | "apart";
+  answer: "link" | "apart" | "in_balance" | "after_balance";
   transaction_id?: number;
   ex_date?: string;
   pairs?: { transaction_id: number; ex_date: string }[];
+  balance_date?: string;
 };
 
 export type Choice = { label: string; answer: Answer };
@@ -114,6 +120,19 @@ export function questionText(q: Question, f: Formats): string {
     const days = q.dividends.map((x) => `ex-date ${f.date(x.ex_date)}`);
     return `${where(q)}: your entry of ${entry(e, f)} could be the dividend with ${listed(days, "or")}. Which one is it?`;
   }
+  if (q.kind === "in_balance" && d && q.balance_date) {
+    // The money of a dividend whose window holds the account's latest
+    // balance, with no payment date known: the reader's statement says
+    // whether that balance held it.
+    const units = q.first_situation
+      ? `${d.units} units of your first situation, of ${f.date(q.first_situation)}`
+      : `${d.units} units held then`;
+    const gross =
+      d.dps != null && d.currency && d.units != null
+        ? `: ${f.perShare(d.dps, d.currency)} a share, about ${f.money(d.dps * d.units, d.currency)} gross for the ${units}`
+        : "";
+    return `${where(q)}: Yahoo lists a dividend with ex-date ${f.date(d.ex_date)}, before your balance of ${f.date(q.balance_date)}${gross}. Was its money already in that balance?`;
+  }
   return `${where(q)}: a dividend the app cannot pair with your entries.`;
 }
 
@@ -138,6 +157,13 @@ export function choices(q: Question, f: Formats): Choice[] {
     return [
       ...q.dividends.map((x) => ({ label: `Ex-date ${f.date(x.ex_date)}`, answer: link(q, e, x) })),
       { label: "None of them", answer: apart(q, q.dividends.map((x) => [e, x] as [Entry, Listed])) },
+    ];
+  }
+  if (q.kind === "in_balance" && d && q.balance_date) {
+    const about = { institution_id: q.institution_id, symbol: q.symbol, ex_date: d.ex_date, balance_date: q.balance_date };
+    return [
+      { label: "Yes, it was in it", answer: { ...about, answer: "in_balance" } },
+      { label: "No, it came after", answer: { ...about, answer: "after_balance" } },
     ];
   }
   return [];

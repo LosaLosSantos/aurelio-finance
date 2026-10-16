@@ -1378,6 +1378,48 @@ def get_dividends_apart(db: Session, institution_id: int, symbol: str) -> set[tu
     return pairs
 
 
+# The reader's answer about a dividend whose window the account's latest
+# balance falls in (brief AZ): whether its money was already in that balance
+# ("in") or came after it ("after"). One row of `settings` a dividend, its
+# value "<answer>:<the balance's day>", read only while that balance is still
+# the latest; the catch-up records the dividend from it at once.
+_DIVIDEND_BALANCE = "dividend_balance:{institution_id}:{symbol}:{day}"
+
+
+def remember_balance_answer(
+    db: Session, institution_id: int, symbol: str, day: str, answer: str, balance: str
+) -> None:
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    key = _DIVIDEND_BALANCE.format(institution_id=institution_id, symbol=symbol, day=day)
+    value = f"{answer}:{balance}"
+    kept = sqlite_insert(models.Setting).values(key=key, value=value)
+    db.execute(kept.on_conflict_do_update(index_elements=["key"], set_={"value": value}))
+    commit(db)
+
+
+def get_balance_answer(db: Session, institution_id: int, symbol: str, day: str) -> tuple[str, str] | None:
+    """("in" or "after", the balance's day) as the reader answered, or None."""
+    value = db.scalar(
+        select(models.Setting.value).where(
+            models.Setting.key == _DIVIDEND_BALANCE.format(institution_id=institution_id, symbol=symbol, day=day)
+        )
+    )
+    answer, _, balance = (value or "").partition(":")
+    return (answer, balance) if answer in ("in", "after") and balance else None
+
+
+def get_latest_balance_days(db: Session, on: str) -> dict[int, str]:
+    """{institution id: the day of its latest balance on or before `on`}, the
+    balance the cash register projects from."""
+    rows = db.execute(
+        select(models.CashAnchor.institution_id, func.max(models.CashAnchor.date))
+        .where(models.CashAnchor.date <= on)
+        .group_by(models.CashAnchor.institution_id)
+    )
+    return {institution_id: day for institution_id, day in rows}
+
+
 def deleted_from_the_ledger(reason: str | None) -> bool:
     """Whether an occurrence settled without a buy is one whose buy the reader
     deleted, rather than one that ran and could not buy a unit."""

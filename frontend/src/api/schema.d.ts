@@ -2139,6 +2139,13 @@ export interface components {
          *     themselves and the questions only they can answer (brief AZ).
          */
         CatchUpResult: {
+            /**
+             * Accounts
+             * @description The name of every account a created entry belongs to, by its id: what the banner lists the recorded dividends under.
+             */
+            accounts: {
+                [key: string]: string;
+            };
             /** Created */
             created: components["schemas"]["TransactionRead"][];
             /** Questions */
@@ -3133,14 +3140,18 @@ export interface components {
          *
          *     `link`: the entry `transaction_id` is the dividend with `ex_date` (the
          *     app's estimate of it, if any, goes). `apart`: each pair in `pairs` is not
-         *     one dividend, and the two are never paired again.
+         *     one dividend, and the two are never paired again. `in_balance` and
+         *     `after_balance`: the money of the dividend with `ex_date` was already in
+         *     the balance of `balance_date`, or came after it.
          */
         DividendAnswer: {
             /**
              * Answer
              * @enum {string}
              */
-            answer: "link" | "apart";
+            answer: "link" | "apart" | "in_balance" | "after_balance";
+            /** Balance Date */
+            balance_date?: string | null;
             /** Ex Date */
             ex_date?: string | null;
             /** Institution Id */
@@ -3190,14 +3201,23 @@ export interface components {
          *     dividend; keep theirs and remove the estimate, or keep both.
          *     `which_entry`: two or more of their entries could be one dividend.
          *     `which_dividend`: one entry could be two or more dividends.
+         *     `in_balance`: the account's latest balance, `balance_date`, falls in the
+         *     dividend's window and no payment date is known: was its money already in
+         *     that balance? `first_situation` is the day of the account's first
+         *     situation when the units are that situation's, the ex-date being before
+         *     it.
          */
         DividendQuestion: {
             /** Asset Name */
             asset_name: string;
+            /** Balance Date */
+            balance_date: string | null;
             /** Dividends */
             dividends: components["schemas"]["ListedDividend"][];
             /** Entries */
             entries: components["schemas"]["DividendEntryRead"][];
+            /** First Situation */
+            first_situation: string | null;
             /** Institution Id */
             institution_id: number;
             /** Institution Name */
@@ -3206,7 +3226,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "same_dividend" | "which_entry" | "which_dividend";
+            kind: "same_dividend" | "which_entry" | "which_dividend" | "in_balance";
             /** Symbol */
             symbol: string;
         };

@@ -622,15 +622,19 @@ def _settle(
 # afternoon, the same fund at a second account.
 #
 # {"on": day, "since": day or null, "dividends": [...], "last": day or null}.
-# `since` is how far back the answer reaches: null for the whole history,
-# which is asked the first time a ticker is followed; after that, a window
-# reaching back to the earliest situation that needs it, because the whole
-# history is every daily price the ticker ever had (brief AF, 2026-10-05).
+# `since` is how far back the kept history reaches: null for the whole
+# history, which is asked the first time a ticker is followed; after that,
+# each day a window reaching back to the latest situations that follow it,
+# because the whole history is every daily price the ticker ever had (brief
+# AF, 2026-10-05). Each day's window is MERGED into what was kept (brief AZ):
+# the events before the window stay, every event the window reaches is the
+# window's, so the history keeps what an older situation, a dividend whose
+# window straddles a situation, and the stretches between situations need,
+# with no wider request a day. A ticker whose kept history does not reach a
+# year before its earliest situation is asked once from there.
 # `last` is the latest dividend Yahoo has listed, carried from answer to
-# answer: the whole history found it, and each window reaches back to the day
-# of the answer before it. It is what a holding's line shows. A row brief X
-# wrote has neither key: it holds the whole history, and its latest dividend
-# is its last.
+# answer. It is what a holding's line shows. A row brief X wrote has neither
+# key: it holds the whole history, and its latest dividend is its last.
 #
 # So `settings` holds a cache as well as configuration. Not a table of its own
 # like `price_cache`: that would be a migration on the reader's real money for
@@ -718,51 +722,75 @@ def _dividend_history(
     symbol: str,
     today: str,
     need: str,
+    reach: str,
     answers: dict[str, prices.DividendWindow | prices.PriceError],
 ) -> prices.DividendWindow:
-    """Every dividend Yahoo lists for `symbol` after `need`, the earliest
-    situation among the holdings that follow it, asked for until Yahoo answers
-    and then not again that day.
+    """Every dividend Yahoo has listed for `symbol` since `reach`, or longer,
+    asked for until Yahoo answers and then not again that day.
 
-    Today's kept answer when it reaches back to `need`; otherwise Yahoo is
-    asked, and an answer is kept for the rest of the day. The whole history the
-    first time a ticker is followed, which is what tells its line when it last
-    paid; after that a window from `need`, or from the day of the answer before
-    when that is earlier, so the last dividend stays known. Only an answer is
-    kept: a window nobody answered (which yfinance reports without raising) and
-    a `PriceError` (the fetch failed) are not, so the next catch-up asks again.
-    Within one catch-up the outcome, whichever it is, is reused from
-    `answers`, so a fund held at two accounts is asked about once: `need` is
-    the earliest of their situations.
+    `need` is the latest situation among the accounts that follow the ticker
+    (the earliest of those), which is what each day's window reaches back to;
+    `reach` is how far back the kept history must go: a year before the
+    earliest situation that follows it, so a dividend whose window straddles
+    that situation, and every stretch after it, can be read (brief AZ).
 
-    A situation entered later the same day with an older date than the kept
-    answer reaches asks again, from that date."""
+    Today's kept history when it reaches `reach`; otherwise Yahoo is asked,
+    and what it answers is merged into the kept history (`_merge`) and kept
+    for the rest of the day. The whole history the first time a ticker is
+    followed, which is what tells its line when it last paid; after that a
+    window from `need`, or from the day of the answer before when that is
+    earlier; and once, from `reach`, when the kept history does not reach it
+    (one kept before brief AZ, or a situation entered with an older date).
+    Only an answer is kept: a window nobody answered (which yfinance reports
+    without raising) and a `PriceError` (the fetch failed) are not, so the
+    next catch-up asks again. Within one catch-up the outcome, whichever it is,
+    is reused from `answers`, so a fund held at two accounts is asked about
+    once."""
     if symbol not in answers:
         kept = _kept(db, symbol)
-        if kept is not None and kept["on"] == today and (kept.get("since") is None or kept["since"] <= need):
+        held = None if kept is None else kept.get("since")
+        reaches = kept is not None and (held is None or held <= reach)
+        if kept is not None and kept["on"] == today and reaches:
             # Yahoo's answer of today, as it was kept.
             answer = prices.DividendWindow(answered=True, dividends=kept["dividends"])
         else:
-            since = (
-                datetime.date.min
-                if kept is None
-                else min(datetime.date.fromisoformat(need), datetime.date.fromisoformat(kept["on"]))
-            )
+            if kept is None:
+                since = datetime.date.min
+            else:
+                start = need if reaches else reach
+                since = min(datetime.date.fromisoformat(start), datetime.date.fromisoformat(kept["on"]))
             try:
-                answer = prices.get_dividends_since(symbol, since)
+                fetched = prices.get_dividends_since(symbol, since)
             except prices.PriceError as exc:
                 answers[symbol] = exc
                 raise
-            if answer.answered:
-                seen = [d["date"] for d in answer.dividends if d["date"] <= today]
+            answer = fetched
+            if fetched.answered:
+                merged = _merge(kept, fetched, since)
+                seen = [d["date"] for d in merged if d["date"] <= today]
                 last = max([*seen, *filter(None, [_last_known(kept)])], default=None)
-                reach = None if since == datetime.date.min else since.isoformat()
-                _keep_answer(db, symbol, today, list(answer.dividends), reach, last)
+                # How far back the merged history now reaches: the whole
+                # history once either side was, else the earlier of the two.
+                kept_from = None if since == datetime.date.min or held is None else min(since.isoformat(), held)
+                _keep_answer(db, symbol, today, merged, kept_from, last)
+                answer = prices.DividendWindow(answered=True, dividends=merged)
         answers[symbol] = answer
     outcome = answers[symbol]
     if isinstance(outcome, prices.PriceError):
         raise outcome
     return outcome
+
+
+def _merge(kept: dict | None, fetched: prices.DividendWindow, since: datetime.date) -> list[dict]:
+    """The kept history with Yahoo's new answer in its place: every event the
+    answer reaches (strictly after `since`, the cut `get_dividends_since`
+    makes) is the answer's, so a dividend Yahoo corrected or withdrew is as it
+    says now; every event before it stays as kept."""
+    lo = since.isoformat()
+    before = [] if kept is None else [
+        d for d in kept["dividends"] if isinstance(d, dict) and isinstance(d.get("date"), str) and d["date"] <= lo
+    ]
+    return sorted([*before, *fetched.dividends], key=lambda d: d["date"])
 
 
 def _follows_dividends(h: models.Holding) -> bool:
@@ -806,7 +834,12 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     (brief AZ): their entry dated in the dividend's window is recognised as it
     when the pairing is unique both ways (`dividend_pairs`), and every other
     case is asked, as is an entry beside the app's estimate of the same
-    dividend. Returns what was recorded, skipped, recognised and asked."""
+    dividend. Every stretch between situations is read, each dividend with the
+    units of the stretch its ex-date falls in, so one the catch-up never met
+    is recorded too; and a dividend whose window holds the account's latest
+    balance, with no payment date known, is asked about: whether its money was
+    already in that balance. Returns what was recorded, skipped, recognised
+    and asked."""
     # The reader's day, read once: it says which ex-dates are due (`as_of`,
     # unless the caller names another day) and whether Yahoo has already
     # answered about a ticker today.
@@ -824,11 +857,19 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     answers: dict[str, prices.DividendWindow | prices.PriceError] = {}
     all_txs = list(db.scalars(select(models.Transaction)))
     names = {i.id: i.name for i in db.scalars(select(models.Institution))}
-    # The photograph in force at `as_of` — the same date the ex-dates below are
-    # filtered by. One anchor for one question: a snapshot dated after the day
-    # being caught up to would decide which units are held on days it had not
-    # been taken yet.
-    anchors = latest_snapshot_by_institution(db, as_of.isoformat())
+    # Every situation of every account up to `as_of`, oldest first: each
+    # dividend's units come from the stretch its ex-date falls in (brief AZ).
+    # One cut for one question: a snapshot dated after the day being caught up
+    # to would decide which units are held on days it had not been taken yet.
+    situations = _situations(db, as_of)
+    # The tickers each account follows, in any of its situations, with the
+    # latest holding that follows each (its name and class go on the row).
+    followed: dict[int, dict[str, models.Holding]] = {}
+    for inst_id, snaps in situations.items():
+        for snap in snaps:
+            for h in snap.holdings:
+                if _follows_dividends(h):
+                    followed.setdefault(inst_id, {})[h.symbol] = h
     # What each listing trades in, when anything has priced it. A dividend per
     # share is in that currency unless Yahoo names another; where it is not
     # known the holding's own currency stands in, the rule a position is valued
@@ -836,25 +877,30 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     listing = {
         sym: q["currency"]
         for sym, q in crud.get_cached_prices(
-            db, sorted({h.symbol for s in anchors.values() for h in s.holdings if h.symbol})
+            db, sorted({sym for symbols in followed.values() for sym in symbols})
         ).items()
         if q.get("currency")
     }
-    # How far back each ticker's answer must reach: the earliest situation of
-    # the holdings that follow it, so one request serves them all.
+    # How far back each ticker's answer must reach: each day's window, to the
+    # latest situation of the accounts that follow it (the earliest of those),
+    # and the kept history, to a year before their earliest situation.
     need: dict[str, str] = {}
-    for snap in anchors.values():
-        for h in snap.holdings:
-            if _follows_dividends(h):
-                need[h.symbol] = min(need.get(h.symbol, snap.date), snap.date)
-    for inst_id, snap in anchors.items():
-        for h in snap.holdings:
-            if not _follows_dividends(h):
-                continue
+    reach: dict[str, str] = {}
+    for inst_id, symbols in followed.items():
+        latest, first = situations[inst_id][-1].date, situations[inst_id][0].date
+        year_before = (datetime.date.fromisoformat(first) - _HISTORY_BEFORE_FIRST).isoformat()
+        for sym in symbols:
+            need[sym] = min(need.get(sym, latest), latest)
+            reach[sym] = min(reach.get(sym, year_before), year_before)
+    balances = crud.get_latest_balance_days(db, today)
+    for inst_id, symbols in followed.items():
+        snaps = situations[inst_id]
+        balance = balances.get(inst_id)
+        for symbol, latest_holding in symbols.items():
             try:
-                window = _dividend_history(db, h.symbol, today, need[h.symbol], answers)
+                window = _dividend_history(db, symbol, today, need[symbol], reach[symbol], answers)
             except prices.PriceError as exc:
-                skipped.append({"label": h.symbol, "occurrence": None, "reason": str(exc)})
+                skipped.append({"label": symbol, "occurrence": None, "reason": str(exc)})
                 continue
             if not window.answered:
                 # Nobody answered. Not kept, so the next catch-up asks again,
@@ -867,47 +913,39 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
             # Where each dividend's money can arrive, which is where the
             # reader's entry of it can be dated (`dividend_pairs.windows`).
             spans = dividend_pairs.windows(d["date"] for d in listed)
-            crud.adopt_ex_dates(db, inst_id, h.symbol, _adoptable(db, inst_id, h.symbol, spans))
-            # Strictly after the anchor, the cut `get_dividends_since` makes:
-            # the situation already accounts for its own day.
-            scope = [d for d in listed if snap.date < d["date"] <= as_of.isoformat()]
-            position_txs = dated.events_after(
-                snap,
-                (
-                    t
-                    for t in all_txs
-                    if t.institution_id == inst_id and t.symbol == h.symbol
-                ),
-            )
-            due: dict[str, _Due] = {}
-            for d in scope:
-                # Units held STRICTLY before the ex-date: you have to own the
-                # shares before it. `until` is exclusive, and it is the whole
-                # reason that boundary is a parameter rather than a loop each
-                # caller writes for itself.
-                shares = replay(
-                    position_txs, start_qty=h.quantity, until=d["date"]
-                ).quantity
-                if shares > 0:
-                    due[d["date"]] = _Due(d, shares)
+            crud.adopt_ex_dates(db, inst_id, symbol, _adoptable(db, inst_id, symbol, spans))
+            due = _due(snaps, [t for t in all_txs if t.institution_id == inst_id and t.symbol == symbol],
+                       symbol, listed, spans, as_of)
             # The reader's own entries of these dividends: one recognised when
             # the pairing is unique both ways, every other case asked, and a
             # dividend some entry could be is not recorded meanwhile.
-            pairing, ledger = _pairing(db, inst_id, h.symbol, due, spans, {d["date"] for d in scope})
+            pairing, ledger = _pairing(db, inst_id, symbol, due, spans)
             for tx_id, x in pairing.recognised:
-                seen = _recognise(db, inst_id, h.symbol, tx_id, x, due, spans, {d["date"] for d in scope})
+                seen = _recognise(db, inst_id, symbol, tx_id, x, due, spans)
                 if seen is not None:
-                    recognised.append(_recognition(inst_id, names, h.symbol, x, seen))
+                    recognised.append(_recognition(inst_id, names, symbol, x, seen))
             questions.extend(
-                _questions(pairing, ledger, due, inst_id, names, h, listed, listing)
+                _questions(pairing, ledger, due, inst_id, names, latest_holding, listed, listing)
             )
             # Recorded (by its ex-date wherever its row is dated, brief AZ), or
             # deleted by the reader, which stays deleted (brief AO).
-            done = crud.get_dividend_dates_settled(db, inst_id, h.symbol)
+            done = crud.get_dividend_dates_settled(db, inst_id, symbol)
             for x, item in due.items():
-                d, shares = item.event, item.units
+                # The holding of the stretch the ex-date falls in: its name,
+                # class and currency go on the row.
+                d, shares, h = item.event, item.units, item.holding
                 ex_date = datetime.date.fromisoformat(x)
                 if x in done or x in pairing.held:
+                    continue
+                end = spans[x][1]
+                if item.first and not (balance is not None and x <= balance < end):
+                    # Before the account's first situation, the units are the
+                    # first situation's, which nothing says were held then:
+                    # such a dividend is recorded only when the reader answers
+                    # the question below, which says so. With the latest
+                    # balance outside its window it would count nowhere, or
+                    # count on that guess (the ledger before the first
+                    # situation is unread, brief AW).
                     continue
                 if "unreadable" in d:
                     # Said on its own ex-date, and asked again at every start
@@ -924,6 +962,22 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                         }
                     )
                     continue
+                # The day its money is counted from, against the account's
+                # latest balance: its ex-date, unless that balance falls in the
+                # dividend's window, where only the reader knows whether the
+                # money was already in it, and the app asks (brief AZ).
+                said = ""
+                credited = ex_date
+                if balance is not None and x <= balance < end:
+                    told = crud.get_balance_answer(db, inst_id, symbol, x)
+                    if told == ("after", balance):
+                        credited = datetime.date.fromisoformat(balance) + datetime.timedelta(days=1)
+                        said = f", dated the day after your balance of {balance}, which did not hold it"
+                    elif told != ("in", balance):
+                        questions.append(_balance_question(inst_id, names, symbol, item, listing, balance))
+                        continue
+                if item.first:
+                    said += f", for the {shares:g} units of your first situation, of {item.situation}"
                 # The currency Yahoo names for this dividend, which no real
                 # answer measured did; then the listing's.
                 paid_in = d.get("currency") or listing.get(h.symbol) or h.currency
@@ -964,7 +1018,7 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                         # on the row after the correction. The unit is the
                         # listing's: a figure per share without one is five pence
                         # or five pounds.
-                        note=f"{AUTO_RECORDED}: a dividend of {d['dps']} {paid_in} per share",
+                        note=f"{AUTO_RECORDED}: a dividend of {d['dps']} {paid_in} per share{said}",
                     )
                     # Worked out before `_record_dividend` takes the write
                     # lock: for a dividend paid in another currency this is
@@ -975,6 +1029,11 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 except (crud.LedgerRateUnknown, StoredValueRefused) as exc:
                     skipped.append({"label": h.symbol, "occurrence": ex_date, "reason": str(exc)})
                     continue
+                # Worked out on its ex-date, as every dividend is (across two
+                # currencies at that day's rate, which `fx_as_of` keeps), and
+                # dated the day its money is counted from, the day the cash
+                # register reads.
+                columns["date"] = credited.isoformat()
                 written = _record_dividend(db, inst_id, h.symbol, x, columns, spans[x])
                 if written is not None:
                     created.append(written)
@@ -1016,13 +1075,118 @@ def _record_dividend(
         return crud.store_transaction(db, columns, estimated=True, ex_date=ex_date)
 
 
+# How far before an account's earliest situation the kept history reaches: a
+# dividend paid after that situation can have its ex-date up to a year before
+# it (a yearly payer's ex-dates were measured 357 to 364 days apart).
+_HISTORY_BEFORE_FIRST = datetime.timedelta(days=366)
+
+
+def _situations(db: Session, as_of: datetime.date) -> dict[int, list[models.Snapshot]]:
+    """{institution id: its situations dated up to `as_of`, oldest first}."""
+    out: dict[int, list[models.Snapshot]] = {}
+    for snap in db.scalars(
+        select(models.Snapshot)
+        .where(models.Snapshot.date <= as_of.isoformat())
+        .order_by(models.Snapshot.institution_id, models.Snapshot.date, models.Snapshot.id)
+    ):
+        out.setdefault(snap.institution_id, []).append(snap)
+    return out
+
+
+def _following(snap: models.Snapshot, symbol: str) -> models.Holding | None:
+    """The holding of `symbol` in this situation, when it follows dividends."""
+    return next((h for h in snap.holdings if h.symbol == symbol and _follows_dividends(h)), None)
+
+
 @dataclass(frozen=True)
 class _Due:
-    """A dividend of one position the catch-up would record: Yahoo's event
-    and the units held strictly before its ex-date."""
+    """A dividend of one position the catch-up would record: Yahoo's event,
+    the units held strictly before its ex-date, the holding that follows it in
+    the situation those units come from and that situation's day, and whether
+    it is the account's first situation standing in for a day before it."""
 
     event: dict
     units: float
+    holding: models.Holding
+    situation: str
+    first: bool = False
+
+
+def _due(
+    snaps: list[models.Snapshot],
+    entries: list[models.Transaction],
+    symbol: str,
+    listed: list[dict],
+    spans: dict[str, tuple[str, str]],
+    as_of: datetime.date,
+) -> dict[str, _Due]:
+    """Every dividend Yahoo lists for `symbol`, up to `as_of`, that this
+    account held units of, each with the units of the stretch its ex-date falls
+    in: the situation strictly before it, and the ledger since (`entries`, the
+    position's rows). Every stretch, not only the one after the latest
+    situation (brief AZ): a dividend the catch-up never met inside an earlier
+    one was never recorded at all (measured at `eaa89fc`).
+
+    An ex-date before the account's first situation counts only when its
+    window reaches past that situation, so its money can have come after, and
+    then with the first situation's units, which nothing else says."""
+    first = snaps[0]
+    out: dict[str, _Due] = {}
+    for d in listed:
+        x = d["date"]
+        if x > as_of.isoformat():
+            continue
+        before = [s for s in snaps if s.date < x]
+        if before:
+            snap = before[-1]
+            h = _following(snap, symbol)
+            if h is None:
+                continue
+            # Units held STRICTLY before the ex-date: you have to own the
+            # shares before it. `until` is exclusive, and it is the whole
+            # reason that boundary is a parameter rather than a loop each
+            # caller writes for itself.
+            units = replay(dated.events_after(snap, entries), start_qty=h.quantity, until=x).quantity
+            item = _Due(d, units, h, snap.date)
+        else:
+            h = _following(first, symbol)
+            if h is None or spans[x][1] <= first.date:
+                continue
+            item = _Due(d, h.quantity, h, first.date, first=True)
+        if item.units > 0:
+            out[x] = item
+    return out
+
+
+def _balance_question(
+    institution_id: int,
+    names: dict[int, str],
+    symbol: str,
+    item: _Due,
+    listing: dict[str, str],
+    balance: str,
+) -> dict:
+    """The question a dividend asks when the account's latest balance falls
+    in its window and no payment date is known (brief AZ): whether its money
+    was already in that balance."""
+    d = item.event
+    return {
+        "kind": "in_balance",
+        "institution_id": institution_id,
+        "institution_name": names.get(institution_id, ""),
+        "symbol": symbol,
+        "asset_name": item.holding.asset_name,
+        "dividends": [{
+            "ex_date": d["date"],
+            "dps": d.get("dps"),
+            "currency": d.get("currency") or listing.get(symbol) or item.holding.currency,
+            "units": item.units,
+            "estimate": None,
+        }],
+        "entries": [],
+        "balance_date": balance,
+        "first_situation": item.situation if item.first else None,
+    }
 
 
 def _dividend_rows(
@@ -1087,17 +1251,16 @@ def _pairing(
     symbol: str,
     due: dict[str, _Due],
     spans: dict[str, tuple[str, str]],
-    scope: set[str],
 ) -> tuple[dividend_pairs.Pairing, _Ledger]:
     """The reader's entries of this position paired with the dividends they
     could be (`dividend_pairs.pair`), read from the ledger as it is now: the
-    dividends due and not recorded, and those in `scope` that only the app's
+    dividends due and not recorded, and those due that only the app's
     still-estimated row holds, which an entry beside it doubles."""
     keyed, unkeyed = _dividend_rows(db, institution_id, symbol)
     deleted = crud.get_dividend_dates_deleted(db, institution_id, symbol)
     dividends = [dividend_pairs.Dividend(x) for x in due if x not in keyed and x not in deleted]
     for x, rows in keyed.items():
-        if x in scope and x not in deleted and len(rows) == 1 and rows[0].estimated:
+        if x in due and x not in deleted and len(rows) == 1 and rows[0].estimated:
             dividends.append(dividend_pairs.Dividend(x, estimate_id=rows[0].id))
     pairing = dividend_pairs.pair(
         dividends,
@@ -1116,13 +1279,12 @@ def _recognise(
     ex_date: str,
     due: dict[str, _Due],
     spans: dict[str, tuple[str, str]],
-    scope: set[str],
 ) -> models.Transaction | None:
     """Give the reader's entry the ex-date of the dividend it is, asked again
     with the write lock held: the pairing read again, and written only while
     it still pairs those two alone. The entry, or None."""
     with sole_writer(db):
-        pairing, _ = _pairing(db, institution_id, symbol, due, spans, scope)
+        pairing, _ = _pairing(db, institution_id, symbol, due, spans)
         if (tx_id, ex_date) not in pairing.recognised:
             return None
         tx = db.get(models.Transaction, tx_id)
@@ -1212,7 +1374,10 @@ def answer_dividend(db: Session, answer: schemas.DividendAnswer) -> dict:
     "link": the entry is the dividend of that ex-date; it takes the ex-date,
     and the app's estimate of the same dividend, if there is one, is deleted
     (its deletion remembered, brief AO). "apart": each entry named is not the
-    dividend named beside it, and the two are never paired again."""
+    dividend named beside it, and the two are never paired again.
+    "in_balance" and "after_balance": the dividend's money was already in the
+    account's latest balance, or came after it; the catch-up then records it
+    on its ex-date, or on the day after that balance."""
     institution = db.get(models.Institution, answer.institution_id)
     if institution is None:
         raise AnswerRefused("That account is no longer on record.")
@@ -1259,13 +1424,26 @@ def answer_dividend(db: Session, answer: schemas.DividendAnswer) -> dict:
             tx.ex_date = x
             for t in keyed.get(x, []):
                 crud.delete_transaction(db, t.id)
+    elif answer.answer in ("in_balance", "after_balance"):
+        x = answer.ex_date.isoformat()
+        listed(x)
+        latest = crud.get_latest_balance_days(db, dated.today()).get(institution.id)
+        if latest != answer.balance_date.isoformat():
+            raise AnswerRefused(
+                f"The balance of {answer.balance_date.isoformat()} is no longer the latest at "
+                f"{institution.name}: reload the page to see what is asked now."
+            )
+        crud.remember_balance_answer(
+            db, institution.id, symbol, x, "in" if answer.answer == "in_balance" else "after", latest
+        )
     else:
         pairs = []
         for p in answer.pairs:
             listed(p.ex_date.isoformat())
             pairs.append((entry(p.transaction_id).id, p.ex_date.isoformat()))
         crud.remember_apart(db, institution.id, symbol, pairs)
-    return execute_dividends(db)
+    result = execute_dividends(db)
+    return {**result, "accounts": _accounts(db, result["created"])}
 
 
 # Symbols the day's batch asked about and Yahoo priced nothing for, while it
@@ -1394,9 +1572,21 @@ def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:
         # A route the app calls at every start: a price it could not refresh
         # stays the one it was, with its date, and the ledger above stands.
         logger.exception("The daily price refresh failed")
+    created = pacs["created"] + divs["created"]
     return {
-        "created": pacs["created"] + divs["created"],
+        "created": created,
         "skipped": pacs["skipped"] + divs["skipped"],
         "recognised": divs["recognised"],
         "questions": divs["questions"],
+        "accounts": _accounts(db, created),
     }
+
+
+def _accounts(db: Session, rows: list[models.Transaction]) -> dict[int, str]:
+    """{id: name} of every account `rows` belong to, for the banner's list."""
+    ids = {t.institution_id for t in rows if t.institution_id is not None}
+    if not ids:
+        return {}
+    return dict(db.execute(
+        select(models.Institution.id, models.Institution.name).where(models.Institution.id.in_(sorted(ids)))
+    ).all())

@@ -115,6 +115,23 @@ test("a figure a share Yahoo did not give is left out, and so is a gross with no
   assert.match(questionText(noUnits, f), /ex-date 22 September 2026, 0\.25 EUR a share\. Two of/);
 });
 
+test("a dividend whose window holds the latest balance asks whether the balance held it", () => {
+  const q = question({ kind: "in_balance", entries: [], balance_date: "2026-09-25" });
+  assert.equal(
+    questionText(q, f),
+    "XDIV.MI at Broker A: Yahoo lists a dividend with ex-date 22 September 2026, before your balance of 25 September 2026: 0.25 EUR a share, about 5.00 EUR gross for the 20 units held then. Was its money already in that balance?",
+  );
+  assert.deepEqual(choices(q, f), [
+    { label: "Yes, it was in it", answer: { institution_id: 7, symbol: "XDIV.MI", ex_date: "2026-09-22", balance_date: "2026-09-25", answer: "in_balance" } },
+    { label: "No, it came after", answer: { institution_id: 7, symbol: "XDIV.MI", ex_date: "2026-09-22", balance_date: "2026-09-25", answer: "after_balance" } },
+  ]);
+});
+
+test("before the first situation, the question says whose units it counts", () => {
+  const q = question({ kind: "in_balance", entries: [], balance_date: "2026-09-25", first_situation: "2026-09-25" });
+  assert.match(questionText(q, f), /about 5\.00 EUR gross for the 20 units of your first situation, of 25 September 2026\. Was its money/);
+});
+
 test("an entry the catch-up recognised is said once, with both days", () => {
   assert.equal(
     recognisedLine({ institution_name: "Broker A", symbol: "XDIV.MI", ex_date: "2026-09-22", entry: typed(11, "2026-09-29", 3.7) }, f),

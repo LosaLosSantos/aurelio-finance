@@ -360,7 +360,7 @@ def test_a_share_that_never_paid_is_asked_and_records_nothing(client, yahoo, on)
     yahoo.answers["QUIET"] = []
     on(DAY)
 
-    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": []}
+    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": [], "accounts": {}}
     assert yahoo.asked == [("QUIET", "max")]
 
 
@@ -399,7 +399,7 @@ def test_crypto_with_no_policy_is_never_asked(client, yahoo, on):
     _hold(client, iid, "TOKEN-EUR", asset_class="crypto", currency="EUR")
     on(DAY)
 
-    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": []}
+    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": [], "accounts": {}}
     assert yahoo.asked == []
 
 
@@ -481,11 +481,13 @@ def test_the_whole_history_is_asked_once_and_then_a_window_from_the_situation(cl
     assert yahoo.asked == [("ACME", "max"), ("ACME", "1mo")]
 
 
-def test_a_situation_older_than_the_days_window_asks_again_from_its_own_date(client, yahoo, on):
-    """The day's answer covers the situations it was asked for. A second account
-    holding the same share, entered later that day with an older situation,
-    needs dividends the window does not reach: Yahoo is asked again, from that
-    situation, and the older dividend is recorded for it."""
+def test_a_situation_older_than_the_days_window_is_served_by_the_kept_history(client, yahoo, on):
+    """A second account holding the same share, entered later that day with an
+    older situation, needs dividends the day's window does not reach. Since
+    brief AZ each window is merged into the history kept since the first
+    answer, which was the whole history here, so the older dividend is
+    recorded for it with no third request. (It was asked again, "6mo", from
+    that situation, when each day's window replaced the one before.)"""
     broker_a = _account(client, "Broker A")
     _hold(client, broker_a, "ACME", anchor="2026-03-25")
     yahoo.answers["ACME"] = [paid("2026-02-14", 0.5), paid("2026-03-27", 0.5)]
@@ -502,7 +504,7 @@ def test_a_situation_older_than_the_days_window_asks_again_from_its_own_date(cli
         (broker_b, "2026-02-14", 2.0),
         (broker_b, "2026-03-27", 2.0),
     ]
-    assert yahoo.asked == [("ACME", "max"), ("ACME", "1mo"), ("ACME", "6mo")]
+    assert yahoo.asked == [("ACME", "max"), ("ACME", "1mo")]
 
 
 def test_the_line_says_when_the_holding_last_paid(client, yahoo, on):
@@ -563,10 +565,12 @@ def test_a_newer_situation_does_not_hide_from_the_line_what_was_paid_since_the_l
     client, yahoo, on
 ):
     """The reader records a newer situation, dated after the day Yahoo last
-    answered. A dividend paid in between belongs to that situation (it already
-    accounts for it, so nothing is recorded), but it is still the last one the
-    share paid: the window reaches back to the answer before it, not only to
-    the situation, or the line would go on showing an older date."""
+    answered. A dividend paid in between is still the last one the share paid:
+    the window reaches back to the answer before it, not only to the
+    situation, or the line would go on showing an older date. And since brief
+    AZ (the reader's D4) it is recorded, with the units of the stretch it
+    falls in: until then nothing was, the newer situation being taken to
+    account for it, and the dividends collected never counted it."""
     iid = _account(client)
     _hold(client, iid, "ACME", anchor="2026-03-25")
     yahoo.answers["ACME"] = [paid("2025-12-15", 0.4)]
@@ -576,7 +580,7 @@ def test_a_newer_situation_does_not_hide_from_the_line_what_was_paid_since_the_l
     sid = _hold(client, iid, "ACME", anchor="2026-04-10")
     yahoo.answers["ACME"] = [paid("2026-04-05", 0.5)]
     on("2026-04-12")
-    assert _catch_up(client)["created"] == []
+    assert [(t["date"], t["amount"]) for t in _catch_up(client)["created"]] == [("2026-04-05", 5.0)]
 
     lines = {h["symbol"]: h["last_dividend"] for h in client.get(f"/api/snapshots/{sid}/holdings").json()}
     assert lines == {"ACME": "2026-04-05"}

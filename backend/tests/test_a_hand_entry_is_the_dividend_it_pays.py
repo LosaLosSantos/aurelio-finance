@@ -271,6 +271,7 @@ def test_two_entries_for_one_dividend_are_asked_about_and_nothing_is_recorded(cl
             {"id": first, "date": PAID, "amount": 3.7, "currency": "EUR", "estimated": False},
             {"id": second, "date": "2026-10-02", "amount": 1.2, "currency": "EUR", "estimated": False},
         ],
+        "balance_date": None, "first_situation": None,
     }
     # Asked again at the next start, nothing written meanwhile.
     on("2026-10-06")

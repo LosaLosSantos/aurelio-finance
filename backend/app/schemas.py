@@ -2308,17 +2308,24 @@ class DividendQuestion(BaseModel):
     `same_dividend`: an entry of theirs beside the app's estimate of the same
     dividend; keep theirs and remove the estimate, or keep both.
     `which_entry`: two or more of their entries could be one dividend.
-    `which_dividend`: one entry could be two or more dividends."""
+    `which_dividend`: one entry could be two or more dividends.
+    `in_balance`: the account's latest balance, `balance_date`, falls in the
+    dividend's window and no payment date is known: was its money already in
+    that balance? `first_situation` is the day of the account's first
+    situation when the units are that situation's, the ex-date being before
+    it."""
 
     model_config = API_OUT
 
-    kind: Literal["same_dividend", "which_entry", "which_dividend"]
+    kind: Literal["same_dividend", "which_entry", "which_dividend", "in_balance"]
     institution_id: int
     institution_name: str
     symbol: str
     asset_name: str
     dividends: list[ListedDividend]
     entries: list[DividendEntryRead]
+    balance_date: str | None = None
+    first_situation: str | None = None
 
 
 class CatchUpResult(BaseModel):
@@ -2333,6 +2340,13 @@ class CatchUpResult(BaseModel):
     skipped: list[CatchUpSkip]
     recognised: list[DividendRecognised] = Field(default_factory=list)
     questions: list[DividendQuestion] = Field(default_factory=list)
+    accounts: dict[int, str] = Field(
+        default_factory=dict,
+        description=(
+            "The name of every account a created entry belongs to, by its id: "
+            "what the banner lists the recorded dividends under."
+        ),
+    )
 
 
 class DividendPairIn(BaseModel):
@@ -2347,14 +2361,17 @@ class DividendAnswer(BaseModel):
 
     `link`: the entry `transaction_id` is the dividend with `ex_date` (the
     app's estimate of it, if any, goes). `apart`: each pair in `pairs` is not
-    one dividend, and the two are never paired again."""
+    one dividend, and the two are never paired again. `in_balance` and
+    `after_balance`: the money of the dividend with `ex_date` was already in
+    the balance of `balance_date`, or came after it."""
 
     institution_id: int
     symbol: str = Field(..., min_length=1)
-    answer: Literal["link", "apart"]
+    answer: Literal["link", "apart", "in_balance", "after_balance"]
     transaction_id: int | None = None
     ex_date: datetime.date | None = None
     pairs: list[DividendPairIn] = Field(default_factory=list)
+    balance_date: datetime.date | None = None
 
     @model_validator(mode="after")
     def _what_each_answer_needs(self):
@@ -2362,6 +2379,8 @@ class DividendAnswer(BaseModel):
             raise ValueError("link names the entry and the ex-date of the dividend it is.")
         if self.answer == "apart" and not self.pairs:
             raise ValueError("apart names at least one entry and the dividend it is not.")
+        if self.answer in ("in_balance", "after_balance") and (self.ex_date is None or self.balance_date is None):
+            raise ValueError("an answer about a balance names the dividend's ex-date and the balance's day.")
         return self
 
 

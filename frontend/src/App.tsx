@@ -17,7 +17,7 @@ import Analysis from "./components/Analysis";
 import ChatPanel from "./components/ChatPanel";
 import { Mark } from "./components/Emblem";
 import { CURRENCY_LIST } from "./components/ui";
-import { dividendsNote } from "./components/catchUpNote";
+import { dividendsNote, recordedFor } from "./components/catchUpNote";
 import DividendQuestions, { BANNER_FORMATS } from "./components/DividendQuestions";
 import { recognisedLine } from "./components/dividendQuestion";
 import type { Focus } from "./nav";
@@ -178,7 +178,7 @@ function PacBanner({
           <span>
             <span className="font-semibold">{parts.join(" and ")}</span> recorded automatically
             (marked <em>estimated</em>: correct them with the real amounts if they differ).{" "}
-            {divs > 0 && <>{dividendsNote(divs)} </>}
+            {divs > 0 && <>{dividendsNote(divs)} {recordedFor(result.created, result.accounts)} </>}
             <button onClick={onOpenPortfolio} className="font-medium underline">
               Review in Portfolio
             </button>
@@ -410,6 +410,7 @@ export default function App() {
                   skipped: prev.skipped,
                   recognised: [...prev.recognised, ...next.recognised],
                   questions: next.questions,
+                  accounts: { ...prev.accounts, ...next.accounts },
                 },
               );
               // The answer wrote to the ledger: the page in view reads it again.
