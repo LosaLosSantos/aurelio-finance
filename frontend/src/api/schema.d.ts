@@ -4080,6 +4080,20 @@ export interface components {
             real: number;
         };
         /**
+         * NotACode
+         * @description A row a new situation copied with a currency that is not a currency
+         *     code: written before the shape rule, and copied as written (brief BA).
+         */
+        NotACode: {
+            /** Asset Name */
+            asset_name: string;
+            /**
+             * Currency
+             * @description The currency as it is written on the row
+             */
+            currency: string;
+        };
+        /**
          * OmittedPosition
          * @description Value a situation did not account for, with nothing on record saying
          *     where it went — a position it stopped naming, or units it stopped
@@ -4656,6 +4670,11 @@ export interface components {
              * @description Rows carried over unchanged because nothing can price them
              */
             needs_attention: string[];
+            /**
+             * Not A Code
+             * @description Copied rows whose currency is not a currency code. It is copied as written, since only the reader knows what it meant, and said, so the new situation does not carry it forward in silence (brief BA).
+             */
+            not_a_code: components["schemas"]["NotACode"][];
             /**
              * Note
              * @description Free-form notes

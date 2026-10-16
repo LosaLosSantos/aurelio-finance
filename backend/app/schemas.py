@@ -123,6 +123,15 @@ def _must_be_a_currency_code(code: str) -> str:
     return code
 
 
+def is_currency_code(code: str | None) -> bool:
+    """Whether a STORED value has a currency code's shape, three ASCII
+    letters: `_must_be_a_currency_code`'s test, as a question rather than a
+    refusal. For the values already on disk that no write door checks again:
+    a situation started from the last one copies them, and the catch-up builds
+    its entries from them (brief BA)."""
+    return bool(code) and bool(_CURRENCY_CODE.match(code.strip()))
+
+
 # The currency an amount is written in: required, not blank, and a CODE.
 #
 # Every amount the app stores says its currency, and nothing fills one in for
@@ -271,6 +280,16 @@ class PaidNotKept(BaseModel):
     units_paid: float = Field(..., description="The units that paid part had bought")
 
 
+class NotACode(BaseModel):
+    """A row a new situation copied with a currency that is not a currency
+    code: written before the shape rule, and copied as written (brief BA)."""
+
+    model_config = API_OUT
+
+    asset_name: str
+    currency: str = Field(..., description="The currency as it is written on the row")
+
+
 class PrefilledSnapshotRead(SnapshotRead):
     """A snapshot started from the previous one, plus what the app did to it.
 
@@ -294,6 +313,14 @@ class PrefilledSnapshotRead(SnapshotRead):
             "Of those rows, the ones partly bought since the situation it started "
             "from whose paid part the new one could not keep, with the units it "
             "had paid for: nothing priced them on that day (brief AV)."
+        ),
+    )
+    not_a_code: list[NotACode] = Field(
+        default_factory=list,
+        description=(
+            "Copied rows whose currency is not a currency code. It is copied as "
+            "written, since only the reader knows what it meant, and said, so the "
+            "new situation does not carry it forward in silence (brief BA)."
         ),
     )
 

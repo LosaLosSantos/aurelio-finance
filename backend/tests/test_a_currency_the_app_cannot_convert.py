@@ -457,3 +457,71 @@ def test_a_legacy_code_on_the_plan_path_skips_the_whole_occurrence(client, monke
     assert "'Doll' is not a currency code" in body["skipped"][0]["reason"]
     # Nothing written, so the next run tries again once the code is corrected.
     assert client.get("/api/transactions").json() == []
+
+
+def test_a_plan_in_a_code_that_is_not_one_says_so_before_any_rate(client, monkeypatch):
+    """Brief BA: the listing's currency known, the plan's `Doll`. Measured at
+    279acf8, the rate step spoke first and never said what was wrong: "ZZAW.MI:
+    no exchange rate from EUR to Doll is known for 2026-09-16"."""
+    from app import prices
+
+    monkeypatch.setattr(
+        prices, "get_price_on",
+        lambda symbol, on: {"symbol": symbol, "price": 100.0, "as_of": on.isoformat()},
+    )
+    monkeypatch.setattr(prices, "_fetch_currency", lambda symbol: "EUR")
+    iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]
+    client.post(
+        f"/api/institutions/{iid}/cash-anchors",
+        json={"date": EARLIER, "amount": 1000.0, "currency": "EUR"},
+    ).raise_for_status()
+    client.post(
+        "/api/accumulation-plans",
+        json={
+            "name": "PAC All-World", "amount": 250.0, "currency": "EUR",
+            "frequency": "annual", "start_date": EARLIER,
+            "source_institution_id": iid,
+            "targets": [{"symbol": "VWCE.MI", "asset_name": "All-World",
+                         "institution_id": iid}],
+        },
+    ).raise_for_status()
+    _write_past_the_schema(models.AccumulationPlan, currency="Doll")
+
+    answer = client.post("/api/transactions/catch-up")
+    assert answer.status_code == 200, answer.text
+    (skipped,) = answer.json()["skipped"]
+    assert skipped["reason"].startswith("'Doll' is not a currency code: it is recorded on the plan")
+    assert "exchange rate" not in skipped["reason"]
+    assert client.get("/api/transactions").json() == []
+
+
+def test_a_new_situation_says_the_code_it_copied_is_not_one(client):
+    """Brief BA: measured at 279acf8, a row in `Doll` was copied into the new
+    situation and the page said only that it "still needs you". It is still
+    copied as written, since only the reader knows what it meant; a real code
+    no rate converts (TWD) is not named, since nothing is wrong with it."""
+    iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]
+    sid = client.post(
+        f"/api/institutions/{iid}/snapshots", json={"date": EARLIER}
+    ).json()["id"]
+    for name, currency in (("Lump", "EUR"), ("Taipei lump", "TWD")):
+        client.post(
+            f"/api/snapshots/{sid}/holdings",
+            json={"asset_name": name, "value": 1000.0, "currency": currency},
+        ).raise_for_status()
+    with SessionLocal() as db:
+        db.execute(
+            models.Holding.__table__.update()
+            .where(models.Holding.asset_name == "Lump")
+            .values(currency="Doll")
+        )
+        db.commit()
+
+    made = client.post(f"/api/institutions/{iid}/snapshots/prefilled", json={"date": TODAY})
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert body["not_a_code"] == [{"asset_name": "Lump", "currency": "Doll"}]
+    rows = client.get(f"/api/snapshots/{body['id']}/holdings").json()
+    assert sorted((h["asset_name"], h["currency"]) for h in rows) == [
+        ("Lump", "Doll"), ("Taipei lump", "TWD"),
+    ]

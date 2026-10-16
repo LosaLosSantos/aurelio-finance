@@ -53,3 +53,17 @@ test("one unit is a unit, and each row is said", () => {
   assert.ok(note.includes(" On Fund A, what was paid (1 unit) is not kept,"));
   assert.ok(note.includes(" On Fund B, what was paid (1.5 units) is not kept,"));
 });
+
+test("a currency that is not a code is said, and copied as written (brief BA)", () => {
+  assert.equal(
+    prefillWords(
+      answer({
+        repriced: [],
+        needs_attention: ["Lump"],
+        not_a_code: [{ asset_name: "Lump", currency: "Doll" }],
+      }),
+    ),
+    "Copied from 2026-07-16. 0 priced from the market. Only Lump still needs you." +
+      " On Lump, the currency 'Doll' is not a currency code and was copied as written: correct it on that row.",
+  );
+});

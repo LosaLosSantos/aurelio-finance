@@ -299,6 +299,25 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
                 }
             )
             continue
+        # A plan whose own currency is not a currency code says so before
+        # anything is priced. The rate step below would only say that no rate
+        # is known for it, and a typo would read as a rate nobody published
+        # (brief BA, measured at 279acf8: "no exchange rate from EUR to Doll is
+        # known for 2026-09-16"). Nothing is recorded, so the plan runs in full
+        # once the code is corrected.
+        if not schemas.is_currency_code(plan.currency):
+            skipped.append(
+                {
+                    "label": plan.name,
+                    "occurrence": None,
+                    "reason": (
+                        f"'{plan.currency}' is not a currency code: it is recorded on the "
+                        "plan, so correcting it there is what lets its buys through on "
+                        "the next run"
+                    ),
+                }
+            )
+            continue
         done = _settled_months(db, plan.id)
         pending = [occ for occ in occurrences if occ.isoformat()[:7] not in done]
         # An occurrence whose day is not over is not priced yet, for two

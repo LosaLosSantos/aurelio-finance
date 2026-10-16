@@ -132,6 +132,15 @@ def create_prefilled_snapshot(
         paid_not_kept=[
             schemas.PaidNotKept(asset_name=name, units_paid=units) for name, units in unkept
         ],
+        # What the new rows were written with, read back: a code that is not
+        # one was copied as written, and is said (brief BA, measured at
+        # 279acf8: a row in `Doll` was carried with the page saying only that
+        # it "still needs you").
+        not_a_code=[
+            schemas.NotACode(asset_name=h.asset_name, currency=h.currency)
+            for h in snapshot.holdings
+            if not schemas.is_currency_code(h.currency)
+        ],
     )
 
 
