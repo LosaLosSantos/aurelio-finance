@@ -52,9 +52,25 @@
    treatment for dense views. Change a value here and the whole app
    follows: no colour literals live in the components.
 
-   Contrast against the bone ground is verified for every text token:
-   ink 17.4:1 · ink-soft 5.1:1 · ink-faint 4.7:1 · olive 6.0:1 ·
-   up 6.3:1 · down 5.7:1 · warn 4.7:1 (all pass WCAG AA).
+   Contrast of each text token, measured in Edge on every text over what is
+   actually under it (WCAG AA is 4.5:1), on the bone ground and on the darkest
+   fill the pages paint it on:
+   ink 17.4, 15.9 on the olive tint · ink-soft 5.1, 4.7 on the warn tint ·
+   ink-faint 4.9, 4.5 on the warn tint · olive 6.0, 5.5 on the olive tint ·
+   up 7.6, 6.9 on its tint · down 5.7, 5.1 on its tint · warn 5.1 on the
+   surface (no state measured paints it on the ground), 4.5 on the warn tint ·
+   the white on a primary button 6.4.
+
+   Brief AY (2026-10-15) moved three of them, as little as AA took: each to
+   the nearest colour that reads 4.5 on every fill it is painted on.
+   ink-faint #757063 to #726d60: on the warn tint 4.31 to 4.50, on the tint
+   4.33 to 4.53, on the paid-before notice's olive at 5% 4.35 to 4.54.
+   warn #8a6a2b to #86692a: on the warn tint 4.39 to 4.51, as far from down
+   as before.
+   up #47624c to #195a46, so a gain is not the accent's colour: 2.7 apart
+   from the olive in OKLab (x100), now 8.1, as far as the dark theme keeps
+   them; 7.6 on the ground, 6.9 on its tint.
+   tests/contrast.test.ts reads this file and holds every pair at 4.5.
 
    The dark theme (the block after this one) gives the same tokens values
    designed for an espresso ground, not inverted: the grounds rise in
@@ -84,7 +100,10 @@
   /* ink */
   --color-ink: #141413;
   --color-ink-soft: #6f6a5f;
-  --color-ink-faint: #757063;
+  --color-ink-faint: #726d60;
+  /* The question in an empty box: the faint ink, 5.1 on the surface, as in
+     the dark theme. Tailwind's own placeholder, the ink at 50%, read 3.5. */
+  --color-placeholder: var(--color-ink-faint);
 
   /* lines: hair for dividers inside a group, rule for real borders */
   --color-hair: #e2ddd1;
@@ -96,11 +115,11 @@
   --color-olive-tint: #edefe6;
 
   /* semantic — separate from the accent, never used for decoration */
-  --color-up: #47624c;
+  --color-up: #195a46;
   --color-up-tint: #e9efe8;
   --color-down: #94503f;
   --color-down-tint: #f7eae5;
-  --color-warn: #8a6a2b;
+  --color-warn: #86692a;
   --color-warn-tint: #f6efdf;
 
   /* Chart series identity. Three slots in FIXED order, assigned in sequence
@@ -168,6 +187,7 @@
     --color-ink: #eee7da;
     --color-ink-soft: #aca394;
     --color-ink-faint: #a3998a;
+    --color-placeholder: var(--color-ink-faint);
 
     --color-hair: #3f382f;
     --color-rule: #554b40;
@@ -199,11 +219,12 @@
     --color-shadow: #00000066;
   }
 
-  /* The question in an empty box. Tailwind's own placeholder is the ink at
-     50%, which falls below 4.5:1 on the dark surface; the faint ink reads
-     5.5. */
-  :root[data-theme="dark"] ::placeholder {
-    color: var(--color-ink-faint);
+  /* The question in an empty box, in both themes: the placeholder token.
+     Tailwind's own placeholder is the ink at 50%, which falls below 4.5:1 on
+     either surface (3.5 on the light one); the faint ink reads 5.1 on the
+     light surface and 5.5 on the dark. */
+  ::placeholder {
+    color: var(--color-placeholder);
   }
 }
 
