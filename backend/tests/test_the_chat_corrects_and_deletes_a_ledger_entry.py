@@ -691,6 +691,11 @@ def _tx(**over) -> models.Transaction:
         ({"kind": "close", "quantity": 0, "unit_price": 0, "amount": 412}, False),
         ({"kind": "dividend", "quantity": 100, "unit_price": 0.5, "amount": 50}, False),
         ({"kind": "dividend", "quantity": 100, "unit_price": 0.5, "amount": 43.75}, True),
+        # One currency spelt two ways, worked out with no rate day (brief BA).
+        ({"price_currency": "eur"}, False),
+        ({"price_currency": "eur", "amount": 307.42}, True),
+        ({"currency": "GBP", "price_currency": "GBp", "unit_price": 500.0, "amount": 50.0}, False),
+        ({"currency": "GBP", "price_currency": "GBp", "unit_price": 500.0, "amount": 51.0}, True),
     ],
 )
 def test_an_amount_is_a_statements_by_the_ledger_forms_own_rule(over, stated):

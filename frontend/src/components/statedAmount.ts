@@ -34,8 +34,17 @@
    answers exactly: the app sets it when IT worked the amount out, and leaves it
    empty for a figure the reader stated.
 
-   Pure, and with no runtime imports, so `tests/statedAmount.test.ts` runs it
-   under Node without a bundler. */
+   TWO CODES ARE ONE CURRENCY AS THE BACKEND READS THEM (brief BA): in major
+   units, so "eur" is EUR and GBp is a hundredth of GBP (`money.majorUnit`).
+   They used to be compared as written, so a row the backend had worked out in
+   one currency, EUR with its price in "eur", or GBP with its price in pence,
+   read here as two currencies with no rate day, hence as a statement's, and
+   the box opened pre-filled and stopped following the quantity.
+
+   Pure, and its one runtime import is money.ts's rule for a currency's unit,
+   so `tests/statedAmount.test.ts` runs it under Node without a bundler. */
+
+import { sameCurrency, withinCurrency } from "./money.ts";
 
 /** The four kinds of ledger entry, as `models.Transaction` spells them. */
 export type Kind = "buy" | "sell" | "dividend" | "close";
@@ -81,8 +90,17 @@ export function derivedAmount(entry: {
   quantity: number;
   unit_price: number;
   fees: number;
+  /** The account's currency and the price's, when known. One currency spelt
+      two ways takes the minor-unit step the backend takes (`fx.convert_on`):
+      10 at 500 GBp into a GBP account is 50.00, not 5,000. */
+  currency?: string;
+  price_currency?: string | null;
 }): number {
-  const gross = (entry.quantity || 0) * (entry.unit_price || 0);
+  let gross = (entry.quantity || 0) * (entry.unit_price || 0);
+  const price = (entry.price_currency ?? "").trim();
+  if (entry.currency !== undefined && price !== "" && sameCurrency(price, entry.currency)) {
+    gross = withinCurrency(gross, price, entry.currency);
+  }
   const fees = entry.fees || 0;
   return entry.kind === "buy" ? gross + fees : Math.max(gross - fees, 0);
 }
@@ -93,13 +111,15 @@ export function derivedAmount(entry: {
     box missed on top of the matching one: `priceCurrency.trim() !== ""` gated
     the render, so a row that had not said what its price is in had no box
     either. Here an unstated price currency means there is nothing to convert
-    FROM, so the amount is in one currency like any other. */
+    FROM, so the amount is in one currency like any other. Two codes are two
+    currencies only in major units, as the backend reads them: EUR and "eur",
+    GBP and GBp, are one. */
 export function acrossCurrencies(
   currency: string,
   priceCurrency: string | null,
 ): boolean {
   const price = (priceCurrency ?? "").trim();
-  return price !== "" && price !== currency.trim();
+  return price !== "" && !sameCurrency(price, currency);
 }
 
 /** Whether a stored amount can only have come from a statement.
@@ -129,4 +149,33 @@ export function wasStated(entry: Entry): boolean {
     otherwise. */
 export function debitOnEdit(entry: Entry): string {
   return wasStated(entry) ? String(entry.amount) : "";
+}
+
+/** A transfer's two sums, as the Cash flow form reads them back. */
+export type TransferSums = {
+  amount: number;
+  currency: string;
+  to_amount: number;
+  to_currency: string;
+  /** The ECB day the app worked `to_amount` out at, null when it did not. */
+  fx_as_of: string | null;
+};
+
+/** One sum on both sides: one currency, and what arrived is what left, read
+    in the destination's unit within the backend's rounding. The backend works
+    a same-currency arrival out with the minor-unit step alone and no rate day
+    (`crud._transfer_columns`), so 12.34 GBP arrives as 1,234 GBp, and a
+    transfer stored EUR to "eur" arrives as itself. The chat's card reads the
+    same rule (`tools._same_sum`). */
+export function sameSum(t: TransferSums): boolean {
+  if (!sameCurrency(t.currency, t.to_currency)) return false;
+  const left = withinCurrency(t.amount, t.currency, t.to_currency);
+  return Math.abs(t.to_amount - left) <= HALF_A_CENT + HAIR;
+}
+
+/** Whether what arrived can only have come from a statement: no rate day,
+    and not the same sum. The form's arrival box opens with it then, and empty
+    otherwise, so a changed date or amount is worked out again. */
+export function arrivalWasStated(t: TransferSums): boolean {
+  return t.fx_as_of == null && !sameSum(t);
 }

@@ -3074,8 +3074,15 @@ def _side(db: Session, iid: int | None) -> str:
 
 
 def _same_sum(t) -> bool:
-    """The Cash flow page's `sameSum`: one currency, and what arrived is what left."""
-    return t.to_currency == t.currency and t.to_amount == t.amount
+    """The Cash flow page's `sameSum`: one currency, and what arrived is what
+    left, read in the destination's unit within half a cent and a hair.
+
+    One currency as `fx.same_currency` reads it (brief BA): a transfer stored
+    EUR to "eur", or GBP to GBp, was worked out with the minor-unit step and no
+    rate day (`crud._transfer_columns`), and compared as written it read as an
+    arrival typed from a statement."""
+    left = fx.within_currency(t.amount, t.currency, t.to_currency)
+    return left is not None and abs(t.to_amount - left) <= 0.005 + 1e-9
 
 
 def _transfer_text(db: Session, t) -> str:

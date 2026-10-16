@@ -64,6 +64,7 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { CancelButton, money, policyWord } from "./ui";
+import { sameUnit } from "./money";
 import { accountCurrencyOn, listingCurrencyOf } from "./proposedCurrency";
 import { CASH_ANCHOR, INSTITUTION, holding, marks, refusal } from "./required";
 import { absentTickerCost } from "./absentTicker";
@@ -1630,8 +1631,9 @@ function holdingSubtitle(h: Holding): string | undefined {
   // as a contradiction until it reads "20 × 4.47 TRY". A row with no
   // multiplication to show names the typed amount instead, for the same
   // reason — it is the only place the reader can still see what they entered.
-  const foreign =
-    h.currency && h.currency.toUpperCase() !== h.base_currency.toUpperCase() ? h.currency : null;
+  // Another UNIT, as the backend reads codes (brief BA): pence beside pounds
+  // are named, "eur" beside EUR is not.
+  const foreign = h.currency && !sameUnit(h.currency, h.base_currency) ? h.currency : null;
   if (h.quantity != null && h.unit_price != null)
     parts.push(`${h.quantity} × ${h.unit_price}${foreign ? ` ${foreign}` : ""}`);
   else if (foreign && h.value != null)

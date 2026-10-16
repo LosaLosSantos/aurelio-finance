@@ -449,6 +449,30 @@ def _in_major_units(amount: float, currency: str) -> tuple[float, str]:
     return amount, raw.upper()
 
 
+def same_currency(a: str, b: str) -> bool:
+    """Whether two codes are one currency once read in major units: "eur" and
+    EUR, GBp and GBP. Between them no rate is used, only the minor-unit step
+    (`within_currency`).
+
+    The one comparison of two codes. The ledger form's rule and its twin here
+    (`crud.amount_was_stated`), the transfer form's and the chat's
+    (`tools._same_sum`), used to compare them as written, so a row this module
+    had worked out in one currency read there as two, with no rate day, hence
+    as a figure typed from a statement (brief BA)."""
+    return _in_major_units(1.0, a)[1] == _in_major_units(1.0, b)[1]
+
+
+def within_currency(amount: float, from_currency: str, to_currency: str) -> float | None:
+    """`amount` in `from_currency` restated in `to_currency` when the two are
+    one currency (`same_currency`): the minor-unit step alone, 5,000 GBp to
+    50 GBP. None when they are two currencies, which takes a rate."""
+    per_from, from_major = _in_major_units(1.0, from_currency)
+    per_to, to_major = _in_major_units(1.0, to_currency)
+    if from_major != to_major:
+        return None
+    return amount * per_from / per_to
+
+
 class Converter:
     """Lazy converter into the database's base currency: rates are loaded
     (cache-first) only when the first amount in another currency shows up, so
@@ -675,10 +699,9 @@ def convert_on(
     that every total uses; there is no second rule here. Two spellings of one
     currency ("GBp" pence into "GBP" pounds) are only the minor-unit step, and
     report no rate day, because no rate was used."""
-    per_from, from_major = _in_major_units(1.0, from_currency)
-    per_to, to_major = _in_major_units(1.0, to_currency)
-    if from_major == to_major:
-        return amount * per_from / per_to, None
+    within = within_currency(amount, from_currency, to_currency)
+    if within is not None:
+        return within, None
 
     base = base_currency(db)
 

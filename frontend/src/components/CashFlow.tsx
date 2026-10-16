@@ -51,6 +51,8 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { useListEditor, type Draft } from "./listEditor";
+import { arrivalWasStated, sameSum } from "./statedAmount";
+import { sameCurrency } from "./money";
 import { IN_FORCE, leftOutLine, notCounted, undatedLine } from "./inForce";
 import { EXPENSE as EXPENSE_NEEDS, INCOME as INCOME_NEEDS, PLAN, TRANSFER, marks, refusal, type Need } from "./required";
 import {
@@ -527,11 +529,6 @@ const EXPENSE: CashFlowSpec<Expense, ExpenseCreate> = {
   destroy: deleteExpense,
 };
 
-/** One sum on both sides: the same currency, and nothing lost on the way. */
-function sameSum(t: Transfer): boolean {
-  return t.to_currency === t.currency && t.to_amount === t.amount;
-}
-
 function TransferSection({
   items,
   institutions,
@@ -590,7 +587,7 @@ function TransferSection({
     setToCurrencyChoice(t.to_currency);
     // A credit the reader typed comes back into the box; one worked out from a
     // rate does not, so that changing the date works it out again.
-    setArrived(t.fx_as_of == null && !sameSum(t) ? String(t.to_amount) : "");
+    setArrived(arrivalWasStated(t) ? String(t.to_amount) : "");
   }
 
   /* Each side proposes its account's currency on the date: the anchor in force
@@ -607,8 +604,9 @@ function TransferSection({
   const toCurrency = toSide ?? fromSide ?? base;
 
   // Two currencies, or a credit that differs from what left: the second sum
-  // cannot be read off the first, so its box is shown.
-  const acrossCurrencies = currency.trim() !== toCurrency.trim();
+  // cannot be read off the first, so its box is shown. Two currencies as the
+  // backend reads them: "eur" is EUR, and pence are pounds (brief BA).
+  const acrossCurrencies = !sameCurrency(currency, toCurrency);
   const showArrived = acrossCurrencies || arrived !== "";
 
   async function submit(e: FormEvent) {

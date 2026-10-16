@@ -1309,13 +1309,20 @@ def amount_was_stated(tx: models.Transaction) -> bool:
     out, so an empty one is the reader's own. In one currency, a figure
     further from what the row derives than half a cent (the backend's
     rounding) and a hair can only have been typed. A close's proceeds are its
-    amount and are never derived."""
+    amount and are never derived.
+
+    Two currencies as `fx.same_currency` reads them, in major units, and the
+    derived figure with the minor-unit step `_transaction_columns` takes
+    (brief BA): a price in "eur" on a EUR account, or in GBp on a GBP one, is
+    one currency, worked out with no rate day."""
     if tx.kind == "close":
         return False
     price = (tx.price_currency or "").strip()
-    if price and price != tx.currency.strip():
+    if price and not fx.same_currency(price, tx.currency):
         return tx.fx_as_of is None
     gross = (tx.quantity or 0.0) * (tx.unit_price or 0.0)
+    if price:
+        gross = fx.within_currency(gross, price, tx.currency)
     fees = tx.fees or 0.0
     derived = gross + fees if tx.kind == "buy" else max(gross - fees, 0.0)
     return abs(tx.amount - derived) > 0.005 + 1e-9

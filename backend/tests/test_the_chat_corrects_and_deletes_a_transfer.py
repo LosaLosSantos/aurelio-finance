@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import datetime
 import json
+from types import SimpleNamespace
 
 import pytest
 from conftest import _empty_every_table
 
-from app import advisor, fx
+from app import advisor, fx, tools
 
 TODAY = datetime.date.today().isoformat()
 DAY = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
@@ -119,9 +120,11 @@ def _transfer(client, **over) -> dict:
 def _form_save(client, transfer: dict, **changed) -> None:
     """The Cash flow form's Save for `transfer`, opened with ✎ and changed:
     every box as `startEdit` fills it, what arrived only when it was typed
-    (no rate day, and not the same sum), then the boxes the reader changed."""
-    same_sum = transfer["to_currency"] == transfer["currency"] and transfer["to_amount"] == transfer["amount"]
-    typed = transfer["fx_as_of"] is None and not same_sum
+    (no rate day, and not the same sum), then the boxes the reader changed.
+    The same sum as `statedAmount.sameSum` reads it, which is `tools._same_sum`
+    case for case (`test_one_currency_spelt_two_ways_is_one_sum` and its twin
+    in `tests/statedAmount.test.ts`)."""
+    typed = transfer["fx_as_of"] is None and not tools._same_sum(SimpleNamespace(**transfer))
     body = {
         "date": transfer["date"],
         "from_institution_id": transfer["from_institution_id"],
@@ -493,3 +496,57 @@ def test_a_rejected_card_writes_nothing(client, monkeypatch):
     )
     assert _decide(client, monkeypatch, card, "reject").status_code == 200
     assert _rows(client) == before
+
+
+# --- One currency spelt two ways (brief BA) ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "currency, to_currency, amount, to_amount, same",
+    [
+        ("EUR", "EUR", 200.0, 200.0, True),
+        ("EUR", "EUR", 200.0, 199.0, False),
+        ("EUR", "eur", 200.0, 200.0, True),
+        ("GBP", "GBp", 12.34, 1234.0, True),
+        ("GBp", "GBP", 1234.0, 12.34, True),
+        ("EUR", "USD", 200.0, 200.0, False),
+    ],
+)
+def test_one_currency_spelt_two_ways_is_one_sum(currency, to_currency, amount, to_amount, same):
+    """The transfer cases of `tests/statedAmount.test.ts`, case for case:
+    `crud._transfer_columns` works an arrival in "eur" or in pence out with
+    the minor-unit step and no rate day, so the card must not read it as a
+    figure typed from a statement."""
+    t = SimpleNamespace(currency=currency, to_currency=to_currency, amount=amount, to_amount=to_amount)
+    assert tools._same_sum(t) is same
+
+
+def _spelt_small(client) -> dict:
+    """Two euro accounts, and a transfer of thirty days ago whose destination
+    side was typed "eur"."""
+    ids = {}
+    for name in ("Euro Bank", "Euro Broker"):
+        iid = client.post("/api/institutions", json={"name": name}).json()["id"]
+        made = client.post(
+            f"/api/institutions/{iid}/cash-anchors",
+            json={"date": ANCHOR_DAY, "amount": 1000.0, "currency": "EUR"},
+        )
+        assert made.status_code == 201, made.text
+        ids[name] = iid
+    _transfer(client, from_institution_id=ids["Euro Bank"], to_institution_id=ids["Euro Broker"],
+              to_currency="eur")
+    return ids
+
+
+def test_an_arrival_worked_out_in_eur_spelt_small_is_worked_out_again(client, monkeypatch):
+    """Measured at 279acf8: the card read the stored 200 "eur" as typed and
+    sent it back, so a corrected amount of 250 arrived as 200."""
+    rows = _by_chat_and_by_form(
+        client, monkeypatch, _spelt_small,
+        {"action": "correct", "date": DAY, "from_account": "Euro Bank", "to_account": "Euro Broker",
+         "new_amount": 250},
+        lambda client, ids: _form_save(client, _the_transfer(client), amount=250.0),
+    )
+    assert [(t["amount"], t["to_amount"], t["to_currency"], t["fx_as_of"]) for t in rows] == [
+        (250.0, 250.0, "eur", None)
+    ]

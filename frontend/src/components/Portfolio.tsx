@@ -30,6 +30,7 @@ import { EmptyState } from "./Emblem";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { PaidRecoveryNotice } from "./PaidRecoveryNotice";
 import { acrossCurrencies as isAcross, debitOnEdit, derivedAmount } from "./statedAmount";
+import { sameCurrency, withinCurrency } from "./money";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import { getListingCurrencies, getQuote } from "../api/prices";
 import { accountCurrencyOn, listingCurrencyOf } from "./proposedCurrency";
@@ -1398,6 +1399,8 @@ function BuysSection({
     quantity: Number(quantity) || 0,
     unit_price: Number(unitPrice) || 0,
     fees: Number(fees) || 0,
+    currency,
+    price_currency: priceCurrency,
   });
 
   /* What this entry will take out of the picked institution's cash, against
@@ -1419,12 +1422,13 @@ function BuysSection({
           : derived;
   const purse = cashFor(institutionId ? Number(institutionId) : null);
   // The register's projection is in the base its payload declares; a spend in
-  // another currency is not comparable with it here, and is not compared.
+  // another currency is not comparable with it here, and is not compared. One
+  // currency spelt another way is, after the minor-unit step (brief BA).
   const overspend =
     purse &&
     purse.anchor_date != null &&
-    currency.trim().toUpperCase() === purse.base_currency.toUpperCase() &&
-    spend > purse.projected
+    sameCurrency(currency, purse.base_currency) &&
+    withinCurrency(spend, currency, purse.base_currency) > purse.projected
       ? purse
       : null;
 
