@@ -17,9 +17,9 @@ import Analysis from "./components/Analysis";
 import ChatPanel from "./components/ChatPanel";
 import { Mark } from "./components/Emblem";
 import { CURRENCY_LIST } from "./components/ui";
-import { dividendsNote, recordedFor } from "./components/catchUpNote";
+import { correctionAsked, dividendsNote, recordedFor } from "./components/catchUpNote";
 import DividendQuestions, { BANNER_FORMATS } from "./components/DividendQuestions";
-import { recognisedLine } from "./components/dividendQuestion";
+import { recognisedLine, waitingLine } from "./components/dividendQuestion";
 import type { Focus } from "./nav";
 
 // Four voices, grouped by what you are DOING rather than by database table:
@@ -177,7 +177,7 @@ function PacBanner({
         {parts.length > 0 && (
           <span>
             <span className="font-semibold">{parts.join(" and ")}</span> recorded automatically
-            (marked <em>estimated</em>: correct them with the real amounts if they differ).{" "}
+            (marked <em>estimated</em>: {correctionAsked(result.created)}).{" "}
             {divs > 0 && <>{dividendsNote(divs)} {recordedFor(result.created, result.accounts)} </>}
             <button onClick={onOpenPortfolio} className="font-medium underline">
               Review in Portfolio
@@ -189,6 +189,13 @@ function PacBanner({
         {result.recognised.map((r) => (
           <span key={`${r.institution_id}:${r.symbol}:${r.ex_date}`} className="w-full">
             {recognisedLine(r, BANNER_FORMATS)}
+          </span>
+        ))}
+        {/* A dividend whose payment day Yahoo names and is still ahead,
+            recorded that day: said once, so it is not taken for one missed. */}
+        {result.waiting.map((w) => (
+          <span key={`${w.institution_id}:${w.symbol}:${w.ex_date}`} className="w-full">
+            {waitingLine(w, BANNER_FORMATS)}
           </span>
         ))}
         {result.questions.length > 0 && (
@@ -347,8 +354,8 @@ export default function App() {
   useEffect(() => {
     catchUp()
       .then((r) => {
-        if (r.created.length > 0 || r.skipped.length > 0 || r.recognised.length > 0 || r.questions.length > 0)
-          setPacResult(r);
+        const said = [r.created, r.skipped, r.recognised, r.questions, r.waiting];
+        if (said.some((items) => items.length > 0)) setPacResult(r);
       })
       .catch(() => {
         /* backend down: the next start retries */
@@ -410,6 +417,7 @@ export default function App() {
                   skipped: prev.skipped,
                   recognised: [...prev.recognised, ...next.recognised],
                   questions: next.questions,
+                  waiting: [...prev.waiting, ...next.waiting],
                   accounts: { ...prev.accounts, ...next.accounts },
                 },
               );

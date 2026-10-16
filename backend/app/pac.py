@@ -838,8 +838,10 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     units of the stretch its ex-date falls in, so one the catch-up never met
     is recorded too; and a dividend whose window holds the account's latest
     balance, with no payment date known, is asked about: whether its money was
-    already in that balance. Returns what was recorded, skipped, recognised
-    and asked."""
+    already in that balance. A listing whose payment days Yahoo names has its
+    dividends dated on them, and one still ahead waits for its day
+    (`_payment_day`). Returns what was recorded, skipped, recognised, asked
+    and waited for."""
     # The reader's day, read once: it says which ex-dates are due (`as_of`,
     # unless the caller names another day) and whether Yahoo has already
     # answered about a ticker today.
@@ -854,7 +856,13 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     skipped: list[dict] = []
     recognised: list[dict] = []
     questions: list[dict] = []
+    waiting: list[dict] = []
     answers: dict[str, prices.DividendWindow | prices.PriceError] = {}
+    # What Yahoo's quote said of a listing's payment day in this catch-up, so
+    # one held at two accounts is asked once, and the dividends whose day it
+    # taught that is still ahead, which are said once (`_payment_day`).
+    payment_answers: dict[str, prices.PaymentDay | None] = {}
+    learnt: dict[str, set[str]] = {}
     all_txs = list(db.scalars(select(models.Transaction)))
     names = {i.id: i.name for i in db.scalars(select(models.Institution))}
     # Every situation of every account up to `as_of`, oldest first: each
@@ -930,6 +938,10 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
             # Recorded (by its ex-date wherever its row is dated, brief AZ), or
             # deleted by the reader, which stays deleted (brief AO).
             done = crud.get_dividend_dates_settled(db, inst_id, symbol)
+            # The dividends the loop below may record, and what Yahoo has
+            # said of their payment days (`_payment_day`).
+            pending = [x for x in due if x not in done and x not in pairing.held]
+            paid = crud.get_payment_days(db, symbol) if _says_payment_days(symbol) else {}
             for x, item in due.items():
                 # The holding of the stretch the ex-date falls in: its name,
                 # class and currency go on the row.
@@ -962,15 +974,31 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                         }
                     )
                     continue
-                # The day its money is counted from, against the account's
-                # latest balance: its ex-date, unless that balance falls in the
-                # dividend's window, where only the reader knows whether the
-                # money was already in it, and the app asks (brief AZ).
+                # The day its money is counted from (brief AZ): the day Yahoo
+                # says it is paid, for a listing it says that of (the reader's
+                # D3); otherwise its ex-date, unless the account's latest
+                # balance falls in the dividend's window, where only the reader
+                # knows whether the money was already in it, and the app asks.
                 said = ""
                 credited = ex_date
-                if balance is not None and x <= balance < end:
+                paid_on = _payment_day(db, symbol, x, pending, paid, payment_answers, learnt, today)
+                if paid_on and paid_on > today and not item.first:
+                    # Not paid yet: recorded on the day it is, and said once,
+                    # by the catch-up that learnt the day.
+                    if x in learnt.get(symbol, set()):
+                        waiting.append(_waiting(inst_id, names, symbol, item, listing, paid_on))
+                    continue
+                if paid_on and not item.first:
+                    credited = datetime.date.fromisoformat(paid_on)
+                    said = ", on its payment date as Yahoo lists it"
+                elif balance is not None and x <= balance < end:
                     told = crud.get_balance_answer(db, inst_id, symbol, x)
-                    if told == ("after", balance):
+                    if told == ("after", balance) and paid_on and paid_on > balance:
+                        if paid_on > today:
+                            continue
+                        credited = datetime.date.fromisoformat(paid_on)
+                        said = ", on its payment date as Yahoo lists it"
+                    elif told == ("after", balance):
                         credited = datetime.date.fromisoformat(balance) + datetime.timedelta(days=1)
                         said = f", dated the day after your balance of {balance}, which did not hold it"
                     elif told != ("in", balance):
@@ -1037,7 +1065,13 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 written = _record_dividend(db, inst_id, h.symbol, x, columns, spans[x])
                 if written is not None:
                     created.append(written)
-    return {"created": created, "skipped": skipped, "recognised": recognised, "questions": questions}
+    return {
+        "created": created,
+        "skipped": skipped,
+        "recognised": recognised,
+        "questions": questions,
+        "waiting": waiting,
+    }
 
 
 def _record_dividend(
@@ -1156,6 +1190,76 @@ def _due(
         if item.units > 0:
             out[x] = item
     return out
+
+
+def _says_payment_days(symbol: str) -> bool:
+    """Whether Yahoo's quote can name this listing's payment day: one with no
+    exchange suffix. Measured 2026-10-16 on 40 public tickers: 12 of the 12
+    such that were shares or ADRs named one (the 2 US funds did not); of the
+    26 with a suffix, the same US shares in Frankfurt among them, only one
+    named any, a year stale."""
+    return "." not in symbol
+
+
+def _payment_day(
+    db: Session,
+    symbol: str,
+    x: str,
+    pending: list[str],
+    paid: dict[str, str],
+    payment_answers: dict[str, prices.PaymentDay | None],
+    learnt: dict[str, set[str]],
+    today: str,
+) -> str | None:
+    """The day Yahoo says the dividend of `x` is paid, or None (brief AZ, the
+    reader's D3).
+
+    Asked of Yahoo's quote once for each dividend of a listing that says it
+    (`_says_payment_days`): the first time the catch-up is about to record one
+    not asked about, at most once a catch-up for the listing, and the answer
+    kept for every dividend still to record (`paid`, `crud.remember_payment_
+    day`): the day it names for the one whose ex-date it names, "" for the
+    others. A day before its ex-date is not that dividend's (a Swiss share's
+    was a year stale) and is kept as "". Nobody answering keeps nothing, and
+    the dividend is recorded as if no day were known. The days still ahead
+    that this answer taught go in `learnt`, to be said once."""
+    if not _says_payment_days(symbol):
+        return None
+    if x not in paid and symbol not in payment_answers:
+        told = prices.get_payment_day(symbol)
+        payment_answers[symbol] = told
+        if told is not None:
+            for y in pending:
+                if y in paid:
+                    continue
+                named = told.paid_on if told.ex_date == y and told.paid_on and told.paid_on >= y else ""
+                crud.remember_payment_day(db, symbol, y, named)
+                paid[y] = named
+                if named and named > today:
+                    learnt.setdefault(symbol, set()).add(y)
+    return paid.get(x) or None
+
+
+def _waiting(
+    institution_id: int,
+    names: dict[int, str],
+    symbol: str,
+    item: _Due,
+    listing: dict[str, str],
+    paid_on: str,
+) -> dict:
+    """A dividend whose payment day Yahoo names and is still ahead: recorded
+    on that day, and said once meanwhile, so it is not taken for one missed."""
+    d = item.event
+    return {
+        "institution_id": institution_id,
+        "institution_name": names.get(institution_id, ""),
+        "symbol": symbol,
+        "ex_date": d["date"],
+        "paid_on": paid_on,
+        "dps": d.get("dps"),
+        "currency": d.get("currency") or listing.get(symbol) or item.holding.currency,
+    }
 
 
 def _balance_question(
@@ -1578,6 +1682,7 @@ def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:
         "skipped": pacs["skipped"] + divs["skipped"],
         "recognised": divs["recognised"],
         "questions": divs["questions"],
+        "waiting": divs["waiting"],
         "accounts": _accounts(db, created),
     }
 

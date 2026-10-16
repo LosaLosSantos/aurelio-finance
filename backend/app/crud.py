@@ -1409,6 +1409,41 @@ def get_balance_answer(db: Session, institution_id: int, symbol: str, day: str) 
     return (answer, balance) if answer in ("in", "after") and balance else None
 
 
+# The day Yahoo says a dividend is paid (brief AZ, the reader's D3): asked once
+# for each dividend of a listing Yahoo gives payment dates for, and kept, the
+# day it names or "" when its answer named another dividend. One row of
+# `settings` a listing and ex-date, its value that day. Yahoo's, not an
+# account's: every account holding the listing reads it.
+_DIVIDEND_PAID = "dividend_paid:{symbol}:"
+
+
+def remember_payment_day(db: Session, symbol: str, day: str, paid_on: str) -> None:
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    key = _DIVIDEND_PAID.format(symbol=symbol) + day
+    kept = sqlite_insert(models.Setting).values(key=key, value=paid_on)
+    db.execute(kept.on_conflict_do_update(index_elements=["key"], set_={"value": paid_on}))
+    commit(db)
+
+
+def get_payment_days(db: Session, symbol: str) -> dict[str, str]:
+    """{ex-date: the day Yahoo says it is paid, or "" when asked and not
+    named} for this listing's dividends asked about."""
+    prefix = _DIVIDEND_PAID.format(symbol=symbol)
+    days: dict[str, str] = {}
+    for key, value in db.execute(
+        select(models.Setting.key, models.Setting.value).where(
+            models.Setting.key.startswith(prefix, autoescape=True)
+        )
+    ):
+        day = key[len(prefix):]
+        try:
+            days[datetime.date.fromisoformat(day).isoformat()] = value or ""
+        except ValueError:
+            continue
+    return days
+
+
 def get_latest_balance_days(db: Session, on: str) -> dict[int, str]:
     """{institution id: the day of its latest balance on or before `on`}, the
     balance the cash register projects from."""

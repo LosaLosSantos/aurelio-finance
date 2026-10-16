@@ -652,6 +652,61 @@ def _fetch_dividends(symbol: str, period: str = "max") -> DividendWindow:
     return DividendWindow(answered=True, dividends=[event for event in events if event is not None])
 
 
+@dataclass(frozen=True)
+class PaymentDay:
+    """What Yahoo's quote says of a listing's latest or next dividend: its
+    ex-date and the day it is paid, ISO, both or neither."""
+
+    ex_date: str | None = None
+    paid_on: str | None = None
+
+
+def _utc_day(epoch) -> str | None:
+    """The day a Yahoo timestamp names: midnight UTC, read in UTC, so a
+    machine west of Greenwich does not see the day before."""
+    if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
+        return None
+    return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).date().isoformat()
+
+
+def _fetch_payment_day(symbol: str) -> PaymentDay:
+    """The ex-date and the payment date Yahoo's quote names for a listing's
+    latest or next dividend, or neither. Network call: two requests, the
+    quote summary and the quote (`Ticker.get_info`), 10,206 to 10,852 bytes
+    in all for three US shares (measured 2026-10-16).
+
+    Measured that day on 40 public tickers: a payment date for every US share
+    (7 of 7, 14 to 24 days after the ex-date) and every US-listed ADR (5 of
+    5, 28 to 69 days), for ONE dividend: the latest, the latest not paid yet,
+    the next announced, or for one ADR an older one than the latest. None for
+    16 of 17 shares listed elsewhere (a Swiss share named one a year stale),
+    none for the same US shares listed in Frankfurt, and none for any fund (8
+    of 8; Yahoo answers 404 for a fund's summary). So the caller asks only a
+    listing with no exchange suffix, and uses a date only when the ex-date
+    beside it is the dividend's own.
+
+    Read from `get_info` and not from `Ticker.calendar`, which is one smaller
+    request: the calendar turns Yahoo's timestamps into days in the machine's
+    own time zone, and a midnight in UTC is the day before anywhere west of
+    it. The quote keeps the timestamps, read here in UTC (`_utc_day`)."""
+    import yfinance as yf
+
+    info = yf.Ticker(symbol).get_info() or {}
+    ex, paid = _utc_day(info.get("exDividendDate")), _utc_day(info.get("dividendDate"))
+    return PaymentDay(ex, paid) if ex and paid else PaymentDay()
+
+
+def get_payment_day(symbol: str) -> PaymentDay | None:
+    """`_fetch_payment_day`, or None when nobody answered: no answer is not
+    "no payment date", and the caller then records the dividend as it would
+    with none, asking nothing again."""
+    try:
+        return _fetch_payment_day(symbol)
+    except Exception:
+        logger.info("Yahoo's quote did not answer about %s's payment date", symbol, exc_info=True)
+        return None
+
+
 def get_dividends_since(symbol: str, since: datetime.date) -> DividendWindow:
     """Yahoo's answer about `symbol`'s dividends, cut to the ex-dates strictly
     AFTER `since`, ascending, each as `_read_dividend` reads it. `since` is

@@ -169,6 +169,16 @@ export function choices(q: Question, f: Formats): Choice[] {
   return [];
 }
 
+/** What the banner says, once, of a dividend whose payment day Yahoo names
+    and is still ahead: recorded that day, so it is not taken for one missed. */
+export function waitingLine(
+  w: { institution_name: string; symbol: string; ex_date: string; paid_on: string; dps: number | null; currency: string | null },
+  f: Formats,
+): string {
+  const figure = w.dps != null && w.currency ? `${f.perShare(w.dps, w.currency)} a share, ` : "";
+  return `${w.symbol} at ${w.institution_name}: ${figure}ex-date ${f.date(w.ex_date)}, paid on ${f.date(w.paid_on)}: recorded that day.`;
+}
+
 /** What the banner says of an entry the catch-up recognised. */
 export function recognisedLine(
   r: { institution_name: string; symbol: string; ex_date: string; entry: Entry },

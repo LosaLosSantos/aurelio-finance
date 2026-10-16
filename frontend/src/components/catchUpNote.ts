@@ -33,10 +33,27 @@ export function recordedFor(created: Created[], accounts: Record<string, string>
   return `Recorded for ${said}.`;
 }
 
-/** The sentence for `count` recorded dividends, or null when there are none. */
+/** What the banner asks of the rows it says it recorded, in their number:
+    "correct it with the real amount if it differs" after one, "correct them
+    with the real amounts if they differ" after several, the PAC purchases and
+    the dividends counted together as the sentence names them. It said
+    "correct them" after "1 dividend recorded automatically" until brief AZ
+    (seen in its Edge run, 2026-10-16). */
+export function correctionAsked(created: { kind: string }[]): string {
+  const rows = created.filter((t) => t.kind === "buy" || t.kind === "dividend").length;
+  return rows === 1
+    ? "correct it with the real amount if it differs"
+    : "correct them with the real amounts if they differ";
+}
+
+/** The sentence for `count` recorded dividends, or null when there are none.
+    Since brief AZ a dividend is dated on the day Yahoo says it is paid where
+    Yahoo says it, on its ex-date otherwise, and a correction can move it to
+    the day the money arrived (the row keeps its ex-date), so the sentence
+    names the day as well as the amount. */
 export function dividendsNote(count: number): string | null {
   if (count <= 0) return null;
   return count === 1
-    ? "The dividend is the market's gross figure, before tax: correct it with what your broker credited."
-    : "The dividends are the market's gross figures, before tax: correct each with what your broker credited.";
+    ? "The dividend is the market's gross figure, before tax, dated on its payment day where Yahoo gives one and on its ex-date otherwise: correct it with the day and the amount your broker credited."
+    : "The dividends are the market's gross figures, before tax, each dated on its payment day where Yahoo gives one and on its ex-date otherwise: correct each with the day and the amount your broker credited.";
 }

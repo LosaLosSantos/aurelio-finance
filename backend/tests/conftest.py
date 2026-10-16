@@ -156,7 +156,7 @@ _NETWORK_BOUNDARY = {
     prices: (
         "_fetch_probe", "_fetch_close_window", "_fetch_name",
         "_fetch_recent_closes", "_fetch_currency", "_fetch_dividends",
-        "_fetch_lookup", "_fetch_openfigi",
+        "_fetch_payment_day", "_fetch_lookup", "_fetch_openfigi",
     ),
     composition: (
         "_justetf_catalogue", "_fetch_trackinsight_isin", "_fetch_trackinsight",

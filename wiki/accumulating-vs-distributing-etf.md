@@ -56,9 +56,24 @@ Each holding has a dividend policy, under Records, Wealth:
 
 For a holding it follows, the app reads the dividend history from Yahoo Finance when it
 starts (at most once a day per ticker) and, for each ex-date, credits the account's cash with
-the dividend per share times the shares you held on that date. The number of shares is
-reconstructed from your situation and your ledger, so a dividend is recorded even if you open
-the app months later.
+the dividend per share times the shares you held before that date. The number of shares is
+reconstructed from the situation in force at the ex-date and your ledger, so a dividend is
+recorded even if you open the app months later.
+
+The money reaches your account on the payment date, days or weeks after the ex-date, and the
+row is dated on that day where Yahoo says it: for shares listed in the US, whose payment
+dates Yahoo gives for the latest or the next dividend (14 to 69 days after the ex-date, in
+the twelve measured in October 2026). For shares listed elsewhere and for funds Yahoo gives
+no usable one, so the row is dated on its ex-date, and correcting it with your broker's statement
+moves it to the day the money arrived. Either way the dividend keeps its ex-date, which is
+how the app knows it is recorded: never twice.
+
+A dividend you entered yourself is recognized as the one the app was about to record when it
+is dated in that dividend's window, from its ex-date to the next one or 70 days after it,
+whichever is later, and no other entry or dividend could pair with it. When the app is not
+sure, it asks you instead of guessing. It also asks when your latest cash balance falls
+between an ex-date and a payment date it does not know: whether the money was already in
+that balance.
 
 To do that it needs a ticker and a quantity. The demo's euro government bond ETF is a
 distributing fund recorded as a total, with no ticker, so its dividends cannot be followed:
@@ -94,6 +109,7 @@ which is a sale like any other: it may be taxed, and it costs the fees of two tr
 ## Sources
 
 - How dividends are followed and recorded: [pac.py](https://github.com/LosaLosSantos/aurelio-finance/blob/main/backend/app/pac.py).
+- How an entry you typed is paired with the dividend it pays: [dividend_pairs.py](https://github.com/LosaLosSantos/aurelio-finance/blob/main/backend/app/dividend_pairs.py).
 - [How to calculate net worth](how-to-calculate-net-worth.md): where the dividend cash ends up.
 
 *Educational information, not regulated financial advice.*

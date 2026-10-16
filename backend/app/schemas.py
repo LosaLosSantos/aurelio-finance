@@ -2328,6 +2328,21 @@ class DividendQuestion(BaseModel):
     first_situation: str | None = None
 
 
+class DividendWaiting(BaseModel):
+    """A dividend whose payment day Yahoo names and is still ahead (brief AZ):
+    recorded on that day, and said once meanwhile."""
+
+    model_config = API_OUT
+
+    institution_id: int
+    institution_name: str
+    symbol: str
+    ex_date: str
+    paid_on: str
+    dps: float | None
+    currency: str | None
+
+
 class CatchUpResult(BaseModel):
     """Outcome of a catch-up run: transactions created for every elapsed,
     still-unrecorded PAC occurrence and dividend ex-date, plus what was
@@ -2340,6 +2355,7 @@ class CatchUpResult(BaseModel):
     skipped: list[CatchUpSkip]
     recognised: list[DividendRecognised] = Field(default_factory=list)
     questions: list[DividendQuestion] = Field(default_factory=list)
+    waiting: list[DividendWaiting] = Field(default_factory=list)
     accounts: dict[int, str] = Field(
         default_factory=dict,
         description=(

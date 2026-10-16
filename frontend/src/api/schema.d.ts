@@ -2154,6 +2154,8 @@ export interface components {
             recognised: components["schemas"]["DividendRecognised"][];
             /** Skipped */
             skipped: components["schemas"]["CatchUpSkip"][];
+            /** Waiting */
+            waiting: components["schemas"]["DividendWaiting"][];
         };
         /**
          * CatchUpSkip
@@ -3245,6 +3247,27 @@ export interface components {
             institution_id: number;
             /** Institution Name */
             institution_name: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * DividendWaiting
+         * @description A dividend whose payment day Yahoo names and is still ahead (brief AZ):
+         *     recorded on that day, and said once meanwhile.
+         */
+        DividendWaiting: {
+            /** Currency */
+            currency: string | null;
+            /** Dps */
+            dps: number | null;
+            /** Ex Date */
+            ex_date: string;
+            /** Institution Id */
+            institution_id: number;
+            /** Institution Name */
+            institution_name: string;
+            /** Paid On */
+            paid_on: string;
             /** Symbol */
             symbol: string;
         };

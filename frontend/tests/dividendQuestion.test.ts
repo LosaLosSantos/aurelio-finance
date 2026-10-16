@@ -12,6 +12,7 @@ import {
   choices,
   questionText,
   recognisedLine,
+  waitingLine,
   type Entry,
   type Formats,
   type Question,
@@ -130,6 +131,18 @@ test("a dividend whose window holds the latest balance asks whether the balance 
 test("before the first situation, the question says whose units it counts", () => {
   const q = question({ kind: "in_balance", entries: [], balance_date: "2026-09-25", first_situation: "2026-09-25" });
   assert.match(questionText(q, f), /about 5\.00 EUR gross for the 20 units of your first situation, of 25 September 2026\. Was its money/);
+});
+
+test("a dividend whose payment day is still ahead is said once, with the day it is recorded", () => {
+  const w = { institution_name: "Broker A", symbol: "XUSD", ex_date: "2026-09-15", paid_on: "2026-10-01", dps: 0.53, currency: "USD" };
+  assert.equal(
+    waitingLine(w, f),
+    "XUSD at Broker A: 0.53 USD a share, ex-date 15 September 2026, paid on 1 October 2026: recorded that day.",
+  );
+  assert.equal(
+    waitingLine({ ...w, dps: null }, f),
+    "XUSD at Broker A: ex-date 15 September 2026, paid on 1 October 2026: recorded that day.",
+  );
 });
 
 test("an entry the catch-up recognised is said once, with both days", () => {
