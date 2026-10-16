@@ -1565,9 +1565,33 @@ export interface paths {
          *     and a dividend entry for every ex-date of every position that follows its
          *     dividends: stated distributing, or stating no policy, when its own history
          *     decides. Items that cannot be priced are skipped and retried on the next
-         *     run.
+         *     run. A dividend the reader entered themselves is recognised rather than
+         *     recorded beside it, and what only the reader can say is asked.
          */
         post: operations["catch_up_api_transactions_catch_up_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transactions/dividend-answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer Dividend
+         * @description The reader's answer to a question the catch-up asked about a dividend:
+         *     an entry of theirs is the dividend with that ex-date, or it is not. The
+         *     dividend catch-up then runs again and returns what it recorded and what it
+         *     still asks. 409 with a sentence when the question no longer stands.
+         */
+        post: operations["answer_dividend_api_transactions_dividend_answer_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2111,11 +2135,16 @@ export interface components {
          * CatchUpResult
          * @description Outcome of a catch-up run: transactions created for every elapsed,
          *     still-unrecorded PAC occurrence and dividend ex-date, plus what was
-         *     skipped (retried on the next run).
+         *     skipped (retried on the next run), the dividends the reader had entered
+         *     themselves and the questions only they can answer (brief AZ).
          */
         CatchUpResult: {
             /** Created */
             created: components["schemas"]["TransactionRead"][];
+            /** Questions */
+            questions: components["schemas"]["DividendQuestion"][];
+            /** Recognised */
+            recognised: components["schemas"]["DividendRecognised"][];
             /** Skipped */
             skipped: components["schemas"]["CatchUpSkip"][];
         };
@@ -3099,6 +3128,107 @@ export interface components {
             said: string;
         };
         /**
+         * DividendAnswer
+         * @description The reader's answer to a question the catch-up asked (brief AZ).
+         *
+         *     `link`: the entry `transaction_id` is the dividend with `ex_date` (the
+         *     app's estimate of it, if any, goes). `apart`: each pair in `pairs` is not
+         *     one dividend, and the two are never paired again.
+         */
+        DividendAnswer: {
+            /**
+             * Answer
+             * @enum {string}
+             */
+            answer: "link" | "apart";
+            /** Ex Date */
+            ex_date?: string | null;
+            /** Institution Id */
+            institution_id: number;
+            /** Pairs */
+            pairs?: components["schemas"]["DividendPairIn"][];
+            /** Symbol */
+            symbol: string;
+            /** Transaction Id */
+            transaction_id?: number | null;
+        };
+        /**
+         * DividendEntryRead
+         * @description A dividend row as a question about it names it.
+         */
+        DividendEntryRead: {
+            /** Amount */
+            amount: number;
+            /** Currency */
+            currency: string;
+            /** Date */
+            date: string;
+            /** Estimated */
+            estimated: boolean;
+            /** Id */
+            id: number;
+        };
+        /**
+         * DividendPairIn
+         * @description An entry and a dividend the reader says are not one.
+         */
+        DividendPairIn: {
+            /**
+             * Ex Date
+             * Format: date
+             */
+            ex_date: string;
+            /** Transaction Id */
+            transaction_id: number;
+        };
+        /**
+         * DividendQuestion
+         * @description Something about a dividend only the reader can say (brief AZ), asked
+         *     in the banner until answered, with nothing written meanwhile.
+         *
+         *     `same_dividend`: an entry of theirs beside the app's estimate of the same
+         *     dividend; keep theirs and remove the estimate, or keep both.
+         *     `which_entry`: two or more of their entries could be one dividend.
+         *     `which_dividend`: one entry could be two or more dividends.
+         */
+        DividendQuestion: {
+            /** Asset Name */
+            asset_name: string;
+            /** Dividends */
+            dividends: components["schemas"]["ListedDividend"][];
+            /** Entries */
+            entries: components["schemas"]["DividendEntryRead"][];
+            /** Institution Id */
+            institution_id: number;
+            /** Institution Name */
+            institution_name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "same_dividend" | "which_entry" | "which_dividend";
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * DividendRecognised
+         * @description An entry of the reader's the catch-up recognised as a dividend Yahoo
+         *     lists (brief AZ): the only entry in that dividend's window, the only
+         *     dividend whose window holds it. It took the dividend's ex-date, and the
+         *     dividend was not recorded beside it.
+         */
+        DividendRecognised: {
+            entry: components["schemas"]["DividendEntryRead"];
+            /** Ex Date */
+            ex_date: string;
+            /** Institution Id */
+            institution_id: number;
+            /** Institution Name */
+            institution_name: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * ExpenseCreate
          * @description Payload to create an expense.
          */
@@ -3846,6 +3976,23 @@ export interface components {
              * @description Real asset this debt finances (mortgage -> house)
              */
             real_asset_id: number | null;
+        };
+        /**
+         * ListedDividend
+         * @description A dividend Yahoo lists, as a question names it: its ex-date, the
+         *     figure a share and its currency, the units held before the ex-date, and
+         *     the app's row for it while that row is still the market's estimate.
+         */
+        ListedDividend: {
+            /** Currency */
+            currency: string | null;
+            /** Dps */
+            dps: number | null;
+            estimate: components["schemas"]["DividendEntryRead"] | null;
+            /** Ex Date */
+            ex_date: string;
+            /** Units */
+            units: number | null;
         };
         /**
          * MatrixCell
@@ -8602,6 +8749,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatchUpResult"];
+                };
+            };
+        };
+    };
+    answer_dividend_api_transactions_dividend_answer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DividendAnswer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatchUpResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

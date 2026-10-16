@@ -56,13 +56,14 @@ import datetime
 import json
 import logging
 import math
+from dataclasses import dataclass
 
 from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app import crud, fx, models, prices, schemas
+from app import crud, dividend_pairs, fx, models, prices, schemas
 from app.analytics import STEP_MONTHS, add_months, recurrence
 from app.database import commit, sole_writer
 from app import dated
@@ -784,10 +785,10 @@ def _follows_dividends(h: models.Holding) -> bool:
 
 
 # How every dividend the catch-up records starts its note: where the row came
-# from, which no edit makes false. The ledger form reads it (`sameDividend.ts`,
-# `AUTO_STAMP`) and so does the chat's card for a correction (brief AO), and
-# `crud` keeps the string, since it tells the catch-up's own rows from the
-# reader's when it gives them their ex-date (brief AZ).
+# from, which no edit makes false. `crud` keeps the string, since it tells the
+# catch-up's own rows from the reader's when it gives them their ex-date
+# (brief AZ); the ledger form and the chat's card used to read it to keep such
+# a row on its ex-date, which its own column now does.
 AUTO_RECORDED = crud.AUTO_DIVIDEND_NOTE
 
 
@@ -799,7 +800,13 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     withholding tax) and marked estimated — correct them with the net credit.
     Positions known only from the ledger are skipped: the dist/acc policy
     lives on snapshot holdings. Yahoo's answer about a ticker's history is
-    kept for the rest of the day it was given (`_dividend_history`)."""
+    kept for the rest of the day it was given (`_dividend_history`).
+
+    A dividend the reader has entered themselves is not recorded beside it
+    (brief AZ): their entry dated in the dividend's window is recognised as it
+    when the pairing is unique both ways (`dividend_pairs`), and every other
+    case is asked, as is an entry beside the app's estimate of the same
+    dividend. Returns what was recorded, skipped, recognised and asked."""
     # The reader's day, read once: it says which ex-dates are due (`as_of`,
     # unless the caller names another day) and whether Yahoo has already
     # answered about a ticker today.
@@ -812,8 +819,11 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
 
     created: list[models.Transaction] = []
     skipped: list[dict] = []
+    recognised: list[dict] = []
+    questions: list[dict] = []
     answers: dict[str, prices.DividendWindow | prices.PriceError] = {}
     all_txs = list(db.scalars(select(models.Transaction)))
+    names = {i.id: i.name for i in db.scalars(select(models.Institution))}
     # The photograph in force at `as_of` — the same date the ex-dates below are
     # filtered by. One anchor for one question: a snapshot dated after the day
     # being caught up to would decide which units are held on days it had not
@@ -853,13 +863,14 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
             # A row this catch-up wrote, still on the ex-date it was written on
             # but keeping none (one the reader corrected before rows kept their
             # ex-date), takes it now, before the reader can move it (brief AZ).
-            crud.adopt_ex_dates(db, inst_id, h.symbol, {d["date"] for d in window.dividends})
+            listed = list(window.dividends)
+            # Where each dividend's money can arrive, which is where the
+            # reader's entry of it can be dated (`dividend_pairs.windows`).
+            spans = dividend_pairs.windows(d["date"] for d in listed)
+            crud.adopt_ex_dates(db, inst_id, h.symbol, _adoptable(db, inst_id, h.symbol, spans))
             # Strictly after the anchor, the cut `get_dividends_since` makes:
             # the situation already accounts for its own day.
-            divs = [d for d in window.dividends if d["date"] > snap.date]
-            # Recorded (by its ex-date wherever its row is dated, brief AZ), or
-            # deleted by the reader, which stays deleted (brief AO).
-            done = crud.get_dividend_dates_settled(db, inst_id, h.symbol)
+            scope = [d for d in listed if snap.date < d["date"] <= as_of.isoformat()]
             position_txs = dated.events_after(
                 snap,
                 (
@@ -868,10 +879,8 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                     if t.institution_id == inst_id and t.symbol == h.symbol
                 ),
             )
-            for d in divs:
-                ex_date = datetime.date.fromisoformat(d["date"])
-                if d["date"] in done or ex_date > as_of:
-                    continue
+            due: dict[str, _Due] = {}
+            for d in scope:
                 # Units held STRICTLY before the ex-date: you have to own the
                 # shares before it. `until` is exclusive, and it is the whole
                 # reason that boundary is a parameter rather than a loop each
@@ -879,7 +888,26 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 shares = replay(
                     position_txs, start_qty=h.quantity, until=d["date"]
                 ).quantity
-                if shares <= 0:
+                if shares > 0:
+                    due[d["date"]] = _Due(d, shares)
+            # The reader's own entries of these dividends: one recognised when
+            # the pairing is unique both ways, every other case asked, and a
+            # dividend some entry could be is not recorded meanwhile.
+            pairing, ledger = _pairing(db, inst_id, h.symbol, due, spans, {d["date"] for d in scope})
+            for tx_id, x in pairing.recognised:
+                seen = _recognise(db, inst_id, h.symbol, tx_id, x, due, spans, {d["date"] for d in scope})
+                if seen is not None:
+                    recognised.append(_recognition(inst_id, names, h.symbol, x, seen))
+            questions.extend(
+                _questions(pairing, ledger, due, inst_id, names, h, listed, listing)
+            )
+            # Recorded (by its ex-date wherever its row is dated, brief AZ), or
+            # deleted by the reader, which stays deleted (brief AO).
+            done = crud.get_dividend_dates_settled(db, inst_id, h.symbol)
+            for x, item in due.items():
+                d, shares = item.event, item.units
+                ex_date = datetime.date.fromisoformat(x)
+                if x in done or x in pairing.held:
                     continue
                 if "unreadable" in d:
                     # Said on its own ex-date, and asked again at every start
@@ -947,14 +975,19 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 except (crud.LedgerRateUnknown, StoredValueRefused) as exc:
                     skipped.append({"label": h.symbol, "occurrence": ex_date, "reason": str(exc)})
                     continue
-                written = _record_dividend(db, inst_id, h.symbol, d["date"], columns)
+                written = _record_dividend(db, inst_id, h.symbol, x, columns, spans[x])
                 if written is not None:
                     created.append(written)
-    return {"created": created, "skipped": skipped}
+    return {"created": created, "skipped": skipped, "recognised": recognised, "questions": questions}
 
 
 def _record_dividend(
-    db: Session, institution_id: int, symbol: str, ex_date: str, columns: dict
+    db: Session,
+    institution_id: int,
+    symbol: str,
+    ex_date: str,
+    columns: dict,
+    span: tuple[str, str],
 ) -> models.Transaction | None:
     """Write one dividend, or nothing if it is already recorded, asked again
     with SQLite's write lock held (`sole_writer`).
@@ -968,11 +1001,271 @@ def _record_dividend(
     deleted from that day, exactly as `done` does.
 
     The row keeps its ex-date (brief AZ), so the reader can move it to the day
-    its money arrived and the catch-up still finds it by that day."""
+    its money arrived and the catch-up still finds it by that day. And an entry
+    of the reader's that appeared in the dividend's window since the pairing
+    was read stops the write too: the next catch-up pairs it."""
     with sole_writer(db):
         if ex_date in crud.get_dividend_dates_settled(db, institution_id, symbol):
             return None
+        apart = crud.get_dividends_apart(db, institution_id, symbol)
+        _, unkeyed = _dividend_rows(db, institution_id, symbol)
+        if any(
+            dividend_pairs.inside(t.date, span) and (t.id, ex_date) not in apart for t in unkeyed
+        ):
+            return None
         return crud.store_transaction(db, columns, estimated=True, ex_date=ex_date)
+
+
+@dataclass(frozen=True)
+class _Due:
+    """A dividend of one position the catch-up would record: Yahoo's event
+    and the units held strictly before its ex-date."""
+
+    event: dict
+    units: float
+
+
+def _dividend_rows(
+    db: Session, institution_id: int, symbol: str
+) -> tuple[dict[str, list[models.Transaction]], list[models.Transaction]]:
+    """This position's dividend rows, read now: by the ex-date each keeps, and
+    those that keep none (the reader's own entries, and any older row of the
+    app's not given one yet).
+
+    Read from the database, not from the session's copies: under the write
+    lock this is the question asked again, and a copy loaded before another
+    catch-up gave a row its ex-date still says it has none (found by the test
+    of two catch-ups at once: both reported the same entry recognised), as
+    brief Y found of a plan's carry."""
+    keyed: dict[str, list[models.Transaction]] = {}
+    unkeyed: list[models.Transaction] = []
+    for t in db.scalars(
+        select(models.Transaction)
+        .where(
+            models.Transaction.kind == "dividend",
+            models.Transaction.institution_id == institution_id,
+            models.Transaction.symbol == symbol,
+        )
+        .order_by(models.Transaction.date, models.Transaction.id)
+        .execution_options(populate_existing=True)
+    ):
+        if t.ex_date:
+            keyed.setdefault(t.ex_date, []).append(t)
+        else:
+            unkeyed.append(t)
+    return keyed, unkeyed
+
+
+def _adoptable(
+    db: Session, institution_id: int, symbol: str, spans: dict[str, tuple[str, str]]
+) -> set[str]:
+    """The ex-dates whose dividend the catch-up's own row can take as its key
+    (`crud.adopt_ex_dates`): that row is dated on the ex-date, keeps none, and
+    is the only row keeping none in the dividend's window. Beside an entry of
+    the reader's it is not taken alone: the two may be one dividend counted
+    twice, which the pairing then asks about rather than settles in silence."""
+    _, unkeyed = _dividend_rows(db, institution_id, symbol)
+    days = set()
+    for x, span in spans.items():
+        inside = [t for t in unkeyed if dividend_pairs.inside(t.date, span)]
+        if len(inside) == 1 and inside[0].date == x and (inside[0].note or "").startswith(AUTO_RECORDED):
+            days.add(x)
+    return days
+
+
+@dataclass(frozen=True)
+class _Ledger:
+    """What a pairing was read from, for the questions it raises."""
+
+    keyed: dict[str, list[models.Transaction]]
+    unkeyed: list[models.Transaction]
+
+
+def _pairing(
+    db: Session,
+    institution_id: int,
+    symbol: str,
+    due: dict[str, _Due],
+    spans: dict[str, tuple[str, str]],
+    scope: set[str],
+) -> tuple[dividend_pairs.Pairing, _Ledger]:
+    """The reader's entries of this position paired with the dividends they
+    could be (`dividend_pairs.pair`), read from the ledger as it is now: the
+    dividends due and not recorded, and those in `scope` that only the app's
+    still-estimated row holds, which an entry beside it doubles."""
+    keyed, unkeyed = _dividend_rows(db, institution_id, symbol)
+    deleted = crud.get_dividend_dates_deleted(db, institution_id, symbol)
+    dividends = [dividend_pairs.Dividend(x) for x in due if x not in keyed and x not in deleted]
+    for x, rows in keyed.items():
+        if x in scope and x not in deleted and len(rows) == 1 and rows[0].estimated:
+            dividends.append(dividend_pairs.Dividend(x, estimate_id=rows[0].id))
+    pairing = dividend_pairs.pair(
+        dividends,
+        [(t.id, t.date) for t in unkeyed],
+        spans,
+        crud.get_dividends_apart(db, institution_id, symbol),
+    )
+    return pairing, _Ledger(keyed, unkeyed)
+
+
+def _recognise(
+    db: Session,
+    institution_id: int,
+    symbol: str,
+    tx_id: int,
+    ex_date: str,
+    due: dict[str, _Due],
+    spans: dict[str, tuple[str, str]],
+    scope: set[str],
+) -> models.Transaction | None:
+    """Give the reader's entry the ex-date of the dividend it is, asked again
+    with the write lock held: the pairing read again, and written only while
+    it still pairs those two alone. The entry, or None."""
+    with sole_writer(db):
+        pairing, _ = _pairing(db, institution_id, symbol, due, spans, scope)
+        if (tx_id, ex_date) not in pairing.recognised:
+            return None
+        tx = db.get(models.Transaction, tx_id)
+        tx.ex_date = ex_date
+    return tx
+
+
+def _entry_view(t: models.Transaction) -> dict:
+    """An entry as the banner names it."""
+    return {
+        "id": t.id,
+        "date": t.date,
+        "amount": t.amount,
+        "currency": t.currency,
+        "estimated": t.estimated,
+    }
+
+
+def _recognition(
+    institution_id: int, names: dict[int, str], symbol: str, ex_date: str, t: models.Transaction
+) -> dict:
+    return {
+        "institution_id": institution_id,
+        "institution_name": names.get(institution_id, ""),
+        "symbol": symbol,
+        "ex_date": ex_date,
+        "entry": _entry_view(t),
+    }
+
+
+def _questions(
+    pairing: dividend_pairs.Pairing,
+    ledger: _Ledger,
+    due: dict[str, _Due],
+    institution_id: int,
+    names: dict[int, str],
+    h: models.Holding,
+    listed: list[dict],
+    listing: dict[str, str],
+) -> list[dict]:
+    """What the pairing could not settle, as the questions the banner asks:
+    a double (an entry beside the app's estimate of the same dividend), a
+    dividend two entries could be, an entry two dividends could be."""
+    events = {d["date"]: d for d in listed}
+    rows = {t.id: t for t in ledger.unkeyed}
+
+    def dividend(x: str) -> dict:
+        estimate = next((t for t in ledger.keyed.get(x, []) if t.estimated), None)
+        event = events.get(x, {})
+        return {
+            "ex_date": x,
+            "dps": event.get("dps"),
+            "currency": event.get("currency") or listing.get(h.symbol) or h.currency,
+            "units": due[x].units if x in due else (estimate.quantity if estimate else None),
+            "estimate": _entry_view(estimate) if estimate is not None else None,
+        }
+
+    def asked(kind: str, xs: list[str], ids: list[int]) -> dict:
+        return {
+            "kind": kind,
+            "institution_id": institution_id,
+            "institution_name": names.get(institution_id, ""),
+            "symbol": h.symbol,
+            "asset_name": h.asset_name,
+            "dividends": [dividend(x) for x in xs],
+            "entries": [_entry_view(rows[i]) for i in ids],
+        }
+
+    out = [asked("same_dividend", [x], [tx_id]) for tx_id, x in pairing.doubles]
+    out += [asked("which_entry", [x], ids) for x, ids in pairing.by_dividend]
+    out += [asked("which_dividend", xs, [tx_id]) for tx_id, xs in pairing.by_entry]
+    return out
+
+
+class AnswerRefused(ValueError):
+    """An answer to a question about a dividend that no longer stands, in the
+    sentence the reader sees."""
+
+
+def answer_dividend(db: Session, answer: schemas.DividendAnswer) -> dict:
+    """Write the reader's answer to a question the catch-up asked about a
+    dividend (brief AZ), then run the dividend catch-up again, which records
+    or asks what follows from it. Every answer is checked against the ledger
+    as it is now, so a question answered twice, or after the rows it named
+    changed, is refused with a sentence rather than written.
+
+    "link": the entry is the dividend of that ex-date; it takes the ex-date,
+    and the app's estimate of the same dividend, if there is one, is deleted
+    (its deletion remembered, brief AO). "apart": each entry named is not the
+    dividend named beside it, and the two are never paired again."""
+    institution = db.get(models.Institution, answer.institution_id)
+    if institution is None:
+        raise AnswerRefused("That account is no longer on record.")
+    symbol = answer.symbol
+    kept = _kept(db, symbol)
+    spans = dividend_pairs.windows(d["date"] for d in (kept["dividends"] if kept else []))
+
+    def entry(tx_id: int) -> models.Transaction:
+        # From the database, not the session's copy (see `_dividend_rows`).
+        tx = db.get(models.Transaction, tx_id, populate_existing=True)
+        if (
+            tx is None
+            or tx.kind != "dividend"
+            or tx.institution_id != institution.id
+            or tx.symbol != symbol
+            or tx.ex_date is not None
+        ):
+            raise AnswerRefused(
+                f"That entry of {symbol} at {institution.name} is no longer one the question was "
+                "about: reload the page to see what is asked now."
+            )
+        return tx
+
+    def listed(x: str) -> tuple[str, str]:
+        if x not in spans:
+            raise AnswerRefused(f"Yahoo no longer lists a dividend of {symbol} with ex-date {x}.")
+        return spans[x]
+
+    if answer.answer == "link":
+        x = answer.ex_date.isoformat()
+        span = listed(x)
+        with sole_writer(db):
+            tx = entry(answer.transaction_id)
+            if not dividend_pairs.inside(tx.date, span):
+                raise AnswerRefused(
+                    f"Your entry of {tx.date} falls outside the days the dividend with ex-date {x} "
+                    "can be paid on."
+                )
+            keyed, _ = _dividend_rows(db, institution.id, symbol)
+            if any(not t.estimated for t in keyed.get(x, [])):
+                raise AnswerRefused(
+                    f"The dividend of {symbol} with ex-date {x} already has an entry of yours."
+                )
+            tx.ex_date = x
+            for t in keyed.get(x, []):
+                crud.delete_transaction(db, t.id)
+    else:
+        pairs = []
+        for p in answer.pairs:
+            listed(p.ex_date.isoformat())
+            pairs.append((entry(p.transaction_id).id, p.ex_date.isoformat()))
+        crud.remember_apart(db, institution.id, symbol, pairs)
+    return execute_dividends(db)
 
 
 # Symbols the day's batch asked about and Yahoo priced nothing for, while it
@@ -1090,7 +1383,9 @@ def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:
     """Run every ledger catch-up (PAC buys first, then dividends — so a buy
     recorded today counts toward today's dividend share count on the next
     run), then the day's prices (`refresh_prices`), which write no ledger
-    entry. Returns the merged {created, skipped}."""
+    entry. Returns the merged {created, skipped}, with the dividends the
+    reader had entered themselves (`recognised`) and the questions only they
+    can answer (`questions`, brief AZ)."""
     pacs = execute_due(db, as_of)
     divs = execute_dividends(db, as_of)
     try:
@@ -1102,4 +1397,6 @@ def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:
     return {
         "created": pacs["created"] + divs["created"],
         "skipped": pacs["skipped"] + divs["skipped"],
+        "recognised": divs["recognised"],
+        "questions": divs["questions"],
     }

@@ -558,21 +558,25 @@ def test_a_dividend_the_app_recorded_moves_to_the_day_it_was_paid_and_keeps_its_
     assert _catch_up(client) == []
 
 
-def test_a_dividend_of_the_apps_with_no_ex_date_yet_keeps_its_day(client, monkeypatch, market):
-    """One the reader corrected before rows kept their ex-date, on a day the
-    market has not answered since: its date is still its only key, so the
-    card corrects its figures and leaves its day."""
+def test_a_dividend_of_the_apps_with_no_ex_date_yet_moved_is_found_by_its_window(
+    client, monkeypatch, market
+):
+    """One the reader corrected before rows kept their ex-date, moved on a
+    day the market did not answer, so not given its ex-date first: the next
+    catch-up finds it in its dividend's window, the only entry there, and
+    gives it the ex-date rather than recording the dividend again."""
     _holder(client)
     with SessionLocal() as db:
         row = db.scalars(select(models.Transaction).where(models.Transaction.kind == "dividend")).one()
         row.ex_date, row.estimated = None, False
         db.commit()
-    assert (
-        "The dividend of 2026-09-23 keeps its day for now: the app finds it by that day until it "
-        "has read the dividend's ex-date from the market again. Correct its figures; its day can "
-        "be moved after the next start."
-    ) in _refused(client, monkeypatch, action="correct", date="2026-09-23", kind="dividend",
-                  instrument="XDIV.MI", new_date="2026-09-30", new_amount=4.41)
+    card = _draw(client, monkeypatch, action="correct", date="2026-09-23", kind="dividend",
+                 instrument="XDIV.MI", new_date="2026-09-30", new_amount=4.41)
+    assert "ex-date" not in card["consequence"]
+    assert _confirm(client, monkeypatch, card).status_code == 200
+    assert _catch_up(client) == []
+    row = _row(client, "dividend", "2026-09-30", "XDIV.MI")
+    assert (row["ex_date"], row["amount"]) == ("2026-09-23", 4.41)
 
 
 def test_a_correction_that_changes_nothing_is_refused_and_an_estimate_confirmed_is_not(

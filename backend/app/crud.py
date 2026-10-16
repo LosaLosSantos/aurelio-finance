@@ -1339,6 +1339,45 @@ AUTO_DIVIDEND_NOTE = "Auto-recorded from market data"
 _DIVIDEND_DELETED = "dividend_deleted:{institution_id}:{symbol}:{day}"
 
 
+# An entry of the reader's they said is not a dividend Yahoo lists (brief AZ):
+# asked whether it was, they answered "keep both" or "none of them", so the
+# catch-up never pairs the two again. One row of `settings` a pair, this
+# prefix then "<ex-date>:<entry id>", as the deletions above are kept; its
+# value the reader's day of the answer.
+_DIVIDEND_APART = "dividend_apart:{institution_id}:{symbol}:"
+
+
+def remember_apart(
+    db: Session, institution_id: int, symbol: str, pairs: Collection[tuple[int, str]]
+) -> None:
+    """Keep that each (entry id, ex-date) in `pairs` is not one dividend.
+    Written as statements that say so, as the catch-up's other memories are,
+    and committed at once."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    prefix = _DIVIDEND_APART.format(institution_id=institution_id, symbol=symbol)
+    for tx_id, day in pairs:
+        kept = sqlite_insert(models.Setting).values(key=f"{prefix}{day}:{tx_id}", value=dated.today())
+        db.execute(kept.on_conflict_do_update(index_elements=["key"], set_={"value": dated.today()}))
+    commit(db)
+
+
+def get_dividends_apart(db: Session, institution_id: int, symbol: str) -> set[tuple[int, str]]:
+    """The (entry id, ex-date) pairs of this position the reader said are not
+    one dividend. A key that does not read as a day and an id is skipped."""
+    prefix = _DIVIDEND_APART.format(institution_id=institution_id, symbol=symbol)
+    pairs = set()
+    for key in db.scalars(
+        select(models.Setting.key).where(models.Setting.key.startswith(prefix, autoescape=True))
+    ):
+        day, _, tx_id = key[len(prefix):].partition(":")
+        try:
+            pairs.add((int(tx_id), datetime.date.fromisoformat(day).isoformat()))
+        except ValueError:
+            continue
+    return pairs
+
+
 def deleted_from_the_ledger(reason: str | None) -> bool:
     """Whether an occurrence settled without a buy is one whose buy the reader
     deleted, rather than one that ran and could not buy a unit."""
@@ -1372,7 +1411,8 @@ def delete_transaction(db: Session, tx_id: int) -> bool:
       day for the catch-up, the reader's own included. The day is its ex-date
       where the row keeps one (brief AZ): a dividend moved to the day its money
       arrived and then deleted is the dividend of its ex-date, and that is the
-      day the catch-up would record it on again.
+      day the catch-up would record it on again. What the reader said the
+      entry is not (`remember_apart`) goes with it.
 
     The row goes first, so the questions after it are asked holding SQLite's
     write lock, as `database.sole_writer` would hold it; this one cannot take
@@ -1409,6 +1449,17 @@ def delete_transaction(db: Session, tx_id: int) -> bool:
             remembered = sqlite_insert(models.Setting).values(key=key, value=dated.today())
             db.execute(
                 remembered.on_conflict_do_update(index_elements=["key"], set_={"value": dated.today()})
+            )
+            # What the reader said this entry is not goes with it: SQLite may
+            # give its id to the next row, which said nothing of the kind.
+            apart = _DIVIDEND_APART.format(institution_id=tx.institution_id, symbol=tx.symbol)
+            db.execute(
+                delete(models.Setting)
+                .where(
+                    models.Setting.key.startswith(apart, autoescape=True),
+                    models.Setting.key.endswith(f":{tx.id}", autoescape=True),
+                )
+                .execution_options(synchronize_session=False)
             )
     return True
 
@@ -1465,8 +1516,9 @@ def adopt_ex_dates(
     db: Session, institution_id: int, symbol: str, listed: Collection[str]
 ) -> int:
     """Give the ex-date to every dividend of this position the catch-up wrote
-    that keeps none and is dated on a day Yahoo lists as one of its ex-dates,
-    which is the day the catch-up wrote it on. How many it gave it to.
+    that keeps none and is dated on one of `listed`, ex-dates Yahoo lists,
+    which is the day the catch-up wrote it on (the catch-up passes those whose
+    window holds no other such row, `pac._adoptable`). How many it gave it to.
 
     The migration gave it only to the rows still marked estimated, the ones
     certainly on their ex-date without asking anyone; a row the reader has

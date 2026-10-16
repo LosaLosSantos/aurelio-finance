@@ -163,7 +163,7 @@ def test_yesterdays_answer_is_not_used_today_even_when_nobody_answers(client, ya
     yahoo.answers[TICKER] = None
     on(NEXT_DAY)
 
-    assert _catch_up(client) == {"created": [], "skipped": []}
+    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": []}
     assert yahoo.asked == [TICKER, TICKER]
 
 
@@ -179,7 +179,7 @@ def test_a_check_nobody_answered_is_asked_again_and_says_nothing(client, yahoo, 
     on(DAY)
     yahoo.answers[TICKER] = None
 
-    assert _catch_up(client) == {"created": [], "skipped": []}
+    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": []}
 
     yahoo.answers[TICKER] = [(EX, 0.5)]
     assert len(_catch_up(client)["created"]) == 1

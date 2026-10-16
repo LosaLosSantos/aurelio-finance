@@ -49,7 +49,6 @@ import {
   estimatedDividends,
   exDateStays,
   keyDay,
-  movedOffItsDay,
   offerLine,
   olderLine,
 } from "./sameDividend";
@@ -1449,9 +1448,6 @@ function BuysSection({
   // A dividend dated on another day than its ex-date keeps it, and the line
   // says so, unless the correction's own line already does.
   const exDateNote = editing && !correctingNote ? exDateStays(editing, date, fmtDate) : null;
-  // Said, not refused: one of the app's that has no ex-date yet is still found
-  // by its date, and moved off it is recorded again at the next start.
-  const movedNote = editing ? movedOffItsDay(editing, date, fmtDate) : null;
   // An entry is matched to its position by the exact ticker. One no position
   // carries is right for a first buy and a typo otherwise, so it is said in
   // view, as the PAC form says it of a plan's; it was a tooltip (brief AU).
@@ -1789,7 +1785,6 @@ function BuysSection({
       )}
       {correctingNote && <p className="mt-2 text-xs text-olive">{correctingNote}</p>}
       {exDateNote && <p className="mt-2 text-xs text-olive">{exDateNote}</p>}
-      {movedNote && <p className="mt-2 text-xs text-warn">{movedNote}</p>}
       {unknownSymbol && (
         <p className="mt-2 text-xs text-warn">
           <b>{unknownSymbol}</b> matches no position you hold: fine for a first buy, but another

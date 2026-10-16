@@ -360,7 +360,7 @@ def test_a_share_that_never_paid_is_asked_and_records_nothing(client, yahoo, on)
     yahoo.answers["QUIET"] = []
     on(DAY)
 
-    assert _catch_up(client) == {"created": [], "skipped": []}
+    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": []}
     assert yahoo.asked == [("QUIET", "max")]
 
 
@@ -399,7 +399,7 @@ def test_crypto_with_no_policy_is_never_asked(client, yahoo, on):
     _hold(client, iid, "TOKEN-EUR", asset_class="crypto", currency="EUR")
     on(DAY)
 
-    assert _catch_up(client) == {"created": [], "skipped": []}
+    assert _catch_up(client) == {"created": [], "skipped": [], "recognised": [], "questions": []}
     assert yahoo.asked == []
 
 

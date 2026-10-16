@@ -88,5 +88,18 @@ def catch_up(db: Session = Depends(get_db)) -> schemas.CatchUpResult:
     and a dividend entry for every ex-date of every position that follows its
     dividends: stated distributing, or stating no policy, when its own history
     decides. Items that cannot be priced are skipped and retried on the next
-    run."""
+    run. A dividend the reader entered themselves is recognised rather than
+    recorded beside it, and what only the reader can say is asked."""
     return pac.catch_up(db)
+
+
+@router.post("/transactions/dividend-answer", response_model=schemas.CatchUpResult)
+def answer_dividend(data: schemas.DividendAnswer, db: Session = Depends(get_db)) -> schemas.CatchUpResult:
+    """The reader's answer to a question the catch-up asked about a dividend:
+    an entry of theirs is the dividend with that ex-date, or it is not. The
+    dividend catch-up then runs again and returns what it recorded and what it
+    still asks. 409 with a sentence when the question no longer stands."""
+    try:
+        return pac.answer_dividend(db, data)
+    except pac.AnswerRefused as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))

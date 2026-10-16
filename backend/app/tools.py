@@ -1527,21 +1527,6 @@ def _ledger_change(db: Session, args: ChangeLedgerEntryArgs) -> _LedgerChange:
         v is not None for v in (args.new_quantity, args.new_unit_price, args.new_fees)
     ):
         raise LookupError("A close has its day and what came back, and no units, price or fees.")
-    if (
-        args.new_date is not None
-        and args.new_date.isoformat() != tx.date
-        and tx.kind == "dividend"
-        and tx.ex_date is None
-        and (tx.note or "").startswith(pac.AUTO_RECORDED)
-    ):
-        # The app's own row that has not been given its ex-date yet (the
-        # market has not answered since it was corrected): its date is still
-        # the only key, and moving it would bring the dividend back.
-        raise LookupError(
-            f"The dividend of {tx.date} keeps its day for now: the app finds it by that day "
-            "until it has read the dividend's ex-date from the market again. Correct its "
-            "figures; its day can be moved after the next start."
-        )
     body = _ledger_body(tx)
     for field_name, value in (
         ("date", args.new_date.isoformat() if args.new_date else None),
@@ -1765,8 +1750,6 @@ def _propose_ledger_change(db: Session, args: ChangeLedgerEntryArgs) -> Proposal
                 f"Its ex-date stays {tx.ex_date}: the app finds this dividend by that day, "
                 "whatever day it is dated."
             )
-        elif tx.kind == "dividend" and tx.ex_date is None and (tx.note or "").startswith(pac.AUTO_RECORDED):
-            said.append(f"Its day stays {tx.date}, the day the app finds it by.")
         said.extend(why)
         title = f"correct {tx.kind}: {tx.date} {what}" + (
             f", {tx.amount:.2f} → {after.amount:.2f} {tx.currency}" if after.amount != tx.amount else ""

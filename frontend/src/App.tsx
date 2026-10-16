@@ -18,6 +18,8 @@ import ChatPanel from "./components/ChatPanel";
 import { Mark } from "./components/Emblem";
 import { CURRENCY_LIST } from "./components/ui";
 import { dividendsNote } from "./components/catchUpNote";
+import DividendQuestions, { BANNER_FORMATS } from "./components/DividendQuestions";
+import { recognisedLine } from "./components/dividendQuestion";
 import type { Focus } from "./nav";
 
 // Four voices, grouped by what you are DOING rather than by database table:
@@ -143,16 +145,19 @@ function ChatRail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   );
 }
 
-// Banner shown when the ledger catch-up created (or failed to create) entries.
+// Banner shown when the ledger catch-up created (or failed to create) entries,
+// recognised a dividend the reader had entered, or has a question about one.
 function PacBanner({
   result,
   onDismiss,
   onOpenPortfolio,
+  onAnswered,
   measure,
 }: {
   result: CatchUpResult;
   onDismiss: () => void;
   onOpenPortfolio: () => void;
+  onAnswered: (next: CatchUpResult) => void;
   measure: string;
 }) {
   const buys = result.created.filter((t) => t.kind === "buy").length;
@@ -178,6 +183,16 @@ function PacBanner({
               Review in Portfolio
             </button>
           </span>
+        )}
+        {/* A dividend the reader had entered, which the catch-up recognised
+            instead of recording it beside, said once (brief AZ). */}
+        {result.recognised.map((r) => (
+          <span key={`${r.institution_id}:${r.symbol}:${r.ex_date}`} className="w-full">
+            {recognisedLine(r, BANNER_FORMATS)}
+          </span>
+        ))}
+        {result.questions.length > 0 && (
+          <DividendQuestions questions={result.questions} onAnswered={onAnswered} />
         )}
         {/* The reason after a colon, not inside brackets: a reason can end in
             its own, and "(retried on the next run))" printed two (brief AU). */}
@@ -206,6 +221,9 @@ export default function App() {
   // fill in your profile.
   const [tab, setTab] = useState<Tab>("dashboard");
   const [pacResult, setPacResult] = useState<CatchUpResult | null>(null);
+  // Bumped when an answer in the banner writes to the ledger, so the page in
+  // view is mounted again and reads what was written.
+  const [ledgerVersion, setLedgerVersion] = useState(0);
   /* The codes the rate feed quotes, offered to every currency box in the app
      (`CURRENCY_LIST`). Fetched once here rather than per form: `<datalist>` is
      referenced by document id, so one element serves inputs anywhere in the
@@ -329,7 +347,8 @@ export default function App() {
   useEffect(() => {
     catchUp()
       .then((r) => {
-        if (r.created.length > 0 || r.skipped.length > 0) setPacResult(r);
+        if (r.created.length > 0 || r.skipped.length > 0 || r.recognised.length > 0 || r.questions.length > 0)
+          setPacResult(r);
       })
       .catch(() => {
         /* backend down: the next start retries */
@@ -382,6 +401,20 @@ export default function App() {
               setReading(null);
               setTab("portfolio");
             }}
+            onAnswered={(next) => {
+              // What the answer recorded or recognised joins what the start
+              // did; the questions are the ones still asked.
+              setPacResult((prev) =>
+                prev && {
+                  created: [...prev.created, ...next.created],
+                  skipped: prev.skipped,
+                  recognised: [...prev.recognised, ...next.recognised],
+                  questions: next.questions,
+                },
+              );
+              // The answer wrote to the ledger: the page in view reads it again.
+              setLedgerVersion((v) => v + 1);
+            }}
             measure={measure}
           />
         )}
@@ -414,7 +447,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className={"px-6 py-8 " + measure}>
+        <main key={ledgerVersion} className={"px-6 py-8 " + measure}>
           {reading !== null ? (
             <Analysis
               runId={reading === "list" ? null : reading}

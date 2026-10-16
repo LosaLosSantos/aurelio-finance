@@ -12,6 +12,9 @@ export type Transaction = Schemas["TransactionRead"];
 export type TransactionWrite = Schemas["TransactionWrite"];
 export type CatchUpSkip = Schemas["CatchUpSkip"];
 export type CatchUpResult = Schemas["CatchUpResult"];
+export type DividendQuestion = Schemas["DividendQuestion"];
+export type DividendRecognised = Schemas["DividendRecognised"];
+export type DividendAnswer = Schemas["DividendAnswer"];
 
 export async function getTransactions(): Promise<Transaction[]> {
   return (await api.get<Transaction[]>("/api/transactions")).data;
@@ -39,4 +42,11 @@ export async function deleteTransaction(id: number): Promise<void> {
 // start.
 export async function catchUp(): Promise<CatchUpResult> {
   return (await api.post<CatchUpResult>("/api/transactions/catch-up")).data;
+}
+
+// POST /api/transactions/dividend-answer: the reader's answer to a question
+// the catch-up asked about a dividend (brief AZ). The dividend catch-up runs
+// again and its result comes back: what it recorded and what it still asks.
+export async function answerDividend(body: DividendAnswer): Promise<CatchUpResult> {
+  return (await api.post<CatchUpResult>("/api/transactions/dividend-answer", body)).data;
 }

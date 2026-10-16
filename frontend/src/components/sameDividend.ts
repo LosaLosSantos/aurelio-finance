@@ -20,9 +20,10 @@
    and the next start recorded the dividend there again (measured 2026-10-07,
    and again the same day at `eaa89fc`). A row now keeps its ex-date in a
    column of its own, which no form sends, so a correction takes the date
-   typed, the day the broker credited it, and says the ex-date stays. Only a
-   row of the app's that has not been given its ex-date yet is still found by
-   its date, and moving it is said, not refused.
+   typed, the day the broker credited it, and says the ex-date stays. A row of
+   the app's not given its ex-date yet, moved, is found as any entry of the
+   reader's is, in the dividend's window (`dividend_pairs` on the backend), so
+   moving it needs no warning any more.
 
    Pure, so `tests/sameDividend.test.ts` runs it under Node without a
    bundler. Dates go in as ISO strings; `fmt` is how the page prints them. */
@@ -37,17 +38,11 @@ export type LedgerRow = {
   amount: number;
   currency: string;
   estimated: boolean;
-  note: string | null;
   ex_date: string | null;
 };
 
 /** How many estimated rows are named; any older ones are counted. */
 export const SHOWN = 3;
-
-/** The start of the note the catch-up writes on every dividend it records
-    (`pac.execute_dividends`). An edit keeps it, and the backend's tests pin
-    it (`test_a_stamp_says_where_a_row_came_from.py`). */
-export const AUTO_STAMP = "Auto-recorded from market data";
 
 const asIs = (iso: string) => iso;
 
@@ -107,21 +102,4 @@ export function exDateStays(
 ): string | null {
   if (row.kind !== "dividend" || !row.ex_date || !date || date === row.ex_date) return null;
   return `Its ex-date stays ${fmt(row.ex_date)}: the app finds this dividend by that day, whatever day it is dated.`;
-}
-
-/** Whether the app's catch-up recorded this row, by the stamp it wrote. */
-export function recordedByTheApp(row: Pick<LedgerRow, "kind" | "note">): boolean {
-  return row.kind === "dividend" && (row.note ?? "").startsWith(AUTO_STAMP);
-}
-
-/** The line under the form when a dividend the app recorded, and has not
-    given its ex-date yet, is being moved off the day it was recorded on, or
-    null. */
-export function movedOffItsDay(
-  row: Pick<LedgerRow, "kind" | "note" | "date" | "ex_date">,
-  date: string,
-  fmt = asIs,
-): string | null {
-  if (row.ex_date || !recordedByTheApp(row) || !date || date === row.date) return null;
-  return `The app recorded this dividend on its ex-date, ${fmt(row.date)}, and finds it by that day. Moved to ${fmt(date)}, the dividend of ${fmt(row.date)} is recorded again at the next start, unless this account has a situation dated on or after it.`;
 }

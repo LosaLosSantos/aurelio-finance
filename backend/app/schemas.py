@@ -2260,15 +2260,109 @@ class CatchUpSkip(BaseModel):
     reason: str
 
 
+class DividendEntryRead(BaseModel):
+    """A dividend row as a question about it names it."""
+
+    model_config = API_OUT
+
+    id: int
+    date: str
+    amount: float
+    currency: str
+    estimated: bool
+
+
+class DividendRecognised(BaseModel):
+    """An entry of the reader's the catch-up recognised as a dividend Yahoo
+    lists (brief AZ): the only entry in that dividend's window, the only
+    dividend whose window holds it. It took the dividend's ex-date, and the
+    dividend was not recorded beside it."""
+
+    model_config = API_OUT
+
+    institution_id: int
+    institution_name: str
+    symbol: str
+    ex_date: str
+    entry: DividendEntryRead
+
+
+class ListedDividend(BaseModel):
+    """A dividend Yahoo lists, as a question names it: its ex-date, the
+    figure a share and its currency, the units held before the ex-date, and
+    the app's row for it while that row is still the market's estimate."""
+
+    model_config = API_OUT
+
+    ex_date: str
+    dps: float | None
+    currency: str | None
+    units: float | None
+    estimate: DividendEntryRead | None
+
+
+class DividendQuestion(BaseModel):
+    """Something about a dividend only the reader can say (brief AZ), asked
+    in the banner until answered, with nothing written meanwhile.
+
+    `same_dividend`: an entry of theirs beside the app's estimate of the same
+    dividend; keep theirs and remove the estimate, or keep both.
+    `which_entry`: two or more of their entries could be one dividend.
+    `which_dividend`: one entry could be two or more dividends."""
+
+    model_config = API_OUT
+
+    kind: Literal["same_dividend", "which_entry", "which_dividend"]
+    institution_id: int
+    institution_name: str
+    symbol: str
+    asset_name: str
+    dividends: list[ListedDividend]
+    entries: list[DividendEntryRead]
+
+
 class CatchUpResult(BaseModel):
     """Outcome of a catch-up run: transactions created for every elapsed,
     still-unrecorded PAC occurrence and dividend ex-date, plus what was
-    skipped (retried on the next run)."""
+    skipped (retried on the next run), the dividends the reader had entered
+    themselves and the questions only they can answer (brief AZ)."""
 
     model_config = API_OUT
 
     created: list[TransactionRead]
     skipped: list[CatchUpSkip]
+    recognised: list[DividendRecognised] = Field(default_factory=list)
+    questions: list[DividendQuestion] = Field(default_factory=list)
+
+
+class DividendPairIn(BaseModel):
+    """An entry and a dividend the reader says are not one."""
+
+    transaction_id: int
+    ex_date: datetime.date
+
+
+class DividendAnswer(BaseModel):
+    """The reader's answer to a question the catch-up asked (brief AZ).
+
+    `link`: the entry `transaction_id` is the dividend with `ex_date` (the
+    app's estimate of it, if any, goes). `apart`: each pair in `pairs` is not
+    one dividend, and the two are never paired again."""
+
+    institution_id: int
+    symbol: str = Field(..., min_length=1)
+    answer: Literal["link", "apart"]
+    transaction_id: int | None = None
+    ex_date: datetime.date | None = None
+    pairs: list[DividendPairIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _what_each_answer_needs(self):
+        if self.answer == "link" and (self.transaction_id is None or self.ex_date is None):
+            raise ValueError("link names the entry and the ex-date of the dividend it is.")
+        if self.answer == "apart" and not self.pairs:
+            raise ValueError("apart names at least one entry and the dividend it is not.")
+        return self
 
 
 # --- FX rates ---------------------------------------------------------------

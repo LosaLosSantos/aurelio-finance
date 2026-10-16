@@ -224,8 +224,13 @@ def test_the_catch_up_gives_its_own_corrected_row_its_ex_date(client, yahoo, on)
     it can be moved like any other, and is not recorded again, the same day or
     the next."""
     iid = _household(client)
-    _corrected_before_this_brief(client)
-    assert _catch_up(client) == []
+    tx_id = _corrected_before_this_brief(client)
+    r = client.post("/api/transactions/catch-up")
+    assert r.status_code == 200, r.text
+    # Silently: the row is the catch-up's own, and no figure moves.
+    assert (r.json()["created"], r.json().get("recognised", [])) == ([], [])
+    with SessionLocal() as db:
+        assert db.get(models.Transaction, tx_id).ex_date == EX
 
     _moved_and_corrected(client)
     assert _catch_up(client) == []
@@ -233,19 +238,6 @@ def test_the_catch_up_gives_its_own_corrected_row_its_ex_date(client, yahoo, on)
     assert _catch_up(client) == []
     assert _figures(client, iid)["cash"] == 5003.7
     assert _dividends(client) == [(PAID, 3.7, EX, False)]
-
-
-def test_a_row_of_the_readers_on_the_ex_date_is_not_adopted(client, yahoo, on):
-    """The reader's own entry on that day settles the ex-date as it always
-    did, and keeps no ex-date: adoption is for the catch-up's rows only."""
-    iid = _household(client)
-    r = client.post("/api/transactions", json={
-        "kind": "dividend", "date": EX, "institution_id": iid, "asset_name": "Example Dividend Share",
-        "symbol": TICKER, "quantity": 20, "unit_price": 0.185, "currency": "EUR", "price_currency": "EUR",
-    })
-    assert r.status_code == 201, r.text
-    assert _catch_up(client) == []
-    assert _dividends(client) == [(EX, 3.7, None, False)]
 
 
 def test_two_catch_ups_at_once_adopt_once_and_record_nothing(client, yahoo, monkeypatch, on):

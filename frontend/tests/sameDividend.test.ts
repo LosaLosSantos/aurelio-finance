@@ -11,19 +11,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  AUTO_STAMP,
   correctingLine,
   estimatedDividends,
   exDateStays,
   keyDay,
-  movedOffItsDay,
   offerLine,
   olderLine,
-  recordedByTheApp,
   type LedgerRow,
 } from "../src/components/sameDividend.ts";
-
-const STAMP = "Auto-recorded from market data: a dividend of 0.25 USD per share";
 
 function row(over: Partial<LedgerRow>): LedgerRow {
   return {
@@ -35,7 +30,6 @@ function row(over: Partial<LedgerRow>): LedgerRow {
     amount: 5.1,
     currency: "EUR",
     estimated: true,
-    note: STAMP,
     ex_date: "2026-09-22",
     ...over,
   };
@@ -126,27 +120,4 @@ test("on its ex-date, with no date, with no ex-date, or another kind, nothing is
   assert.equal(exDateStays(row({}), ""), null);
   assert.equal(exDateStays(row({ ex_date: null }), "2026-09-29"), null);
   assert.equal(exDateStays(row({ kind: "buy" }), "2026-09-29"), null);
-});
-
-test("a dividend the app recorded is known by its stamp, which an edit keeps", () => {
-  assert.equal(AUTO_STAMP, "Auto-recorded from market data");
-  assert.equal(recordedByTheApp(row({ estimated: false })), true);
-  assert.equal(recordedByTheApp(row({ note: "Credited by the broker" })), false);
-  assert.equal(recordedByTheApp(row({ note: null })), false);
-  assert.equal(recordedByTheApp(row({ kind: "buy" })), false);
-});
-
-test("moving a dividend the app recorded and has not given its ex-date yet is said", () => {
-  assert.equal(
-    movedOffItsDay(row({ estimated: false, ex_date: null }), "2026-09-29"),
-    "The app recorded this dividend on its ex-date, 2026-09-22, and finds it by that day. Moved to 2026-09-29, the dividend of 2026-09-22 is recorded again at the next start, unless this account has a situation dated on or after it.",
-  );
-});
-
-test("its own day, a row the reader typed, a row that keeps its ex-date, or no date says nothing", () => {
-  const unkeyed = row({ ex_date: null });
-  assert.equal(movedOffItsDay(unkeyed, "2026-09-22"), null);
-  assert.equal(movedOffItsDay({ ...unkeyed, note: "Credited by the broker" }, "2026-09-29"), null);
-  assert.equal(movedOffItsDay(row({}), "2026-09-29"), null);
-  assert.equal(movedOffItsDay(unkeyed, ""), null);
 });
