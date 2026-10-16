@@ -737,6 +737,26 @@ class FxRate(Base):
     fetched_at: Mapped[str] = mapped_column(String, default=_utcnow_iso, nullable=False)
 
 
+class FxRateYahoo(Base):
+    """One of Yahoo's daily closes for a currency the ECB does not publish:
+    units of `currency` per 1 US dollar (`USD{currency}=X`), as it closed on
+    `as_of` (brief BA, the reader's decision D1).
+
+    Kept like `FxRate`: a row per day, the history kept, and a day written
+    only once it is over. A table of its own and not a column on `fx_rates`,
+    so the ECB's rows are read exactly as before: its whole-day rule would
+    otherwise take a day only Yahoo has a close for (25 December 2024) as the
+    ECB's day in force. Read by `yahoo_rates`, which crosses it at the ECB's
+    dollar of the same day into any base."""
+
+    __tablename__ = "fx_rates_yahoo"
+
+    currency: Mapped[str] = mapped_column(String, primary_key=True)
+    as_of: Mapped[str] = mapped_column(String, primary_key=True)  # Yahoo's day
+    rate: Mapped[float] = mapped_column(Float, nullable=False)
+    fetched_at: Mapped[str] = mapped_column(String, default=_utcnow_iso, nullable=False)
+
+
 class AccumulationPlan(Base):
     """A recurring savings plan (PAC): every period, `amount` of cash from the
     source institution is used to buy the target investment at the target

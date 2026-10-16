@@ -487,6 +487,10 @@ class Converter:
     worth history does not price its past with today's quotes: a rate is a
     price. `used_as_of` then reports the ECB day that was actually in force.
 
+    A code the ECB day in force does not list is converted at Yahoo's rate
+    (`yahoo_rates`, brief BA): `used_yahoo_as_of` reports Yahoo's day, and
+    `yahoo_used` which codes took it, on which day.
+
     `zero` is a code whose unconvertible amounts this converter passes through
     as 0 instead of as written: the second pass that measures how much of each
     figure that code is (`notice`, brief BA)."""
@@ -498,14 +502,19 @@ class Converter:
         _load=None,
         base: str | None = None,
         zero: str | None = None,
+        _load_yahoo=None,
     ):
         self._db = db
         self._on = on
         self._load = _load
+        self._load_yahoo = _load_yahoo
         self._base = base
         self._zero = zero
         self._rates: dict[str, dict] | None = None
+        self._yahoo: dict[str, dict | None] = {}
         self.used_as_of: str | None = None  # date of the rates actually used
+        self.used_yahoo_as_of: str | None = None  # Yahoo's day, when one was used
+        self.yahoo_used: dict[str, str] = {}  # code -> Yahoo's day it took
         # The codes this converter could NOT convert and passed through anyway,
         # as written ("" for an amount with no currency at all): {'Doll',
         # 'TWD'}. Read by whatever builds the payload, the way `used_as_of` is,
@@ -521,8 +530,12 @@ class Converter:
         """A converter at the same day and base, sharing what is loaded, with
         a record of its own: one account's figures read apart from the
         others', or the second pass with `zero`."""
-        other = Converter(self._db, on=self._on, _load=self._load, base=self._base, zero=zero)
+        other = Converter(
+            self._db, on=self._on, _load=self._load, base=self._base, zero=zero,
+            _load_yahoo=self._load_yahoo,
+        )
         other._rates = self._rates
+        other._yahoo = self._yahoo
         return other
 
     @property
@@ -539,6 +552,30 @@ class Converter:
                 self._load(day) if self._load is not None else rates_on(self._db, self.base, day)
             )
         return self._rates
+
+    def _rate(self, code: str) -> dict | None:
+        """The rate in force for a major code: the ECB's when its day lists
+        it, and Yahoo's otherwise (brief BA), each recorded as used."""
+        entry = self._rates_now().get(code)
+        if entry is not None and entry["rate"]:
+            self.used_as_of = max(self.used_as_of or "", entry["as_of"])
+            return entry
+        if code not in self._yahoo:
+            day = self._on or _today()
+            if self._load_yahoo is not None:
+                self._yahoo[code] = self._load_yahoo(day, code)
+            else:
+                from app import yahoo_rates
+
+                self._yahoo[code] = yahoo_rates.rates_on_days(self._db, self.base, [day], code)[day]
+        market = self._yahoo[code]
+        if market is None or not market["rate"]:
+            return None
+        self.used_yahoo_as_of = max(self.used_yahoo_as_of or "", market["as_of"])
+        self.yahoo_used[code] = market["as_of"]
+        if market["ecb_as_of"]:
+            self.used_as_of = max(self.used_as_of or "", market["ecb_as_of"])
+        return market
 
     def to_base(self, amount: float | None, currency: str | None) -> float | None:
         """Convert into the base. Returns None when the amount exists but
@@ -557,10 +594,9 @@ class Converter:
         amount, cur = _in_major_units(amount, currency)
         if cur == self.base:
             return amount
-        entry = self._rates_now().get(cur)
-        if entry is None or not entry["rate"]:
+        entry = self._rate(cur)
+        if entry is None:
             return None
-        self.used_as_of = max(self.used_as_of or "", entry["as_of"])
         return amount / entry["rate"]
 
     def to_base_or_as_stored(self, amount: float, currency: str) -> float:
@@ -621,10 +657,9 @@ class Converter:
         minor_per_major, major = _in_major_units(1.0, currency)
         if major == self.base:
             return amount / minor_per_major
-        entry = self._rates_now().get(major)
-        if entry is None or not entry["rate"]:
+        entry = self._rate(major)
+        if entry is None:
             return None
-        self.used_as_of = max(self.used_as_of or "", entry["as_of"])
         return amount * entry["rate"] / minor_per_major
 
 
@@ -632,8 +667,9 @@ def convert_on(
     db: Session, amount: float, from_currency: str, to_currency: str, day: str
 ) -> tuple[float | None, str | None]:
     """`amount` in `from_currency` restated in `to_currency` at the rates in
-    force on `day`, and the ECB day those rates were published — or
-    (None, None) when a rate that day is unknown.
+    force on `day`, and the day of those rates: Yahoo's when a code the ECB
+    does not publish took Yahoo's rate (brief BA), the ECB's otherwise. Or
+    (None, None) when a rate that day is unknown, or not yet final.
 
     For a figure that is FIXED on its day rather than restated whenever it is
     read: what a purchase paid in one currency and listed in another took out
@@ -648,20 +684,34 @@ def convert_on(
 
     base = base_currency(db)
 
-    def convert() -> tuple[float | None, str | None]:
+    from app import yahoo_rates
+
+    def convert() -> tuple[float | None, str | None, Converter]:
         conv = Converter(db, on=day, base=base)
         converted = conv.from_base(conv.to_base(amount, from_currency), to_currency)
-        if converted is None or not _final(db, base, day, conv.used_as_of):
-            return None, None
-        return converted, conv.used_as_of
+        if converted is None:
+            return None, None, conv
+        # Every rate it took must be the one `day` ended with: the ECB's (a
+        # Yahoo rate's dollar leg among them), and each of Yahoo's closes.
+        if conv.used_as_of is None and not conv.yahoo_used:
+            return None, None, conv
+        if conv.used_as_of is not None and not _final(db, base, day, conv.used_as_of):
+            return None, None, conv
+        if not all(yahoo_rates.final(db, code, day, used) for code, used in conv.yahoo_used.items()):
+            return None, None, conv
+        return converted, conv.used_yahoo_as_of or conv.used_as_of, conv
 
-    converted, rate_day = convert()
+    converted, rate_day, tried = convert()
     if converted is None:
         # A sum that is never restated is worth one more question: the day's
         # rate may have come out since the store last asked, which a reading
-        # would pick up tomorrow and this cannot.
+        # would pick up tomorrow and this cannot. Of Yahoo too: a close that
+        # moved waits for the next one, which only a question for newer days
+        # brings (brief BA).
         rates_on(db, base, day, refresh=True)
-        converted, rate_day = convert()
+        for code in tried.yahoo_used:
+            yahoo_rates.ensure(db, code, [_today()], refresh=True)
+        converted, rate_day, _ = convert()
     return converted, rate_day
 
 
@@ -702,4 +752,18 @@ def converters_on(db: Session, days: list[str]) -> dict[str, Converter]:
             loaded.update(rates_on_days(db, base, list(days)))
         return loaded[day]  # every day asked is a key, with {} when none was in force
 
-    return {day: Converter(db, on=day, _load=load, base=base) for day in days}
+    # Yahoo's rates for a code the ECB does not publish, every day at once
+    # the first time any day meets the code (brief BA).
+    yahoo: dict[str, dict[str, dict | None]] = {}
+
+    def load_yahoo(day: str, code: str) -> dict | None:
+        if code not in yahoo:
+            from app import yahoo_rates
+
+            yahoo[code] = yahoo_rates.rates_on_days(db, base, list(days), code)
+        return yahoo[code].get(day)
+
+    return {
+        day: Converter(db, on=day, _load=load, base=base, _load_yahoo=load_yahoo)
+        for day in days
+    }

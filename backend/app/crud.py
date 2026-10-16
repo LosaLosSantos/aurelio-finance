@@ -883,6 +883,15 @@ def update_cash_anchor(
 # --- Transfers ------------------------------------------------------------
 
 
+def _unquoted(db: Session, *codes: str | None) -> str | None:
+    """The first of `codes` no source quotes, neither the ECB nor Yahoo, as
+    Yahoo said when last asked (`yahoo_rates.no_source`): a refusal for it
+    says that no rate will come, not that it is not known yet (brief BA)."""
+    from app import yahoo_rates
+
+    return next((c for c in codes if c and yahoo_rates.no_source(db, c)), None)
+
+
 class TransferRateUnknown(ValueError):
     """What reached the destination of a transfer across two currencies cannot
     be worked out, because its day has no final rate. Refused rather than
@@ -911,11 +920,20 @@ def _transfer_columns(db: Session, row: dict, sent: Collection[str]) -> dict:
             db, row["amount"], row["currency"], row["to_currency"], row["date"]
         )
         if arrived is None:
+            # "Yet" only where a rate may still come: a code no source quotes
+            # is said as that (brief BA, measured at 279acf8: "No final
+            # exchange rate from EUR to TWD is known for 2026-10-11 yet").
+            unquoted = _unquoted(db, row["currency"], row["to_currency"])
             raise TransferRateUnknown(
-                f"No final exchange rate from {row['currency']} to {row['to_currency']} is "
-                f"known for {row['date']} yet, so what reached the destination "
-                f"cannot be worked out in {row['to_currency']}. State the amount that "
-                "arrived: the figure on the destination account's statement."
+                (
+                    f"No source quotes a rate for {unquoted}, neither the ECB nor Yahoo, "
+                    if unquoted
+                    else f"No final exchange rate from {row['currency']} to "
+                    f"{row['to_currency']} is known for {row['date']} yet, "
+                )
+                + "so what reached the destination cannot be worked out in "
+                f"{row['to_currency']}. State the amount that arrived: the figure on "
+                "the destination account's statement."
             )
         payload["to_amount"] = round(arrived, 2) if fx_day is not None else arrived
         payload["fx_as_of"] = fx_day
@@ -1209,11 +1227,17 @@ def _transaction_columns(db: Session, row: dict, sent: Collection[str]) -> dict:
             row["date"],
         )
         if gross is None:
+            unquoted = _unquoted(db, row["price_currency"], row["currency"])
             raise LedgerRateUnknown(
-                f"No exchange rate from {row['price_currency']} to {row['currency']} is "
-                f"known for {row['date']}, so the {row['kind']} cannot be "
-                f"worked out in {row['currency']}. State the amount from your "
-                "statement. That is the figure the account actually moved by."
+                (
+                    f"No source quotes a rate for {unquoted}, neither the ECB nor Yahoo, "
+                    if unquoted
+                    else f"No exchange rate from {row['price_currency']} to "
+                    f"{row['currency']} is known for {row['date']}, "
+                )
+                + f"so the {row['kind']} cannot be worked out in {row['currency']}. "
+                "State the amount from your statement. That is the figure the account "
+                "actually moved by."
             )
         fees = row["fees"] or 0.0
         # An account is debited and credited in cents, whichever way the gross

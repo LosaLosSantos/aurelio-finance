@@ -63,7 +63,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app import crud, dividend_pairs, fx, models, prices, schemas
+from app import crud, dividend_pairs, fx, models, prices, schemas, yahoo_rates
 from app.analytics import STEP_MONTHS, add_months, recurrence
 from app.database import commit, sole_writer
 from app import dated
@@ -409,8 +409,19 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
                     db, quote["price"], listing[t.symbol], plan.currency, quote["as_of"]
                 )
                 if converted is None:
+                    # A code neither source quotes is said as that: no rate
+                    # for it will come, which "not known for that day" does
+                    # not say (brief BA).
+                    unquoted = [
+                        code for code in (listing[t.symbol], plan.currency)
+                        if yahoo_rates.no_source(db, code)
+                    ]
                     failure = (
-                        f"{t.symbol}: no exchange rate from {listing[t.symbol]} to "
+                        f"{t.symbol}: no source quotes a rate for {unquoted[0]}, neither "
+                        "the ECB nor Yahoo, so its price cannot be set against the "
+                        "plan's budget"
+                        if unquoted
+                        else f"{t.symbol}: no exchange rate from {listing[t.symbol]} to "
                         f"{plan.currency} is known for {quote['as_of']}"
                     )
                     break
