@@ -34,7 +34,6 @@ from __future__ import annotations
 import bisect
 import datetime
 from collections.abc import Iterable
-from contextlib import contextmanager
 
 from sqlalchemy import inspect, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -486,27 +485,45 @@ class Converter:
     `on` is the day whose rates it converts at — today when left out. A
     reading of a past day converts at that day's rates, for the reason the net
     worth history does not price its past with today's quotes: a rate is a
-    price. `used_as_of` then reports the ECB day that was actually in force."""
+    price. `used_as_of` then reports the ECB day that was actually in force.
+
+    `zero` is a code whose unconvertible amounts this converter passes through
+    as 0 instead of as written: the second pass that measures how much of each
+    figure that code is (`notice`, brief BA)."""
 
     def __init__(
-        self, db: Session, on: str | None = None, _load=None, base: str | None = None
+        self,
+        db: Session,
+        on: str | None = None,
+        _load=None,
+        base: str | None = None,
+        zero: str | None = None,
     ):
         self._db = db
         self._on = on
         self._load = _load
         self._base = base
+        self._zero = zero
         self._rates: dict[str, dict] | None = None
         self.used_as_of: str | None = None  # date of the rates actually used
-        # What this converter could NOT convert and passed through anyway, by
-        # the currency it was written in: {'Doll': {'amount': 2324.0, 'count': 1}}.
-        # Read by whatever builds the payload, the way `used_as_of` is — so the
-        # callers of `to_base_or_as_stored` keep making one decision between
-        # them instead of a copy of it each. Nine of them call it by name and
-        # two bind it to a local `in_base` called thirteen times more, counted
-        # 2026-09-22; the point is that none of the counts is a number this
-        # file has to keep in step with.
-        self.unconverted: dict[str | None, dict] = {}
-        self._recording = True
+        # The codes this converter could NOT convert and passed through anyway,
+        # as written ("" for an amount with no currency at all): {'Doll',
+        # 'TWD'}. Read by whatever builds the payload, the way `used_as_of` is,
+        # and turned by `notice` into what the page says: what kind of code,
+        # where it is written, and how much of each figure it is. A set of
+        # codes and not a sum of amounts (brief BA): the sum was a volume of
+        # rows that matched no figure, and a code passed through twice, by a
+        # walk that replays every situation or by the history's points, is
+        # still one code.
+        self.unconverted: set[str] = set()
+
+    def fork(self, zero: str | None = None) -> Converter:
+        """A converter at the same day and base, sharing what is loaded, with
+        a record of its own: one account's figures read apart from the
+        others', or the second pass with `zero`."""
+        other = Converter(self._db, on=self._on, _load=self._load, base=self._base, zero=zero)
+        other._rates = self._rates
+        return other
 
     @property
     def base(self) -> str:
@@ -565,97 +582,23 @@ class Converter:
         hid it — measured on the reader's own database, a real asset written in
         `Doll` puts 2,324.00 into the net worth as if it were euro, with nothing
         anywhere saying so. So the fallback stays (a total that quietly DROPS a
-        holding is as wrong as one that inflates) and it is recorded in
+        holding is as wrong as one that inflates) and its code is recorded in
         `unconverted`, for the payload to carry to the reader.
 
         Zero and None are not recorded: there is nothing for a reader to act on
-        in an amount that changes no total."""
+        in an amount that changes no total.
+
+        The code that is `zero` passes through as 0 instead: the second pass
+        `notice` measures each figure by (brief BA)."""
         converted = self.to_base(amount, currency)
         if converted is not None:
             return converted
-        if self._recording and amount:
-            seen = self.unconverted.setdefault(currency, {"amount": 0.0, "count": 0})
-            seen["amount"] += amount
-            seen["count"] += 1
+        code = currency if currency is not None else ""
+        if amount:
+            self.unconverted.add(code)
+        if self._zero is not None and code == self._zero:
+            return 0.0
         return amount
-
-    def unconverted_amounts(self) -> list[dict]:
-        """What this converter had to pass through unconverted, largest first.
-
-        One entry per currency: how many AMOUNTS were passed through, and what
-        those amounts come to as they were written.
-
-        That sum is a volume of rows, and it is NOT the amount any figure is
-        wrong by — the difference matters enough to be said twice, because one
-        converter serves several totals and an amount can reach them in roles
-        that do not add up. It goes wrong in BOTH directions, measured:
-
-        * a holding worth 1,000 TWD that COST 900 TWD reports 1,900.00 over 2,
-          against an investments total of 1,000.00: the cost basis converts
-          too, and it feeds the book value rather than the net worth;
-        * adding a real asset of 1,000 TWD and a debt of 1,000 TWD reports
-          3,900.00 over 4, and the net worth does not move at all — the debt
-          subtracts exactly what the asset adds;
-        * and it UNDERSTATES, by any multiple you like: an income of 100 TWD a
-          month against an anchor dated a year earlier puts 1,200.00 into
-          `cash_total` and into the net worth, and reports 100.00 over 1 — a
-          recurring amount is converted once and multiplied afterwards.
-
-        So it is not a bound in either direction, and nothing may present it as
-        one.
-
-        THE ALTERNATIVE, AND WHY IT IS NOT TAKEN — a choice with a price, not
-        an impossibility. Making the figure mean "the error in the net worth"
-        takes knowing each amount's ROLE where it is converted, and that CAN be
-        done with the shape already in this class: a `recording_as(role)` beside
-        `not_recording()`, a four-line wrapper over the two cost-basis sites and
-        one `with` around the liabilities sum. Built as a prototype in about
-        thirty lines and measured: {'TWD/value': 1000.0, 'TWD/cost': 900.0} with
-        a signed net-worth error of {'TWD': 1000.0}, and again at value 2000 /
-        cost 900 / debt 1000 for the same 1,000.00. Three sites to tag, not
-        thirteen.
-
-        What it costs is the reason it waits: a site added later and left
-        untagged would understate the error silently, which is exactly the
-        failure `crud._columns` was written to refuse — so it needs a discovery
-        test that finds every conversion and insists each declares a role,
-        which is the real work. Until that exists the number stays what it
-        honestly is, and everything that prints it says so:
-        `schemas.UnconvertedAmount`, `UnconvertedNotice.tsx`.
-
-        Largest first for the same reason the omissions are sorted by value —
-        the one worth acting on is the one at the front."""
-        return [
-            {"currency": code, "amount": seen["amount"], "count": seen["count"]}
-            for code, seen in sorted(
-                self.unconverted.items(), key=lambda kv: -kv[1]["amount"]
-            )
-        ]
-
-    @contextmanager
-    def not_recording(self):
-        """Convert without adding to `unconverted`, for a reading that is not
-        part of a total.
-
-        One caller: `analytics._unaccounted`, which REPLAYS every photograph an
-        institution has, so one holding's value passes through here once per
-        photograph. Counted, a single unconvertible row would report a multiple
-        of itself — and what that function reports is what a position was worth
-        when it went MISSING, a past figure that enters no total this converter
-        is building. Measured with this guard off: three photographs each naming
-        one holding of 1,000 in a currency with no rate reported 3,000.00 over 3
-        amounts, against an investments total of 1,000.00. With it, 1,000.00
-        over 1.
-
-        The cost of the guard is that `_unaccounted`'s own figures can be
-        unconvertible without saying so. They are values that already LEFT the
-        totals, reported in a notice of their own, so that is a smaller silence
-        than the one this closes — but it is one."""
-        was, self._recording = self._recording, False
-        try:
-            yield self
-        finally:
-            self._recording = was
 
     def from_base(self, amount: float | None, currency: str | None) -> float | None:
         """The same conversion backwards: an amount in the base restated in

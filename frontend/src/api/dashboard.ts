@@ -3,7 +3,7 @@ import type { Schemas } from "./types";
 
 export type OmittedPosition = Schemas["OmittedPosition"];
 export type ArrivedPosition = Schemas["ArrivedPosition"];
-export type UnconvertedAmount = Schemas["UnconvertedAmount"];
+export type UnconvertedCode = Schemas["UnconvertedCode"];
 export type DashboardSummary = Schemas["DashboardSummary"];
 export type AssetClassSlice = Schemas["AssetClassSlice"];
 export type RealCategorySlice = Schemas["RealCategorySlice"];

@@ -509,8 +509,18 @@ export default function Portfolio({
       />
 
       {/* What no rate could be applied to at all — the pair to `fx_as_of` under
-          the totals, which says which rate WAS applied. */}
-      <UnconvertedNotice items={data.unconverted ?? []} baseCurrency={data.base_currency} />
+          the totals, which says which rate WAS applied. The accounts' cash
+          too, which the buys form offers as "available" (brief BA). */}
+      <UnconvertedNotice
+        baseCurrency={data.base_currency}
+        parts={[
+          { items: data.unconverted ?? [], labels: PORTFOLIO_FIGURES },
+          ...cash.map((p) => ({
+            items: p.unconverted ?? [],
+            labels: { projected: `${p.institution_name}'s cash` },
+          })),
+        ]}
+      />
 
       {/* What the ledger paid before each account's latest situation that its
           rows do not say, proposed row by row, written only on a press
@@ -898,6 +908,19 @@ function LookThroughSection() {
           </span>
         )}
       </div>
+      {/* Every weight below is a share of what the look-through weighs, so a
+          code counted there as written moves them all (brief BA). */}
+      {data && (
+        <UnconvertedNotice
+          baseCurrency={data.base_currency}
+          parts={[
+            {
+              items: data.unconverted ?? [],
+              labels: { total_value: "the investments the look-through weighs" },
+            },
+          ]}
+        />
+      )}
       {error && <p className="text-down">{error}</p>}
       {loading && !data && <p className="text-ink-soft">Loading composition…</p>}
 
@@ -1091,8 +1114,21 @@ const ADD_INSTITUTION = "__add__";
    answer they came for. */
 function cashNote(p: CashPosition | undefined): string {
   if (!p || p.anchor_date == null) return "no cash on record";
-  return `${money(p.base_currency, "cents").format(p.projected)} available`;
+  // A code counted in it as written is said where the figure is read (brief
+  // BA): measured at 279acf8, a balance of 700 TWD read "€700.00 available".
+  const asWritten = (p.unconverted ?? []).map((u) => u.currency || "no stated currency");
+  const counting = asWritten.length > 0 ? `, counting ${asWritten.join(" and ")} as written` : "";
+  return `${money(p.base_currency, "cents").format(p.projected)} available${counting}`;
 }
+
+/* The names the notice gives the Portfolio's totals (brief BA). */
+const PORTFOLIO_FIGURES = {
+  total_book: "book total",
+  total_market: "market total",
+  total_realized: "realized P/L",
+  total_realized_movement: "realized movement",
+  total_dividends: "dividends collected",
+};
 
 function BuysSection({
   items,

@@ -78,6 +78,7 @@ import { priceDay } from "./priceDay";
 import { costCovers, holdingPayload, offers, shows, unitsBelowCost } from "./situationForm";
 import { prefillWords } from "./prefillNote";
 import { heldFigures } from "./heldTotal";
+import { UnconvertedNotice } from "./UnconvertedNotice";
 
 // The occasional, destructive twin of a primary action: same size, same
 // shape, warning colour. `btnClass` is for the action you take every time;
@@ -433,6 +434,14 @@ function CashRegister({
           Income, expenses and transfers are entered in Records → Cash flow; buys, sales and
           dividends in Portfolio's ledger. Each term opens its page.
         </p>
+      )}
+      {/* A code this cash counts as written (brief BA, measured at 279acf8: a
+          balance of 700 TWD read as 700.00 EUR here, and nothing said so). */}
+      {position && (
+        <UnconvertedNotice
+          baseCurrency={position.base_currency}
+          parts={[{ items: position.unconverted ?? [], labels: { projected: "this account's cash" } }]}
+        />
       )}
       {position && !position.anchor_date && anchors.length === 0 && (
         <p className="text-xs text-warn">
@@ -832,6 +841,18 @@ They will be reported as unaccounted for, not removed in silence.
       ) : formError ? (
         <p className={noticeClass}>{formError}</p>
       ) : null}
+      {/* What each situation's value counts as written (brief BA): measured
+          at 279acf8, a fund of 1,000 TWD made a situation read 1,000.00 EUR
+          here, and nothing said so. */}
+      {items.length > 0 && (
+        <UnconvertedNotice
+          baseCurrency={items[0].base_currency}
+          parts={items.map((s) => ({
+            items: s.unconverted ?? [],
+            labels: { value_base: `the situation of ${s.date}` },
+          }))}
+        />
+      )}
       <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText="No situations yet.">
         {items.map((s) => (
           <Row key={s.id} onClick={() => onSelect(s)} onDelete={() => remove(s)} title={s.date} note={s.note} value={money(s.base_currency).format(s.value_base)} />
@@ -1638,6 +1659,10 @@ function holdingSubtitle(h: Holding): string | undefined {
     parts.push(`${h.quantity} × ${h.unit_price}${foreign ? ` ${foreign}` : ""}`);
   else if (foreign && h.value != null)
     parts.push(`${h.value.toLocaleString(locale, { maximumFractionDigits: 2 })} ${foreign}`);
+  // The figure on the right is NOT in the base when no rate converts the
+  // row's code: it is the typed amount, counted as written (brief BA).
+  if (h.unconverted != null)
+    parts.push(`${h.unconverted || "no currency"} counted as written: no rate converts it`);
   // The stated policy, or, with none stated, when the holding last paid: its
   // own history is what decides its dividends then (`dividendLine`).
   const dividends = dividendWord(h.distribution_policy, h.last_dividend);

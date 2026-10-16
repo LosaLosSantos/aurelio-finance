@@ -24,7 +24,7 @@ from typing import TypeVar
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app import crud, fx, models, pac, positions, schemas
+from app import crud, fx, models, notice, pac, positions, schemas
 
 T = TypeVar("T")
 
@@ -107,6 +107,14 @@ def holding_reads(
     conv = fx.Converter(db)
     values = positions.holdings_in_base(db, holdings, conv)
     last_paid = pac.last_dividends(db, {h.symbol for h in holdings if h.symbol})
+    # The code a row's value is in as written, when no rate converts it: the
+    # row whose value moves when that code is counted at 0 (brief BA).
+    as_written: dict[int, str] = {}
+    for code in notice.codes(conv):
+        without = positions.holdings_in_base(db, holdings, conv.fork(zero=code))
+        for h in holdings:
+            if h.id not in as_written and abs(values[h.id] - without[h.id]) >= 0.005:
+                as_written[h.id] = code
     return [
         schemas.HoldingRead(
             **schemas.HoldingBase.model_validate(h, from_attributes=True).model_dump(),
@@ -115,6 +123,7 @@ def holding_reads(
             value_base=values[h.id],
             base_currency=conv.base,
             last_dividend=last_paid.get(h.symbol),
+            unconverted=as_written.get(h.id),
         )
         for h in holdings
     ]
@@ -136,6 +145,23 @@ def snapshot_reads(
     query per situation."""
     conv = fx.Converter(db)
     values = positions.snapshot_values_in_base(db, snapshots, conv)
+    # What each situation's value holds as written (brief BA): its value
+    # computed again with each code at 0, the rows read once for the list.
+    found = notice.codes(conv)
+    without = {
+        code: positions.snapshot_values_in_base(db, snapshots, conv.fork(zero=code))
+        for code in found
+    }
+    census = notice.rows_written_in(db, found) if found else {}
+
+    def said(s: models.Snapshot) -> list[dict]:
+        moved = {
+            code: {"value_base": round(values[s.id] - without[code][s.id], 2)}
+            for code in found
+            if abs(values[s.id] - without[code][s.id]) >= 0.005
+        }
+        return notice.entries(census, moved)
+
     return [
         schemas.SnapshotRead(
             id=s.id,
@@ -145,6 +171,7 @@ def snapshot_reads(
             value_base=values[s.id],
             base_currency=conv.base,
             created_at=s.created_at,
+            unconverted=said(s),
         )
         for s in snapshots
     ]

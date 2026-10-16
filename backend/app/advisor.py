@@ -1341,9 +1341,9 @@ def _render_wholes(
     measurement. A real asset with no valuation and a debt with no balance are
     named beside theirs the same way, and none recorded at all is said as
     none, not as 0.00. An amount in a currency the app cannot convert is added
-    as written, as on the Dashboard, and the currency is named; its amount is
-    not, since it bounds no error in either direction
-    (`fx.Converter.unconverted_amounts`)."""
+    as written, as on the Dashboard, and the code is named with what kind of
+    code it is and how much of the net worth it is, measured on the net worth
+    itself (`notice`, brief BA)."""
     investments = summary["investments_total"]
     cash = summary["cash_total"]
     liquid = summary["financial_total"]
@@ -1369,7 +1369,7 @@ def _render_wholes(
     )
     inexact = []
     if summary["unconverted"]:
-        codes = _and([u["currency"] for u in summary["unconverted"]])
+        codes = _and([_unconverted_words(u) for u in summary["unconverted"]])
         inexact.append(
             f"- Amounts in {codes} cannot be converted to {summary['base_currency']} and "
             "are added as written, so the totals that hold them are not exact."
@@ -1559,6 +1559,15 @@ def _dated(model: str, listed: set[str]) -> list[str]:
 
 def _and(names: list[str]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _unconverted_words(u: dict) -> str:
+    """A code the summary counted as written, for the analyst: the code, what
+    kind it is, and its share of the net worth when it moves it (`notice`)."""
+    kind = "not a currency code" if u["not_a_code"] else "a currency no source quotes"
+    share = u["shares"].get("net_worth")
+    sized = f", {share:.2f} of the net worth" if share else ""
+    return f"{u['currency'] or 'no stated currency'} ({kind}{sized})"
 
 
 def _where_set(model: str) -> str:

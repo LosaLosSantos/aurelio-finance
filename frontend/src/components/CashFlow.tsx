@@ -53,6 +53,7 @@ import {
 import { useListEditor, type Draft } from "./listEditor";
 import { arrivalWasStated, sameSum } from "./statedAmount";
 import { sameCurrency } from "./money";
+import { UnconvertedNotice } from "./UnconvertedNotice";
 import { IN_FORCE, leftOutLine, notCounted, undatedLine } from "./inForce";
 import { EXPENSE as EXPENSE_NEEDS, INCOME as INCOME_NEEDS, PLAN, TRANSFER, marks, refusal, type Need } from "./required";
 import {
@@ -66,6 +67,13 @@ import {
   startsLine,
 } from "./firstDate";
 import type { Focus } from "../nav";
+
+/* The names the notice gives the monthly figures (brief BA). */
+const MONTHLY_FIGURES = {
+  monthly_income: "monthly income",
+  monthly_expenses: "monthly expenses",
+  monthly_net: "monthly net",
+};
 
 const KINDS = ["", "active", "passive"];
 const NATURES = ["", "essential", "discretionary"];
@@ -213,6 +221,15 @@ export default function CashFlow({
               {[leftOut && `Not counted: ${leftOut} (marked below).`, undated].filter(Boolean).join(" ")}
             </p>
           )}
+          {/* A flow in a code no rate converts, counted in these monthly
+              figures as written (brief BA, measured at 279acf8: a salary of
+              9,000 TWD read as 9,000.00 EUR a month, and nothing said so). */}
+          <div className="mt-3">
+            <UnconvertedNotice
+              baseCurrency={summary.base_currency}
+              parts={[{ items: summary.unconverted ?? [], labels: MONTHLY_FIGURES }]}
+            />
+          </div>
         </div>
       )}
 

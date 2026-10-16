@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app import crud, dated, fx, models, paid_recovery, positions, prices, tax
+from app import crud, dated, fx, models, notice, paid_recovery, positions, prices, tax
 
 
 # --- Date / recurrence helpers --------------------------------------------
@@ -275,6 +275,42 @@ def compute_all_cash_positions(
     return [compute_cash_position(db, i, as_of, conv) for i in ids]
 
 
+def cash_positions_said(
+    db: Session, as_of: datetime.date | None = None, institution_id: int | None = None
+) -> list[dict]:
+    """The cash register as its pages read it: each account's projection
+    (`compute_cash_position`), or one account's, with what it holds as
+    written (`notice`, brief BA) measured on that account's own figure.
+    Measured at 279acf8: a balance of 700 TWD read "700.00 EUR available" in
+    the ledger form, and nothing said so.
+
+    Each account converts on a fork of one converter, so its figure is
+    computed again only for the codes that account passed through itself. A
+    code only another account holds would leave this one's figure where it is
+    and be dropped from its notice anyway (`notice.shares`): the fork spares
+    those passes, and no figure depends on it."""
+    conv = fx.Converter(db, on=as_of.isoformat() if as_of else None)
+    ids = (
+        [institution_id]
+        if institution_id is not None
+        else list(db.scalars(select(models.Institution.id).order_by(models.Institution.id)))
+    )
+    out = []
+    for iid in ids:
+        own = conv.fork()
+        position = compute_cash_position(db, iid, as_of, own)
+        if position is None:
+            continue
+        position["unconverted"] = notice.notice(
+            db, own, {"projected": position["projected"]},
+            lambda code: {
+                "projected": compute_cash_position(db, iid, as_of, own.fork(zero=code))["projected"]
+            },
+        )
+        out.append(position)
+    return out
+
+
 def _cash_total(
     db: Session, as_of: datetime.date | None = None, conv: fx.Converter | None = None
 ) -> float:
@@ -436,16 +472,17 @@ def _unaccounted(db: Session, conv: fx.Converter | None = None) -> dict:
     54.17 to 0.00)."""
     if conv is None:
         conv = fx.Converter(db)
-    with conv.not_recording():
-        return _unaccounted_walk(db, conv)
+    return _unaccounted_walk(db, conv)
 
 
 def _unaccounted_walk(db: Session, conv: fx.Converter) -> dict:
-    """`_unaccounted`'s body, run with the converter not recording what it could
-    not convert — see `fx.Converter.not_recording` for why: this walk replays
-    every photograph, so a single unconvertible row would be counted once per
-    photograph after it, into a report about TODAY's totals that it is not part
-    of."""
+    """`_unaccounted`'s body. It records what it could not convert like any
+    other reading: a code passed through once per photograph is still one code
+    (`fx.Converter.unconverted` holds codes, not amounts), and what each one
+    adds to a figure is measured on the figure itself (`notice`). It used to
+    run without recording, for a volume of rows that would have counted a row
+    once per photograph, and so the earlier stretches' dividends it adds to the
+    Portfolio's totals entered them as written in silence (brief BA)."""
     today = dated.today()
     inst_names = {i.id: i.name for i in db.scalars(select(models.Institution))}
     # The holdings are loaded WITH the photographs: this walk asks every
@@ -642,11 +679,21 @@ def _unresolved_omissions(db: Session, conv: fx.Converter | None = None) -> list
     return _unaccounted(db, conv)["omissions"]
 
 
-def compute_summary(db: Session, as_of: datetime.date | None = None) -> dict:
-    """Net worth = financial (investments + cash) + real − liabilities, plus counts."""
+_SUMMARY_FIGURES = (
+    "net_worth", "investments_total", "cash_total", "real_total", "liabilities_total",
+)
+
+
+def compute_summary(
+    db: Session, as_of: datetime.date | None = None, zero: str | None = None
+) -> dict:
+    """Net worth = financial (investments + cash) + real − liabilities, plus counts.
+
+    `zero` computes it again with that code's unconvertible amounts at 0, the
+    second pass `notice` measures each figure by."""
     if as_of is None:
         as_of = datetime.date.today()
-    conv = fx.Converter(db)  # one rate load for the whole computation
+    conv = fx.Converter(db, zero=zero)  # one rate load for the whole computation
     # All four series read at the SAME date, and never past it. `as_of` is
     # today unless a caller said otherwise, and the summary is the one place
     # where a row dated ahead of it could reach every total at once.
@@ -685,7 +732,7 @@ def compute_summary(db: Session, as_of: datetime.date | None = None) -> dict:
     dates += [b.date for b in liab_latest.values()]
     as_of_data = max(dates) if dates else None
 
-    return {
+    result = {
         "net_worth": financial_total + real_total - liabilities_total,
         "financial_total": financial_total,
         "investments_total": investments_total,
@@ -704,13 +751,11 @@ def compute_summary(db: Session, as_of: datetime.date | None = None) -> dict:
         "declared_instead": unaccounted["arrivals"],
         # The other direction of the same rule: nothing LEAVES the totals in
         # silence, and nothing enters them unconverted in silence either. An
-        # amount whose currency has no rate is added as it was stored — the
-        # figure is kept rather than dropped, which is the right trade — so
-        # these figures name the currencies that happened in, and how much was
-        # written in each. NOT how much any total above is out by: see
-        # `fx.Converter.unconverted_amounts`, which measures it going wrong in
-        # both directions.
-        "unconverted": conv.unconverted_amounts(),
+        # amount whose currency has no rate is added as it was stored (the
+        # figure is kept rather than dropped, which is the right trade), and
+        # each code that happened in is said: what kind of code, where it is
+        # written, and how much of each total it is (`notice`, brief BA).
+        "unconverted": [],
         "cash_total": cash_total,
         "real_total": real_total,
         "liabilities_total": liabilities_total,
@@ -722,9 +767,17 @@ def compute_summary(db: Session, as_of: datetime.date | None = None) -> dict:
         "liabilities": db.scalar(select(func.count()).select_from(models.Liability)),
         "as_of": as_of_data,
     }
+    if zero is None:
+        result["unconverted"] = notice.said(
+            db, conv, result, _SUMMARY_FIGURES,
+            lambda code: compute_summary(db, as_of, zero=code),
+        )
+    return result
 
 
-def compute_allocation(db: Session, as_of: datetime.date | None = None) -> dict:
+def compute_allocation(
+    db: Session, as_of: datetime.date | None = None, zero: str | None = None
+) -> dict:
     """Allocation from latest values: financial by asset_class (investments from
     snapshots + cash from the live register), real by category.
 
@@ -737,7 +790,9 @@ def compute_allocation(db: Session, as_of: datetime.date | None = None) -> dict:
     """
     if as_of is None:
         as_of = datetime.date.today()
-    conv = fx.Converter(db)  # one rate load for positions, cash and real assets
+    # One rate load for positions, cash and real assets; `zero` as in
+    # `compute_summary`.
+    conv = fx.Converter(db, zero=zero)
     real_latest = _latest_valuation_by_asset(db, as_of.isoformat())
 
     by_asset_class: dict[str, float] = {}
@@ -757,7 +812,7 @@ def compute_allocation(db: Session, as_of: datetime.date | None = None) -> dict:
             val.value, asset_ccy.get(val.real_asset_id)
         )
 
-    return {
+    result = {
         "financial_total": sum(by_asset_class.values()),
         "real_total": sum(by_real_category.values()),
         "by_asset_class": [
@@ -767,6 +822,23 @@ def compute_allocation(db: Session, as_of: datetime.date | None = None) -> dict:
             {"category": k, "value": v} for k, v in sorted(by_real_category.items())
         ],
         "base_currency": conv.base,
+        "unconverted": [],
+    }
+    if zero is None:
+        result["unconverted"] = notice.notice(
+            db, conv, _allocation_figures(result),
+            lambda code: _allocation_figures(compute_allocation(db, as_of, zero=code)),
+        )
+    return result
+
+
+def _allocation_figures(allocation: dict) -> dict[str, float]:
+    """The allocation's figures by name, a slice under its class or category."""
+    return {
+        "financial_total": allocation["financial_total"],
+        "real_total": allocation["real_total"],
+        **{f"class:{s['asset_class']}": s["value"] for s in allocation["by_asset_class"]},
+        **{f"category:{s['category']}": s["value"] for s in allocation["by_real_category"]},
     }
 
 
@@ -1073,24 +1145,38 @@ def compute_net_worth_series(
                 "liabilities": liab,
                 "base_currency": conv.base,
                 "fx_as_of": conv.used_as_of,
+                # The codes this point counts as written, and no amount: a sum
+                # over points would count one row once per point, measured at
+                # 279acf8 as 18,600.00 over 21 against the summary's 2,700.00
+                # over 3. The last point's share is the summary's (brief BA).
+                "unconverted": notice.codes(conv),
             }
         )
     return series
 
 
-def compute_portfolio(db: Session, live: bool = False) -> dict:
+_PORTFOLIO_FIGURES = (
+    "total_book", "total_market", "total_realized", "total_realized_movement",
+    "total_dividends",
+)
+
+
+def compute_portfolio(db: Session, live: bool = False, zero: str | None = None) -> dict:
     """The investment portfolio = the projected positions (latest snapshot per
     institution + later buys from the ledger), with their book values.
     Quantity-based, symboled positions also get a market price: if `live`, all
     symbols are fetched in ONE batch and stored in the price cache; otherwise
     the cache is reused (so the page loads instantly and works offline). Every
     price carries its `as_of` close date so staleness stays visible. A
-    per-symbol price failure leaves that row unpriced."""
+    per-symbol price failure leaves that row unpriced.
+
+    `zero` as in `compute_summary`; that pass reads the prices the first one
+    left in the cache, and asks the market nothing."""
     names = {i.id: i.name for i in db.scalars(select(models.Institution))}
     # ONE converter for the whole view. The projection used to make its own and
     # throw it away, so a book value converted at an ECB rate could reach the
     # screen while `fx_as_of` — the date of that very rate — stayed null.
-    conv = fx.Converter(db)
+    conv = fx.Converter(db, zero=zero)
     held = positions.project(db, conv)
 
     priceable = sorted(
@@ -1248,12 +1334,9 @@ def compute_portfolio(db: Session, live: bool = False) -> dict:
     total_dividends += earlier["dividends"]
     total_dividends_estimated += earlier["dividends_estimated"]
     # What the ledger paid before each account's latest situation that its
-    # rows do not say, proposed (brief AW). The walk reads every situation, so
-    # it does not record what it could not convert: the projection above has
-    # said it already for the rows that count.
-    with conv.not_recording():
-        recovery = paid_recovery.payload(paid_recovery.read(db, conv), names)
-    return {
+    # rows do not say, proposed (brief AW).
+    recovery = paid_recovery.payload(paid_recovery.read(db, conv), names)
+    result = {
         "rows": rows,
         "total_book": total_book,
         # Of that book, the money paid (brief AV): the rest is situations'
@@ -1291,13 +1374,19 @@ def compute_portfolio(db: Session, live: bool = False) -> dict:
         "paid_recovery": recovery["paid_recovery"],
         "paid_unread": recovery["paid_unread"],
         # And what no rate could be applied to at all, which is the same
-        # converter's other half — see compute_summary.
-        "unconverted": conv.unconverted_amounts(),
+        # converter's other half: see compute_summary.
+        "unconverted": [],
         # ECB rate date, when any FX conversion was actually applied — to a
         # book value or to a market value, since both now run through the same
         # converter. A number restated at a rate says which rate.
         "fx_as_of": conv.used_as_of,
     }
+    if zero is None:
+        result["unconverted"] = notice.said(
+            db, conv, result, _PORTFOLIO_FIGURES,
+            lambda code: compute_portfolio(db, live=False, zero=code),
+        )
+    return result
 
 
 # Convert a per-occurrence amount to a monthly run-rate, based on frequency.
@@ -1330,7 +1419,10 @@ def flow_status(flow, on: str) -> str:
     return "in force"
 
 
-def compute_flows_in_force(db: Session, on: str) -> dict:
+_FLOW_FIGURES = ("monthly_income", "monthly_expenses", "monthly_net")
+
+
+def compute_flows_in_force(db: Session, on: str, zero: str | None = None) -> dict:
     """The income and expenses IN FORCE on `on`, as a monthly run-rate in the
     base currency, with the ones still to start and the ones that have ended
     listed apart and never counted (`flow_status`).
@@ -1360,8 +1452,10 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
     own rows), and never its notes, which the chat does not read either (the
     reader's choice, 2026-10-02, for the analyst to read the records as the
     chat does). The account since brief AN: without it the chat could not
-    point at the right line, nor add one to the right account."""
-    conv = fx.Converter(db)
+    point at the right line, nor add one to the right account.
+
+    `zero` as in `compute_summary`."""
+    conv = fx.Converter(db, zero=zero)
     accounts = {i.id: i.name for i in db.scalars(select(models.Institution))}
 
     def monthly(flow) -> float:
@@ -1399,7 +1493,7 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
     monthly_expenses = sum(monthly(e) for e in running_out)
     monthly_net = monthly_income - monthly_expenses
 
-    return {
+    result = {
         "on": on,
         # How many are in force, so "none" can be told from a sum of zero.
         "incomes_in_force": len(running_in),
@@ -1425,4 +1519,11 @@ def compute_flows_in_force(db: Session, on: str) -> dict:
             key=lambda f: (f["end_date"], f["side"]),
         ),
         "base_currency": conv.base,
+        "unconverted": [],
     }
+    if zero is None:
+        result["unconverted"] = notice.said(
+            db, conv, result, _FLOW_FIGURES,
+            lambda code: compute_flows_in_force(db, on, zero=code),
+        )
+    return result

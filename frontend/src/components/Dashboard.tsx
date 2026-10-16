@@ -52,6 +52,33 @@ function prettyLabel(s: string): string {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/* The names the notice gives each figure the backend measured a code's share
+   of (brief BA): the page's own words for them. */
+const SUMMARY_FIGURES = {
+  net_worth: "net worth",
+  investments_total: "investments",
+  cash_total: "cash",
+  real_total: "real assets",
+  liabilities_total: "debts",
+};
+const FLOW_FIGURES = {
+  monthly_income: "monthly income",
+  monthly_expenses: "monthly expenses",
+  monthly_net: "monthly net",
+};
+
+/** The allocation chart's slices, as the chart names them. */
+function allocationFigures(allocation: DashboardAllocation): Record<string, string> {
+  const named: Record<string, string> = {};
+  for (const s of allocation.by_asset_class) {
+    named[`class:${s.asset_class}`] = `allocation's ${prettyLabel(s.asset_class)}`;
+  }
+  for (const s of allocation.by_real_category) {
+    named[`category:${s.category}`] = `allocation's ${prettyLabel(s.category)}`;
+  }
+  return named;
+}
+
 function fmtDay(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString(locale, {
     day: "numeric",
@@ -353,13 +380,20 @@ export default function Dashboard() {
         baseCurrency={summary.base_currency}
       />
 
-      {/* And the other direction: value that entered those same figures in a
+      {/* And the other direction: value that entered the page's figures in a
           unit nobody could convert. Beside the omissions rather than tucked
-          somewhere calmer, because both sentences qualify the number above
-          them. */}
+          somewhere calmer, because both qualify the number above them; and it
+          names every figure of the page that holds it by name, the charts and
+          the cash flow below included (brief BA), since "above" was not where
+          those were. */}
       <UnconvertedNotice
-        items={summary.unconverted ?? []}
         baseCurrency={summary.base_currency}
+        parts={[
+          { items: summary.unconverted ?? [], labels: SUMMARY_FIGURES },
+          { items: cash?.unconverted ?? [], labels: FLOW_FIGURES },
+          { items: allocation.unconverted ?? [], labels: allocationFigures(allocation) },
+        ]}
+        history={series}
       />
 
       {!hasData && (
