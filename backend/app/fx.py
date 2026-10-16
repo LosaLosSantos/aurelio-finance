@@ -2,10 +2,12 @@
 
 Every total is in ONE currency, the base, which the reader's database names in
 `settings` (`base_currency`, read by `base_currency`); anything in another
-currency is converted at the ECB daily reference rate. Rates are stored in the
-DB (fx_rates) one row per published DAY, and kept: the table is the history of
-the rates, and today's rate is simply the one in force today. `rates_on` is the
-one reading of it. If the feed cannot be reached, what is stored keeps serving
+currency is converted at the ECB daily reference rate, or, for a currency the
+ECB does not publish, at Yahoo's close crossed at the ECB's dollar
+(`yahoo_rates`, brief BA). The ECB's rates are stored in the DB (fx_rates) one
+row per published DAY, and kept: the table is the history of the rates, and
+today's rate is simply the one in force today. `rates_on` is the one reading
+of it. If the feed cannot be reached, what is stored keeps serving
 (stale beats nothing — same policy as the composition cache), with its day
 attached.
 
@@ -35,7 +37,7 @@ import bisect
 import datetime
 from collections.abc import Iterable
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -400,6 +402,31 @@ def rates_for(
     return published, {code: entry["rate"] for code, entry in known.items()}, missing
 
 
+def market_rates_for(
+    db: Session, currencies: Iterable[str]
+) -> tuple[str | None, dict[str, float], list[str]]:
+    """For codes the ECB publishes no rate for (`rates_for`'s third answer):
+    Yahoo's rate in force today against the base, crossed at the ECB's dollar
+    (`yahoo_rates`, brief BA). The latest Yahoo day used, {code: units of it
+    per one unit of the base}, and the spellings no rate was found for."""
+    from app import yahoo_rates
+
+    base = base_currency(db)
+    today = _today()
+    rates: dict[str, float] = {}
+    days: list[str] = []
+    left: list[str] = []
+    for written in currencies:
+        _, code = _in_major_units(1.0, written)
+        entry = yahoo_rates.rates_on_days(db, base, [today], code)[today]
+        if entry is None:
+            left.append(written)
+            continue
+        rates[code] = entry["rate"]
+        days.append(entry["as_of"])
+    return (max(days) if days else None), rates, left
+
+
 def choose_base(db: Session, new_base: str, since: str | None) -> None:
     """Make `new_base` the base — but only once its rates are in the store.
 
@@ -446,6 +473,44 @@ def _in_major_units(amount: float, currency: str) -> tuple[float, str]:
     if minor is not None:
         return amount / minor[1], minor[0]
     return amount, raw.upper()
+
+
+def source_of(
+    db: Session, codes: Iterable[str | None], day: str, cache: dict | None = None
+) -> str:
+    """Whose rate a sum fixed on `day` between `codes` was worked out at:
+    "Yahoo" when one of them, in major units, had no ECB rate in force on that
+    day and so took Yahoo's (`Converter._rate`, brief BA); "ECB" otherwise.
+
+    Read from what is stored, asking nothing: the ECB day in force on `day`
+    and the codes it listed, against any base kept (a base is never among its
+    own rates, and the euro is the ECB's own). So no column says it on the
+    ledger or on a transfer: the rule that chose the rate decides it again.
+    `cache` keeps one reading per day across a list of rows."""
+    if cache is not None and day in cache:
+        listed = cache[day]
+    else:
+        ecb_day = db.scalar(select(func.max(models.FxRate.as_of)).where(models.FxRate.as_of <= day))
+        listed = {"EUR"}
+        if ecb_day is not None:
+            for base, code in db.execute(
+                select(models.FxRate.base, models.FxRate.currency).where(
+                    models.FxRate.as_of == ecb_day
+                )
+            ):
+                listed.update((base, code))
+        if cache is not None:
+            cache[day] = listed
+    majors = {_in_major_units(1.0, c)[1] for c in codes if c}
+    return "Yahoo" if majors - listed else "ECB"
+
+
+def rate_words(
+    db: Session, codes: Iterable[str | None], day: str, cache: dict | None = None
+) -> str:
+    """'the ECB rate of <day>' or 'the Yahoo rate of <day>': how every line
+    that says the rate of a fixed sum says whose it was (`source_of`)."""
+    return f"the {source_of(db, codes, day, cache)} rate of {day}"
 
 
 def same_currency(a: str, b: str) -> bool:

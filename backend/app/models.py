@@ -449,9 +449,10 @@ class Transfer(Base):
     )
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     currency: Mapped[str] = mapped_column(String, nullable=False)
-    # What reached the destination, fixed on the day. Worked out at the ECB
-    # rate final for `date` when it was not copied from a statement, and then
-    # `fx_as_of` is that rate's day; a figure the reader typed leaves it empty.
+    # What reached the destination, fixed on the day. Worked out at the rate
+    # final for `date` (the ECB's, or Yahoo's for a currency the ECB does not
+    # publish) when it was not copied from a statement, and then `fx_as_of` is
+    # that rate's day; a figure the reader typed leaves it empty.
     to_amount: Mapped[float] = mapped_column(Float, nullable=False)
     to_currency: Mapped[str] = mapped_column(String, nullable=False)
     fx_as_of: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -565,7 +566,8 @@ class Transaction(Base):
     currency: Mapped[str] = mapped_column(String, nullable=False)
     # What `unit_price` is in. Empty only for a close, which has no price.
     price_currency: Mapped[str | None] = mapped_column(String, nullable=True)
-    # The ECB day whose rate turned quantity * unit_price into `amount`, when
+    # The day of the rate (the ECB's, or Yahoo's for a currency the ECB does
+    # not publish) that turned quantity * unit_price into `amount`, when
     # the app derived it across two currencies. Empty when there was nothing to
     # convert, or when the figure is the reader's own — which is how a debit
     # copied from a statement is told apart from one worked out here.

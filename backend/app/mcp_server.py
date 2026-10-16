@@ -12,8 +12,9 @@ because of a distinction the app defends everywhere else: every write goes
 through a card the reader confirms, and an external client has no interface to
 show one. A server that could write would have to invent consent, and the only
 honest way not to invent it is to be unable to write at all. The `read_only`
-flag on each session (see `app/database.py`) tells the one code path that
-opportunistically refreshes a cache — the ECB rates — to serve what is stored
+flag on each session (see `app/database.py`) tells the code paths that
+opportunistically refresh a cache (the ECB's rates, and since brief BA
+Yahoo's for a currency the ECB does not publish) to serve what is stored
 rather than raise.
 
 WHY IT LIVES IN `app/`. It imports six modules from this package and adds no
@@ -67,8 +68,9 @@ Three things decide whether you read the numbers correctly.
 Totals are in the base currency of this database, and every answer names it:
 the financial picture says it under its title, and structured results carry
 `base_currency`. Anything recorded in another currency was converted at the
-ECB reference rate, and the date of the rate used comes back with the figures
-it produced; a figure a record states itself is given in its own currency.
+ECB reference rate, or at Yahoo's close for a currency the ECB does not
+publish, and the date of the rate used comes back with the figures it
+produced; a figure a record states itself is given in its own currency.
 
 Wealth is an anchor plus events, not a running balance. Each institution has
 dated situations — a photograph of what was held there — and today's figure is
@@ -269,6 +271,7 @@ def build_server(db_path: str | os.PathLike[str] | None = None) -> MCPServer:
             return {
                 "base_currency": conv.base,
                 "rates_as_of": conv.used_as_of,
+                "yahoo_rates_as_of": conv.used_yahoo_as_of,
                 "positions": [
                     {
                         "institution": names.get(p.institution_id),
@@ -296,9 +299,12 @@ def build_server(db_path: str | os.PathLike[str] | None = None) -> MCPServer:
                     for p in rows
                 ],
                 "reading": (
-                    "`rates_as_of` is the date of the exchange rates these "
-                    "figures were converted at, and is null when nothing "
-                    "needed converting. A position whose `market_value` is "
+                    "`rates_as_of` is the date of the ECB's exchange rates "
+                    "these figures were converted at, and `yahoo_rates_as_of` "
+                    "the date of Yahoo's closes, taken for a currency the ECB "
+                    "does not publish and crossed at the ECB's dollar; each is "
+                    "null when no rate of its kind was used. "
+                    "A position whose `market_value` is "
                     "null could not be priced, so every part of it is as of "
                     "`observed_on` and only the reader can refresh it. Where "
                     "`cost_known` is false, only `book_paid` of `book_value` "

@@ -589,8 +589,9 @@ def project(
     absent from the latest snapshot create new positions. Fully-sold positions
     disappear from the list but keep their realized P/L / dividends in the
     rows that produced them. Book values are in the base: a holding recorded in
-    another currency converts at the ECB rate BEFORE the ledger (base cash
-    amounts) is applied on top.
+    another currency converts at its rate (the ECB's, or Yahoo's for a
+    currency the ECB does not publish) BEFORE the ledger (base cash amounts)
+    is applied on top.
 
     Pass `conv` to share one converter with the rest of a computation — its
     `used_as_of` then covers every conversion that fed the numbers a caller is

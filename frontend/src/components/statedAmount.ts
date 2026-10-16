@@ -58,7 +58,8 @@ export type Entry = {
   amount: number;
   currency: string;
   price_currency: string | null;
-  /** The ECB day the app worked `amount` out at, null when it did not. */
+  /** The day of the rate the app worked `amount` out at (the ECB's, or
+      Yahoo's for a currency the ECB does not publish), null when it did not. */
   fx_as_of: string | null;
 };
 
@@ -157,7 +158,8 @@ export type TransferSums = {
   currency: string;
   to_amount: number;
   to_currency: string;
-  /** The ECB day the app worked `to_amount` out at, null when it did not. */
+  /** The day of the rate the app worked `to_amount` out at (the ECB's, or
+      Yahoo's for a currency the ECB does not publish), null when it did not. */
   fx_as_of: string | null;
 };
 

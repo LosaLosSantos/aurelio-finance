@@ -1109,7 +1109,8 @@ def compute_net_worth_series(
     # restated every point at a rate none of them had, and moved the whole line
     # each time the rate moved — the lie this series already refuses to tell
     # with today's quotes. One converter per date, all loaded together, and
-    # each point says which ECB day it was converted at.
+    # each point says which ECB day it was converted at, and Yahoo's day when
+    # a currency the ECB does not publish took Yahoo's close (brief BA).
     convs = fx.converters_on(db, all_dates)
     cash_by_date = _cash_totals_by_date(db, all_dates, inst_ids, convs)
 
@@ -1145,6 +1146,7 @@ def compute_net_worth_series(
                 "liabilities": liab,
                 "base_currency": conv.base,
                 "fx_as_of": conv.used_as_of,
+                "fx_yahoo_as_of": conv.used_yahoo_as_of,
                 # The codes this point counts as written, and no amount: a sum
                 # over points would count one row once per point, measured at
                 # 279acf8 as 18,600.00 over 21 against the summary's 2,700.00
@@ -1242,9 +1244,10 @@ def compute_portfolio(db: Session, live: bool = False, zero: str | None = None) 
             quotes.get(p.symbol) if (p.symbol and p.quantity is not None) else None
         )
         if quote is not None:
-            # Market value converts to the base at the ECB rate. If the
-            # listing's currency is not known yet, or no rate is available for
-            # it, the row stays UNPRICED rather than mixing currencies.
+            # Market value converts to the base at the ECB rate, or Yahoo's for
+            # a currency the ECB does not publish. If the listing's currency is
+            # not known yet, or no rate is available for it, the row stays
+            # UNPRICED rather than mixing currencies.
             currency = quote.get("currency")
             market = conv.to_base(p.quantity * quote["price"], currency)
             if market is not None:
@@ -1376,10 +1379,13 @@ def compute_portfolio(db: Session, live: bool = False, zero: str | None = None) 
         # And what no rate could be applied to at all, which is the same
         # converter's other half: see compute_summary.
         "unconverted": [],
-        # ECB rate date, when any FX conversion was actually applied — to a
-        # book value or to a market value, since both now run through the same
+        # ECB rate date, when an ECB rate was actually applied: to a book
+        # value or to a market value, since both now run through the same
         # converter. A number restated at a rate says which rate.
         "fx_as_of": conv.used_as_of,
+        # And Yahoo's day, when a currency the ECB does not publish took its
+        # rate (brief BA): said beside the ECB's.
+        "fx_yahoo_as_of": conv.used_yahoo_as_of,
     }
     if zero is None:
         result["unconverted"] = notice.said(

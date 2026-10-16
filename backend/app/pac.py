@@ -326,8 +326,9 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
         # history for VWCE.MI ended in a row dated that day at 165.70 — the last
         # minute's trade — and the one for VTI, before New York opened, ended at
         # the 15th, so the occurrence would have been bought at the day before's
-        # close and dated then. And the ECB may not have published the day's
-        # rate, and a debit written at yesterday's keeps it for good. Nothing is
+        # close and dated then. And the day's rate may not be out yet (the
+        # ECB's, or Yahoo's close for a currency the ECB does not publish), and
+        # a debit written at yesterday's keeps it for good. Nothing is
         # written; the next run after the day ends buys it.
         today = dated.today()
         for occ in pending:
@@ -338,7 +339,7 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
                         "occurrence": occ,
                         "reason": (
                             f"{occ.isoformat()} is not over: the market has no close "
-                            "for it yet, nor the ECB perhaps a rate; bought on the "
+                            "for it yet, nor perhaps the day's rate; bought on the "
                             "first run after it"
                         ),
                     }

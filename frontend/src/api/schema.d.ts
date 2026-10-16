@@ -3640,7 +3640,7 @@ export interface components {
             value: number | null;
             /**
              * Value Base
-             * @description `value` in `base_currency`, at the ECB rate — by the ticker's listing currency where it has one, by `currency` otherwise. The figure to display and to total; `value` is the one to edit.
+             * @description `value` in `base_currency`, at the ECB rate (Yahoo's for a currency the ECB does not publish), by the ticker's listing currency where it has one, by `currency` otherwise. The figure to display and to total; `value` is the one to edit.
              */
             value_base: number;
         };
@@ -4089,9 +4089,14 @@ export interface components {
             financial: number;
             /**
              * Fx As Of
-             * @description The ECB day whose rates converted this point — the latest published on or before `date`. Null when nothing in the point needed converting.
+             * @description The ECB day whose rates converted this point, the latest published on or before `date`: for a currency the ECB publishes, or for the dollar a Yahoo close was crossed at. Null when no ECB rate was used.
              */
             fx_as_of: string | null;
+            /**
+             * Fx Yahoo As Of
+             * @description Yahoo's day whose close converted a currency the ECB does not publish at this point (brief BA); null when none was.
+             */
+            fx_yahoo_as_of: string | null;
             /** Liabilities */
             liabilities: number;
             /** Net Worth */
@@ -4388,9 +4393,14 @@ export interface components {
             declared_instead: components["schemas"]["ArrivedPosition"][];
             /**
              * Fx As Of
-             * @description ECB reference-rate date, present when any FX conversion was applied
+             * @description ECB reference-rate date, present when an ECB rate was applied: to a currency the ECB publishes, or to the dollar a Yahoo close was crossed at
              */
             fx_as_of: string | null;
+            /**
+             * Fx Yahoo As Of
+             * @description Yahoo's close date, present when a currency the ECB does not publish was converted at Yahoo's rate (brief BA)
+             */
+            fx_yahoo_as_of: string | null;
             /**
              * Paid Recovery
              * @description What the ledger paid before each account's latest situation that its rows do not say, proposed: written only when the reader accepts it, never proposed again once declined
@@ -4629,7 +4639,7 @@ export interface components {
             live_price: number | null;
             /**
              * Market Value
-             * @description In the base currency (converted at the ECB reference rate)
+             * @description In the base currency (converted at the ECB reference rate, or Yahoo's for a currency the ECB does not publish)
              */
             market_value: number | null;
             /**
@@ -4727,7 +4737,7 @@ export interface components {
             unconverted: components["schemas"]["UnconvertedCode"][];
             /**
              * Value Base
-             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate, by the listing currency where the ticker has one. Computed by the router, never by the model.
+             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate (Yahoo's for a currency the ECB does not publish), by the listing currency where the ticker has one. Computed by the router, never by the model.
              */
             value_base: number;
         };
@@ -5010,7 +5020,7 @@ export interface components {
             unconverted: components["schemas"]["UnconvertedCode"][];
             /**
              * Value Base
-             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate, by the listing currency where the ticker has one. Computed by the router, never by the model.
+             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate (Yahoo's for a currency the ECB does not publish), by the listing currency where the ticker has one. Computed by the router, never by the model.
              */
             value_base: number;
         };
@@ -5325,9 +5335,14 @@ export interface components {
             fees: number;
             /**
              * Fx As Of
-             * @description The ECB day whose rate turned quantity x unit_price into `amount`, when the app derived it across two currencies. Null when there was nothing to convert, or when the amount is the reader's own figure.
+             * @description The day whose rate turned quantity x unit_price into `amount` (`fx_source` says whose), when the app derived it across two currencies. Null when there was nothing to convert, or when the amount is the reader's own figure.
              */
             fx_as_of: string | null;
+            /**
+             * Fx Source
+             * @description Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB does not publish (brief BA). Null when no rate was used.
+             */
+            fx_source: ("ECB" | "Yahoo") | null;
             /** Id */
             id: number;
             /**
@@ -5519,7 +5534,7 @@ export interface components {
             note?: string | null;
             /**
              * To Amount
-             * @description Amount that reached the destination, in `to_currency`, from its statement. Left out, it is `amount` when the two currencies are the same, and otherwise worked out at the ECB rate final for `date`.
+             * @description Amount that reached the destination, in `to_currency`, from its statement. Left out, it is `amount` when the two currencies are the same, and otherwise worked out at the rate final for `date`: the ECB's, or Yahoo's for a currency the ECB does not publish.
              */
             to_amount?: number | null;
             /**
@@ -5563,9 +5578,14 @@ export interface components {
             from_institution_id: number | null;
             /**
              * Fx As Of
-             * @description The ECB day whose rate `to_amount` was worked out at; null when it was stated, or when both sides share a currency
+             * @description The day whose rate `to_amount` was worked out at (`fx_source` says whose); null when it was stated, or when both sides share a currency
              */
             fx_as_of: string | null;
+            /**
+             * Fx Source
+             * @description Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB does not publish (brief BA). Null when no rate was used.
+             */
+            fx_source: ("ECB" | "Yahoo") | null;
             /** Id */
             id: number;
             /**

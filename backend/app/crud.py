@@ -162,8 +162,8 @@ def _decided(data: BaseModel, payload: dict) -> dict:
     """The part of a built row this request is entitled to write.
 
     A schema field is written when the request sent it. A key the schema does
-    not own is one crud worked out for itself — today only `fx_as_of`, the ECB
-    day that turned quantity x price into an amount — and a builder puts one in
+    not own is one crud worked out for itself (today only `fx_as_of`: the day
+    a rate turned quantity x price into an amount), and a builder puts one in
     the payload only when this request decided the figure it explains. So its
     presence IS the decision, and it travels with that figure rather than being
     re-stated as a list of the fields it depends on, which would be the same

@@ -331,7 +331,11 @@ def _render_rates(db: Session, base: str, portfolio: dict) -> list[str]:
 
     The totals were always converted at these and never said what they were:
     in the reader's second test round (2026-10-08) the chat answered that it
-    had no exchange rate for a dollar figure, with the app holding the ECB's."""
+    had no exchange rate for a dollar figure, with the app holding the ECB's.
+    A currency the ECB does not publish takes Yahoo's rate, said apart, and
+    one neither source quotes is said as that (brief BA)."""
+    from app import yahoo_rates
+
     listings = {r["currency"] for r in portfolio["rows"] if r["currency"]}
     published, rates, missing = fx.rates_for(db, crud.get_currencies_on_record(db) | listings)
     said = []
@@ -342,7 +346,22 @@ def _render_rates(db: Session, base: str, portfolio: dict) -> list[str]:
             f"in force today were published on {published}: 1 {base} = {listed}."
         )
     if missing:
-        said.append(f"The ECB publishes no rate for {', '.join(missing)}.")
+        closed, quoted, left = fx.market_rates_for(db, missing)
+        if quoted:
+            listed = ", ".join(f"{rate:.10g} {code}" for code, rate in quoted.items())
+            said.append(
+                f"For currencies the ECB does not publish, Yahoo's closes of {closed}, "
+                f"crossed at the ECB's dollar: 1 {base} = {listed}."
+            )
+        nobody = [c for c in left if yahoo_rates.no_source(db, c)]
+        silent = [c for c in left if c not in nobody]
+        if nobody:
+            said.append(f"No source quotes a rate for {', '.join(nobody)}, neither the ECB nor Yahoo.")
+        if silent:
+            said.append(
+                f"The ECB publishes no rate for {', '.join(silent)}, and Yahoo gave none "
+                "the app could use."
+            )
     return [" ".join(said)] if said else []
 
 
@@ -875,12 +894,18 @@ def build_context(db: Session) -> str:
     if txs:
         lines.append("## Transaction ledger (most recent first, up to 15)")
         named = {p.id: p.name for p in plans}
+        days: dict = {}  # the ECB's list of each day, read once for the ledger
         for t in txs[:15]:
             est = " (estimated)" if t.estimated else ""
             # Each figure with its currency: the price is the listing's, the
             # amount the account's, and for a purchase across two currencies
-            # the amount is a sum fixed at one day's rate — which the line says.
-            rate = f" at the ECB rate of {t.fx_as_of}" if t.fx_as_of else ""
+            # the amount is a sum fixed at one day's rate, which the line says,
+            # and whose (brief BA).
+            rate = (
+                f" at {fx.rate_words(db, (t.currency, t.price_currency), t.fx_as_of, days)}"
+                if t.fx_as_of
+                else ""
+            )
             price = (
                 f"@ {t.unit_price:.2f} {t.price_currency} "
                 if t.price_currency

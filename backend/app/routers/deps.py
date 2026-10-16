@@ -73,6 +73,7 @@ def transaction_reads(
         for sym, q in (crud.get_cached_prices(db, symbols) if symbols else {}).items()
     }
     out = []
+    days: dict = {}  # the ECB's list of each day, read once for the whole list
     for t in txs:
         trades_in = listing.get(t.symbol) if t.symbol else None
         note = (
@@ -83,10 +84,35 @@ def transaction_reads(
                 and t.price_currency != trades_in)
             else None
         )
+        # Whose rate the amount was worked out at, said where its day is
+        # (brief BA): Yahoo's when one of the two codes had no ECB rate.
+        source = (
+            fx.source_of(db, (t.currency, t.price_currency), t.fx_as_of, days)
+            if t.fx_as_of
+            else None
+        )
         out.append(
-            schemas.TransactionRead.model_validate(t).model_copy(update={"currency_note": note})
+            schemas.TransactionRead.model_validate(t).model_copy(
+                update={"currency_note": note, "fx_source": source}
+            )
         )
     return out
+
+
+def transfer_reads(db: Session, transfers: list[models.Transfer]) -> list[schemas.TransferRead]:
+    """Transfers as the API returns them, each with whose rate its arrival
+    was worked out at (`fx.source_of`, brief BA)."""
+    days: dict = {}
+    return [
+        schemas.TransferRead.model_validate(t).model_copy(
+            update={
+                "fx_source": fx.source_of(db, (t.currency, t.to_currency), t.fx_as_of, days)
+                if t.fx_as_of
+                else None
+            }
+        )
+        for t in transfers
+    ]
 
 
 def holding_reads(

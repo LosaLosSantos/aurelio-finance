@@ -448,3 +448,101 @@ def test_the_rules_thresholds_are_the_measured_ones():
     one is a change to the counts said beside it."""
     assert (yahoo_rates.SLIP, yahoo_rates.SPIKE, yahoo_rates.NEIGHBOURS_AGREE,
             yahoo_rates.STALE_DAYS) == (0.50, 0.05, 0.025, 7)
+
+
+# --- Whose rate, said wherever its day is said (part 5) -------------------------------------------
+
+
+def test_a_ledger_row_and_a_transfer_say_whose_rate_they_took(client, feed, yahoo):
+    """Measured at 279acf8, every row's rate was said as "the ECB rate of": a
+    day alone no longer says whose."""
+    yahoo.closes["USDTWD=X"] = weekdays("2025-12-01", "2026-01-30")
+    eur, twd = _accounts(client)
+    _made(client.post("/api/transfers", json={
+        "date": "2026-01-05", "amount": 100.0, "currency": "EUR", "to_currency": "TWD",
+        "from_institution_id": eur, "to_institution_id": twd}))
+    _made(client.post("/api/transfers", json={
+        "date": "2026-01-05", "amount": 100.0, "currency": "EUR", "to_currency": "USD",
+        "from_institution_id": eur, "to_institution_id": twd}))
+    assert sorted((t["to_currency"], t["fx_as_of"], t["fx_source"])
+                  for t in client.get("/api/transfers").json()) == [
+        ("TWD", "2026-01-05", "Yahoo"), ("USD", ECB_DAY, "ECB"),
+    ]
+    _made(client.post("/api/transactions", json={
+        "kind": "buy", "date": "2026-01-05", "institution_id": eur, "asset_name": "Invented Taipei share",
+        "symbol": "ZZTW.TW", "quantity": 2, "unit_price": 500.0, "currency": "EUR", "price_currency": "TWD"}))
+    (row,) = client.get("/api/transactions").json()
+    assert (row["amount"], row["fx_as_of"], row["fx_source"]) == (25.0, "2026-01-05", "Yahoo")
+
+
+def test_the_portfolio_and_the_history_say_yahoos_day_beside_the_ecbs(client, feed, yahoo):
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    broker = _made(client.post("/api/institutions", json={"name": "Taipei broker"}))["id"]
+    sid = _made(client.post(f"/api/institutions/{broker}/snapshots", json={"date": ago(30)}))["id"]
+    _made(client.post(f"/api/snapshots/{sid}/holdings",
+                      json={"asset_name": "Fund in TWD", "value": 4000.0, "currency": "TWD"}))
+    last_close = max(d for d, _ in yahoo.closes["USDTWD=X"])
+
+    portfolio = client.get("/api/dashboard/portfolio").json()
+    assert (portfolio["total_book"], portfolio["fx_as_of"], portfolio["fx_yahoo_as_of"]) == (
+        100.0, ECB_DAY, last_close,
+    )
+    today = client.get("/api/dashboard/net-worth-series").json()[-1]
+    assert (today["fx_as_of"], today["fx_yahoo_as_of"]) == (ECB_DAY, last_close)
+
+
+@pytest.mark.parametrize("base, book, ecb_day", [("EUR", 100.0, ECB_DAY), ("USD", 125.0, None)])
+def test_an_outside_assistant_is_told_yahoos_day_beside_the_ecbs(client, feed, yahoo, base, book, ecb_day):
+    """The MCP server's positions said one day, read as the day of every rate
+    and null "when nothing needed converting": with a dollar base a holding in
+    TWD takes Yahoo's close alone, and that day read null. Read-only, the
+    server serves the closes the app kept."""
+    from app.mcp_server import build_server
+    from tests.test_mcp_server import _call, _db_file
+
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    with SessionLocal() as db:
+        db.merge(models.Setting(key=fx.BASE_CURRENCY_KEY, value=base))
+        db.commit()
+    broker = _made(client.post("/api/institutions", json={"name": "Taipei broker"}))["id"]
+    sid = _made(client.post(f"/api/institutions/{broker}/snapshots", json={"date": ago(30)}))["id"]
+    _made(client.post(f"/api/snapshots/{sid}/holdings",
+                      json={"asset_name": "Fund in TWD", "value": 4000.0, "currency": "TWD"}))
+    _made(client.get("/api/dashboard/portfolio"))
+    last_close = max(d for d, _ in yahoo.closes["USDTWD=X"])
+
+    body = _call(build_server(_db_file()), "get_positions")
+    (row,) = body["positions"]
+    assert (row["book_value"], body["rates_as_of"], body["yahoo_rates_as_of"]) == (book, ecb_day, last_close)
+    assert "`yahoo_rates_as_of`" in body["reading"]
+
+
+def test_the_chat_is_told_whose_rate(client, feed, yahoo):
+    """Its rates line, its ledger lines and its cards' receipts."""
+    from app import advisor, tools
+
+    yahoo.closes["USDTWD=X"] = weekdays("2025-12-01", ago(1))
+    eur, twd = _accounts(client)
+    _made(client.post(f"/api/institutions/{eur}/cash-anchors",
+                      json={"date": ago(30), "amount": 1000.0, "currency": "USD"}))
+    _made(client.post(f"/api/institutions/{twd}/cash-anchors",
+                      json={"date": ago(30), "amount": 4000.0, "currency": "TWD"}))
+    _made(client.post("/api/transactions", json={
+        "kind": "buy", "date": "2026-01-05", "institution_id": eur, "asset_name": "Invented Taipei share",
+        "symbol": "ZZTW.TW", "quantity": 2, "unit_price": 500.0, "currency": "EUR", "price_currency": "TWD"}))
+    _made(client.post(f"/api/institutions/{twd}/cash-anchors",
+                      json={"date": ago(20), "amount": 4000.0, "currency": "BTN"}))
+    last_close = max(d for d, _ in yahoo.closes["USDTWD=X"])
+
+    with SessionLocal() as db:
+        picture = advisor.build_context(db)
+    (rates,) = [line for line in picture.split("\n") if line.startswith("Exchange rates:")]
+    assert rates.endswith(
+        f"1 EUR = 1.25 USD. For currencies the ECB does not publish, Yahoo's closes of "
+        f"{last_close}, crossed at the ECB's dollar: 1 EUR = 40 TWD. No source quotes a "
+        "rate for BTN, neither the ECB nor Yahoo."
+    )
+    assert "buy 2 x ZZTW.TW" in picture and "at the Yahoo rate of 2026-01-05" in picture
+    assert tools._rate_field({"fx_as_of": "2026-01-05", "fx_source": "Yahoo"}) == (
+        "At the Yahoo rate of", "2026-01-05", "date",
+    )

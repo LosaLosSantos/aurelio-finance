@@ -31,6 +31,7 @@ import { OmissionsNotice } from "./OmissionsNotice";
 import { PaidRecoveryNotice } from "./PaidRecoveryNotice";
 import { acrossCurrencies as isAcross, debitOnEdit, derivedAmount } from "./statedAmount";
 import { sameCurrency, withinCurrency } from "./money";
+import { fxProvenance, rateLine } from "./rateSource";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import { getListingCurrencies, getQuote } from "../api/prices";
 import { accountCurrencyOn, listingCurrencyOf } from "./proposedCurrency";
@@ -449,7 +450,7 @@ export default function Portfolio({
             Recorded total <span className="font-semibold text-ink">{money(data.base_currency).format(data.total_book)}</span>
           </span>
         )}
-        {(data.prices_as_of || data.fx_as_of) && (
+        {(data.prices_as_of || data.fx_as_of || data.fx_yahoo_as_of) && (
           // Where these numbers came from, said once and outside the priced
           // branch. The FX date used to be nested inside the price date, so a
           // portfolio that was converted but not priced — an opaque position
@@ -465,8 +466,10 @@ export default function Portfolio({
                 prices as of {fmtDate(data.prices_as_of)} ({ageWords(data.prices_as_of)})
               </>
             )}
-            {data.prices_as_of && data.fx_as_of && " · "}
-            {data.fx_as_of && <>FX ECB {fmtDate(data.fx_as_of)}</>}
+            {data.prices_as_of && (data.fx_as_of || data.fx_yahoo_as_of) && " · "}
+            {/* Whose rate beside its day (brief BA): Yahoo's for a currency
+                the ECB does not publish. */}
+            {fxProvenance(data.fx_as_of, data.fx_yahoo_as_of, fmtDate)}
           </span>
         )}
         {(data.total_realized !== 0 ||
@@ -1180,7 +1183,8 @@ function BuysSection({
      reader's choice once they made one (null until then) and otherwise the
      proposal worked out below. `debit` is that money when the two differ and
      the reader has the figure from their statement; left blank, the backend
-     works it out at the ECB rate of the entry's date and says which day. */
+     works it out at the rate of the entry's date (the ECB's, or Yahoo's for a
+     currency the ECB does not publish) and says which day and whose. */
   const [priceCurrencyChoice, setPriceCurrencyChoice] = useState<string | null>(null);
   const [currencyChoice, setCurrencyChoice] = useState<string | null>(null);
   // Listing currencies a dated quote taught this form after the page loaded.
@@ -1582,7 +1586,7 @@ function BuysSection({
       note="Without a buy here, the P/L above measures movement since the last situation rather than gain. Rows marked ‘estimated’ came from market closes or gross dividends. Correct them with the real broker amounts."
       explain={{
         question: "How are an entry's figures read and counted?",
-        text: "A sell removes units at average cost and books the difference; a dividend credits cash. A price is in its listing's currency: USD for a New York share, GBp (pence) for most London listings. The amount the account moved is the one on your statement; left blank, it is worked out from the quantity, the price and the fees, and across two currencies at the ECB rate of the entry's date, from which your broker's will differ a little. A close needs what came back: zero is allowed, but it has to be said, since that is the difference between selling something and forgetting it.",
+        text: "A sell removes units at average cost and books the difference; a dividend credits cash. A price is in its listing's currency: USD for a New York share, GBp (pence) for most London listings. The amount the account moved is the one on your statement; left blank, it is worked out from the quantity, the price and the fees, and across two currencies at the rate of the entry's date (the ECB's, or Yahoo's for a currency the ECB does not publish), from which your broker's will differ a little. A close needs what came back: zero is allowed, but it has to be said, since that is the difference between selling something and forgetting it.",
       }}
     >
       <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
@@ -1860,7 +1864,7 @@ function BuysSection({
               t.fees ? `fees ${money(t.currency).format(t.fees)}` : null,
               // A sum fixed at one day's rate says which day, so it can be held
               // against the statement.
-              t.fx_as_of ? `at the ECB rate of ${fmtDate(t.fx_as_of)}` : null,
+              t.fx_as_of ? rateLine(fmtDate(t.fx_as_of), t.fx_source) : null,
               instName(t.institution_id),
               t.symbol,
             ]

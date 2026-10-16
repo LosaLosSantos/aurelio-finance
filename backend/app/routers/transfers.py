@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import cash_moves, crud, models, schemas
 from app.database import get_db
-from app.routers.deps import get_or_404
+from app.routers.deps import get_or_404, transfer_reads
 
 router = APIRouter(prefix="/api", tags=["transfers"])
 
@@ -35,7 +35,7 @@ def create_transfer(
 ) -> schemas.TransferRead:
     """Create a cash transfer between institutions."""
     try:
-        return crud.create_transfer(db, payload)
+        return transfer_reads(db, [crud.create_transfer(db, payload)])[0]
     except crud.TransferRateUnknown as exc:
         raise _refused_without_a_rate(exc)
 
@@ -43,7 +43,7 @@ def create_transfer(
 @router.get("/transfers", response_model=list[schemas.TransferRead])
 def list_transfers(db: Session = Depends(get_db)) -> list[schemas.TransferRead]:
     """List all transfers (chronological order)."""
-    return crud.get_transfers(db)
+    return transfer_reads(db, crud.get_transfers(db))
 
 
 @router.get("/transfers/{transfer_id}", response_model=schemas.TransferRead)
@@ -52,7 +52,7 @@ def get_transfer(
     db: Session = Depends(get_db),
 ) -> schemas.TransferRead:
     """Return a single transfer, or 404 if it does not exist."""
-    return get_or_404(db, models.Transfer, transfer_id)
+    return transfer_reads(db, [get_or_404(db, models.Transfer, transfer_id)])[0]
 
 
 @router.put("/transfers/{transfer_id}", response_model=schemas.TransferRead)
@@ -67,7 +67,7 @@ def update_transfer(
     see `crud._update`."""
     get_or_404(db, models.Transfer, transfer_id)
     try:
-        return crud.update_transfer(db, transfer_id, payload)
+        return transfer_reads(db, [crud.update_transfer(db, transfer_id, payload)])[0]
     except crud.TransferRateUnknown as exc:
         raise _refused_without_a_rate(exc)
 

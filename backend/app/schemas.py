@@ -312,8 +312,9 @@ class SnapshotRead(SnapshotBase):
         ...,
         description=(
             "What this situation was worth, in `base_currency`: its holdings "
-            "converted at the ECB rate, by the listing currency where the ticker "
-            "has one. Computed by the router, never by the model."
+            "converted at the ECB rate (Yahoo's for a currency the ECB does not "
+            "publish), by the listing currency where the ticker has one. Computed "
+            "by the router, never by the model."
         ),
     )
     base_currency: BaseCurrency
@@ -462,9 +463,10 @@ class HoldingRead(HoldingBase):
     value_base: float = Field(
         ...,
         description=(
-            "`value` in `base_currency`, at the ECB rate — by the ticker's "
-            "listing currency where it has one, by `currency` otherwise. The "
-            "figure to display and to total; `value` is the one to edit."
+            "`value` in `base_currency`, at the ECB rate (Yahoo's for a currency "
+            "the ECB does not publish), by the ticker's listing currency where it "
+            "has one, by `currency` otherwise. The figure to display and to total; "
+            "`value` is the one to edit."
         ),
     )
     base_currency: BaseCurrency
@@ -863,8 +865,16 @@ class NetWorthPoint(BaseModel):
     fx_as_of: str | None = Field(
         ...,
         description=(
-            "The ECB day whose rates converted this point — the latest published "
-            "on or before `date`. Null when nothing in the point needed converting."
+            "The ECB day whose rates converted this point, the latest published "
+            "on or before `date`: for a currency the ECB publishes, or for the "
+            "dollar a Yahoo close was crossed at. Null when no ECB rate was used."
+        ),
+    )
+    fx_yahoo_as_of: str | None = Field(
+        default=None,
+        description=(
+            "Yahoo's day whose close converted a currency the ECB does not "
+            "publish at this point (brief BA); null when none was."
         ),
     )
     unconverted: list[str] = Field(
@@ -1241,7 +1251,11 @@ class PortfolioRow(BaseModel):
     )
     as_of: str | None = Field(..., description="Market close date the price refers to")
     market_value: float | None = Field(
-        ..., description="In the base currency (converted at the ECB reference rate)"
+        ...,
+        description=(
+            "In the base currency (converted at the ECB reference rate, or Yahoo's "
+            "for a currency the ECB does not publish)"
+        ),
     )
     delta: float | None = Field(
         ...,
@@ -1379,7 +1393,17 @@ class Portfolio(BaseModel):
     )
     fx_as_of: str | None = Field(
         ...,
-        description="ECB reference-rate date, present when any FX conversion was applied",
+        description=(
+            "ECB reference-rate date, present when an ECB rate was applied: to a "
+            "currency the ECB publishes, or to the dollar a Yahoo close was crossed at"
+        ),
+    )
+    fx_yahoo_as_of: str | None = Field(
+        default=None,
+        description=(
+            "Yahoo's close date, present when a currency the ECB does not publish "
+            "was converted at Yahoo's rate (brief BA)"
+        ),
     )
 
 
@@ -1774,7 +1798,8 @@ class TransferBase(BaseModel):
         description=(
             "Amount that reached the destination, in `to_currency`, from its "
             "statement. Left out, it is `amount` when the two currencies are the "
-            "same, and otherwise worked out at the ECB rate final for `date`."
+            "same, and otherwise worked out at the rate final for `date`: the "
+            "ECB's, or Yahoo's for a currency the ECB does not publish."
         ),
     )
     to_currency: str = Field(..., description="Currency of the destination side, e.g. EUR")
@@ -1801,8 +1826,15 @@ class TransferRead(TransferBase):
     fx_as_of: str | None = Field(
         default=None,
         description=(
-            "The ECB day whose rate `to_amount` was worked out at; null when it "
-            "was stated, or when both sides share a currency"
+            "The day whose rate `to_amount` was worked out at (`fx_source` says "
+            "whose); null when it was stated, or when both sides share a currency"
+        ),
+    )
+    fx_source: Literal["ECB", "Yahoo"] | None = Field(
+        default=None,
+        description=(
+            "Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB "
+            "does not publish (brief BA). Null when no rate was used."
         ),
     )
 
@@ -2303,9 +2335,17 @@ class TransactionRead(TransactionBase):
     fx_as_of: str | None = Field(
         ...,
         description=(
-            "The ECB day whose rate turned quantity x unit_price into `amount`, "
-            "when the app derived it across two currencies. Null when there was "
-            "nothing to convert, or when the amount is the reader's own figure."
+            "The day whose rate turned quantity x unit_price into `amount` "
+            "(`fx_source` says whose), when the app derived it across two "
+            "currencies. Null when there was nothing to convert, or when the "
+            "amount is the reader's own figure."
+        ),
+    )
+    fx_source: Literal["ECB", "Yahoo"] | None = Field(
+        default=None,
+        description=(
+            "Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB "
+            "does not publish (brief BA). Null when no rate was used."
         ),
     )
     plan_id: int | None
