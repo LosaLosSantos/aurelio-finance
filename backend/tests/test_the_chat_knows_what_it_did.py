@@ -346,7 +346,7 @@ def test_cards_that_each_add_a_new_row_are_not_one_record(client, monkeypatch):
 def test_the_prompt_says_what_the_chat_reads_of_its_past_turns():
     """Brief AB's rule said past turns reach the model as words alone; they now
     carry their calls, and not what the calls returned."""
-    for model in ("anthropic/claude-opus-5.5", "qwen/qwen3.8-max-0902"):
+    for model in ("claude-opus-5.5", "unsupported-model"):
         prompt = chat.system_prompt(model)
         assert "without the lookups behind them" not in prompt
         assert (

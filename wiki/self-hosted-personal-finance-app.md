@@ -138,9 +138,9 @@ Run `uv run pytest` in `backend/` and `npm test` in `frontend/`. For hot reload,
 
 ## Questions
 
-**Is Aurelio free?** Yes: it is open source under the MIT license. The AI part, if you use
-it, is paid per question to OpenRouter with your own key; see
-[How much does an AI financial advisor cost?](how-much-does-an-ai-financial-advisor-cost.md).
+**Is Aurelio free?** Yes: it is open source under the MIT license. The optional AI uses the
+GitHub Copilot subscription authenticated on the machine; see
+[GitHub Copilot usage in Aurelio](github-copilot-usage.md).
 
 **Does it need an internet connection?** Your records and the totals built from them do not.
 Market prices, fund compositions, exchange rates and the AI do.
@@ -153,6 +153,6 @@ computer, opened in that computer's browser; the start script runs it directly.
 
 ## Next
 
-- [An AI financial advisor with your own OpenRouter key](ai-financial-advisor-with-your-own-openrouter-key.md),
-  if you want the chat and the analysis.
+- [Use Aurelio with GitHub Copilot](github-copilot-models.md), if you want the chat and the
+  analysis.
 - [How to calculate net worth](how-to-calculate-net-worth.md), to read the Dashboard.

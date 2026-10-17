@@ -5,11 +5,9 @@ gone, and the chain is a tool the chat proposes rather than a page with a
 button. So this file tests the two things left in `advisor.py` — the contexts
 it builds and the asymmetry between them — and `chain.py`, driven directly.
 
-`advisor.call_llm` is monkeypatched everywhere. Nothing here reaches
-OpenRouter, and the chain is now a variable number of calls, so the fakes
-script the CONFIDANT's verdict line: that line is what decides how many calls
-there are, and a fake that always says the same thing would only ever exercise
-one depth.
+`advisor.call_llm` is monkeypatched everywhere. Nothing here reaches GitHub
+Copilot, and the chain is a variable number of calls, so the fakes script the
+CONFIDANT's verdict line that decides how many calls there are.
 """
 
 from __future__ import annotations
@@ -536,17 +534,17 @@ def test_the_chain_keeps_the_information_asymmetry(client, monkeypatch):
 
 
 def test_the_chain_uses_per_role_models_when_configured(client, monkeypatch):
-    monkeypatch.setenv("OPENROUTER_ANALYST_MODEL", "moonshotai/kimi-k3")
-    monkeypatch.setenv("OPENROUTER_CONFIDANT_MODEL", "anthropic/claude-sonnet-4.6")
+    monkeypatch.setenv("COPILOT_ANALYST_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("COPILOT_CONFIDANT_MODEL", "claude-sonnet-5.5")
     seen = _fake_chain_calls(monkeypatch, confidant=("CONTESTED", "FITS"))
     with SessionLocal() as db:
         _run(db)
     assert [s["model"] for s in seen] == [
-        "moonshotai/kimi-k3",       # analyst
-        "anthropic/claude-sonnet-4.6",  # confidant
-        "moonshotai/kimi-k3",       # revision — the same analyst
-        "anthropic/claude-sonnet-4.6",  # confidant again
-        "anthropic/claude-sonnet-4.6",  # synthesis, written to the person
+        "gpt-6.1-sol",
+        "claude-sonnet-5.5",
+        "gpt-6.1-sol",
+        "claude-sonnet-5.5",
+        "claude-sonnet-5.5",
     ]
 
 
@@ -569,48 +567,20 @@ def test_a_chain_that_fails_saves_nothing(client, monkeypatch):
         assert db.query(models.ChainRun).count() == 0
 
 
-def test_what_a_step_cost_is_recorded_and_not_estimated(client, monkeypatch):
-    """The figure the confirmation card quotes has to be a measurement. It was
-    on the wire all along — OpenRouter reports it on the final chunk's usage —
-    and nothing in the repo kept it."""
-    _fake_chain_calls(monkeypatch, confidant=("FITS",))
-    with SessionLocal() as db:
-        _, run = _run(db)
-        assert [s.cost for s in run.steps] == [0.002, 0.002, 0.002]
-        run_id = run.id
-
-    body = client.get(f"/api/advisor/chain/{run_id}").json()
-    assert [s["cost"] for s in body["steps"]] == [0.002, 0.002, 0.002]
-    assert body["verdict"].startswith("output-3")
-    assert client.get("/api/advisor/chain/999").status_code == 404
 
 
-def test_a_provider_that_reports_no_price_leaves_it_empty_not_zero(monkeypatch):
-    """`call_llm` reads the cost off `usage` with getattr, because it is an
-    extra field the OpenAI SDK does not declare. A zero would be a price."""
+def test_copilot_subscription_usage_is_not_labeled_as_a_dollar_cost(monkeypatch):
+    """Copilot reports tokens and subscription usage, not a USD charge."""
+    result = advisor.copilot_provider.Result(
+        content="hello",
+        calls=(),
+        usage=advisor.copilot_provider.Usage(input_tokens=12, cached_tokens=3),
+        model="gpt-5.4-mini",
+    )
+    monkeypatch.setattr(advisor.copilot_provider, "complete", lambda *args: result)
 
-    class FakeCompletion:
-        # finish_reason because a real choice always says how the answer
-        # ended, and `call_llm` refuses one that ended on anything but a stop.
-        def __init__(self, usage):
-            message = type("M", (), {"content": "hello"})()
-            self.choices = [type("C", (), {"message": message, "finish_reason": "stop"})()]
-            self.usage = usage
-
-    def client_with(usage):
-        class FakeCompletions:
-            def create(self, **kwargs):
-                return FakeCompletion(usage)
-
-        return type("C", (), {"chat": type("Chat", (), {"completions": FakeCompletions()})()})()
-
-    monkeypatch.setattr(advisor, "_client", lambda: client_with(
-        type("U", (), {"cost": 0.00225})()
-    ))
-    assert _REAL_CALL_LLM("s", "u", model="m")["cost"] == 0.00225
-
-    monkeypatch.setattr(advisor, "_client", lambda: client_with(type("U", (), {})()))
-    assert _REAL_CALL_LLM("s", "u", model="m")["cost"] is None
-
-    monkeypatch.setattr(advisor, "_client", lambda: client_with(None))
-    assert _REAL_CALL_LLM("s", "u", model="m")["cost"] is None
+    assert _REAL_CALL_LLM("s", "u", model="gpt-5.4-mini") == {
+        "analysis": "hello",
+        "model": "gpt-5.4-mini",
+        "cost": None,
+    }

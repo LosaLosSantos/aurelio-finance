@@ -625,10 +625,9 @@ class ChainStep(Base):
     model: Mapped[str | None] = mapped_column(String, nullable=True)
     output: Mapped[str] = mapped_column(Text, nullable=False)
     duration_ms: Mapped[int | None] = mapped_column(nullable=True)
-    # What this step cost, in USD, as OpenRouter reported it on the final
-    # chunk's `usage`. Nullable because it is what the provider SAID and not
-    # what we computed: a model that answers without a usage figure leaves this
-    # empty rather than a zero, and a zero is a price. Sibling of duration_ms
+    # Historical USD cost reported by the model provider. GitHub Copilot uses
+    # subscription quota rather than a per-call USD price, so new Copilot-backed
+    # steps leave this nullable field empty. Sibling of duration_ms
     # for the same reason — the card that asks the reader to spend a minute and
     # a few cents quotes both from the last run, and neither may be a guess.
     cost: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -939,10 +938,9 @@ class ChatMessage(Base):
     # since it is an answer (nothing read from the cache); None means the
     # provider did not say.
     cached_tokens: Mapped[int | None] = mapped_column(nullable=True)
-    # What OpenRouter says the turn's rounds cost, in USD, summed: the chat's
-    # own figure beside `chain_steps.cost`. None when any round's price was not
-    # reported, never a partial sum, because a cost that is low without saying
-    # so is the worse mistake. An analysis the turn ran records its steps in
+    # Historical provider-reported USD cost summed over a turn's rounds.
+    # Copilot-backed turns leave it empty because subscription quota is not a
+    # dollar price. An analysis the turn ran records its steps in
     # `chain_steps`, not here.
     cost: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso, nullable=False)

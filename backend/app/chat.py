@@ -1,113 +1,24 @@
-"""The chat that reads.
+"""The streamed chat over the user's current financial picture.
 
-A conversation over the whole financial picture, streamed as it is written.
-The model never writes. It PROPOSES: a tool that would change something drafts
-the change instead of making it, the turn ends on a card showing exactly what
-would happen, and the write runs from the normal path — same `crud`, same unit
-of work, same contract the form goes through — only once the reader confirms
-it. Which is also why none of this needs a provenance column: every row it
-creates was signed off by the person whose money it is, so "who wrote this"
-already has one answer.
+The model never writes records directly. A write tool produces a proposal card,
+the turn stops, and the normal application write path runs only after the user
+confirms the card. Asking (`POST /api/chat`) and answering a card
+(`POST /api/chat/cards/{id}`) both stream through the same orchestration loop.
 
-A turn therefore has two shapes. Asking is `POST /api/chat` and the answer
-streams back. Answering a card is `POST /api/chat/cards/{id}`, and it streams
-too, because the reader is owed the model's words about what just happened to
-their records. Both go through `stream`; the difference is only how the
-messages were built.
+Most reads are rendered into `advisor.build_context` on every turn. This lets
+the model connect sections the question did not name and prevents a stale
+conversation cache from hiding changes made in another tab. Network-backed or
+unbounded reads remain tools: fund look-through, instrument search, symbol
+lookup, past analysis documents, and web retrieval.
 
-Why almost every read is context rather than a tool. `advisor.build_context`
-renders every section, and sending all of it every turn answers BETTER than a
-tool per section, because the model sees connections between sections the
-question did not name: "can I afford a house" is also a question about the
-expenses. A tool per section buys latency, wrong-tool errors and schemas to
-save a third of the prompt.
+`run_analysis` is also a proposal. Once confirmed it runs the analyst chain as
+sub-agents with deliberately separate contexts: the analyst sees the figures
+without personal context, while the confidant sees the person without figures.
+The conversation is never copied into either context.
 
-A third, and not "two thousand tokens", because a turn has no single size any
-more and the picture is not its largest piece. Measured on 2026-09-17 against
-`qwen/qwen3.8-max`, on a saved portfolio, reading OpenRouter's own
-`prompt_tokens`, each figure the difference between two requests:
-
-    system prompt                                     2,284
-    the picture, the ack, the question, the page note 3,935  (the picture
-                                                              alone: 3,748)
-    the nine tool declarations                        4,842
-    ------------------------------------------------------
-    one turn asked from the Dashboard                11,119
-    the same turn asked on a 30-year mortgage's page 19,919
-
-The second line is why a single figure will not do: since brief S every
-question carries the note of the page it was asked from, and a mortgage's page
-note is the whole of its balance history — 8,800 tokens of it above. The five
-calls that measured this cost between $0.0066 and $0.0222 each, as OpenRouter
-reported them.
-
-Those numbers are already history, which is the lesson and not a caveat: the
-figure that stood here before was measured on that same backup a fortnight
-earlier and read 2,237 for a picture that is now 3,748. So a turn records what
-it was sent — `chat_messages.prompt_tokens`, the way `chain_steps.cost` records
-what a step cost — and the current answer is a query, not a docstring.
-
-The exception is `app/tools.py`, and it is an exception about NETWORK and not
-about size. The look-through — what the funds hold underneath — is the one
-part of this reader's picture that is not in the picture, because assembling
-it walks a waterfall of fund issuers on a cache miss. Folded into the context
-it would run on every turn, and "hello" would cost five HTTP fetches. So it is
-a tool, and a turn is up to seven round trips instead of one —
-`MAX_COMPLETIONS_PER_TURN` says why that number and not another.
-
-The second exception is `read_analysis`, and it fails a different clause of the
-same rule: a past verdict is a document, of a length nobody chose, that matters
-in one conversation out of ten. What the context carries is its date and its
-opening lines; the rest is fetched by the turn that needs it. See
-`build_chat_context`.
-
-The third exception is not about the reader's data at all. `search_catalogue`
-and `lookup_symbol` read the instrument universe — thousands of funds, and
-every quotable ticker there is — which is searched rather than sent for the
-plain reason that it does not fit and is not about them. They stay two tools
-and not one, for the reason `routers/instruments.py` keeps two endpoints.
-
-And the web, a tool of this app since brief AM (2026-10-09). For Anthropic's
-models each round offers `search_web` beside the other tools
-(`tools.web_search`), and this loop answers a call for it by running the
-search as a request of its own (`websearch`), carrying the query and nothing
-else of the conversation. Until then it was OpenRouter's own search, declared
-on every request, and brief AL's paid probe found that a request declaring it
-kept none of the cache's markers but the last, so no turn read the one before
-it. What comes back is the pages: the model reads them as the tool's result,
-and the reader is shown them as links where the search ran, under the query
-that went out. A turn runs at most WEB_SEARCHES_PER_TURN; a call past them is
-answered in words, and the tools stay as they were.
-
-And this chat is an ORCHESTRATOR now. `run_analysis` is a card like any other
-write, and confirming it runs the advisor chain (three to six steps, a
-minute of them) as SUB-AGENTS whose context it does not write. That last part
-is not a preference: the chain's whole value is that the analyst has not seen
-the person and the confidant has not seen a figure, and a model asked to brief
-a colleague summarises, and a summary carries the numbers across. The
-sub-agents read `advisor.build_portfolio_context` and
-`advisor.build_person_context` and nothing else — never the conversation, never
-a word of it. What this chat decides is WHETHER, WHEN, and what to do with the
-answer.
-
-Rebuilt every turn, on purpose. The portfolio can change while you talk —
-from another tab, from a PAC catch-up — and a context cached at the first
-question would answer the second one about a portfolio that no longer exists.
-
-The PROVIDER's cache is a different thing and does not undo that. With an
-Anthropic model each round asks it to keep what the round read
-(`_kept_prefixes` says where), and it reuses only bytes identical to what it
-kept: a picture rebuilt over unchanged records is read back (on Opus 5.5, at a
-twentieth of the input price, measured 2026-10-05), and one that changed is
-sent and paid for again, as before.
-
-Model: OPENROUTER_CHAT_MODEL, else OPENROUTER_MODEL, else the app default —
-the same three-line pattern as chain._model_for. The reader can override it
-per conversation from a dropdown, because the two things that pull on the
-choice pull in opposite directions: latency wants small, correctness on money
-wants large. When the failure mode is a wrong number about someone's money,
-the default errs large; the dropdown is the knob for the day latency matters
-more.
+Each model round uses the GitHub Copilot SDK through `app.advisor`. The model is
+`COPILOT_CHAT_MODEL`, then `COPILOT_MODEL`, then the app default; a conversation
+may override it with any model offered to the authenticated Copilot account.
 """
 
 from __future__ import annotations
@@ -122,7 +33,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app import advisor, crud, dated, models, schemas, screen, tools, websearch
+from app import advisor, copilot_provider, crud, dated, models, schemas, screen, tools, websearch
 from app.database import SessionLocal, unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -502,52 +413,45 @@ def system_prompt(model: str) -> str:
 
 # --- The model ---------------------------------------------------------------
 
-# The dropdown. A curated list rather than OpenRouter's own, for two reasons:
-# theirs is a network call the offline boundary would have to hold, and it has
-# three hundred entries with nothing to say about which of them to trust with
-# a question about money. These carry what is KNOWN about each, with the date
-# it was checked, so the reader picks with information rather than a slug. The
-# slugs and figures are the ones verified in .env.example; whatever the
-# environment configures joins the list, so the reader's own choice is always
-# among the options.
-CURATED_MODELS: tuple[tuple[str, str], ...] = (
-    ("anthropic/claude-opus-5.5", "the app's built-in default; 1M context, $4 / $20 per 1M tokens (checked Oct 2026)"),
-    ("anthropic/claude-sonnet-4.6", "1M context, $3 / $15 per 1M tokens (checked Oct 2026)"),
-    ("openai/gpt-6.1-sol-pro", "1.05M context, $2 / $10 per 1M tokens (checked Oct 2026)"),
-    ("qwen/qwen3.8-max-0902", "1M context, $2 / $6 per 1M tokens (checked Oct 2026)"),
-    ("moonshotai/kimi-k3", "1M context, $3 / $15 per 1M tokens (checked Aug 2026)"),
-    ("moonshotai/kimi-k2.6", "about six times cheaper than K3 (checked Aug 2026)"),
-)
+# The Copilot models offered by the authenticated GitHub account. The default
+# is first; configured role models join the list so a local choice is never
+# hidden from the menu.
 
 _ENV_MODELS = (
-    ("OPENROUTER_CHAT_MODEL", "your OPENROUTER_CHAT_MODEL"),
-    ("OPENROUTER_MODEL", "your OPENROUTER_MODEL"),
-    ("OPENROUTER_ANALYST_MODEL", "your analyst model"),
-    ("OPENROUTER_CONFIDANT_MODEL", "your confidant model"),
+    ("COPILOT_CHAT_MODEL", "your COPILOT_CHAT_MODEL"),
+    ("COPILOT_MODEL", "your COPILOT_MODEL"),
+    ("COPILOT_ANALYST_MODEL", "your analyst model"),
+    ("COPILOT_CONFIDANT_MODEL", "your confidant model"),
 )
 
 
 def default_model() -> str:
-    """The chat's own model, falling back through the app default."""
-    return advisor.resolve_model(os.getenv("OPENROUTER_CHAT_MODEL") or None)
+    """The chat's Copilot model, falling back through the app default."""
+    return advisor.resolve_model(os.getenv("COPILOT_CHAT_MODEL") or None)
 
 
 def available_models() -> schemas.ChatModelsRead:
-    """The dropdown: the default first, then the rest, no slug twice."""
+    """Authenticated Copilot models, plus explicit settings, with default first."""
     default = default_model()
     notes: dict[str, str] = {}
     for var, note in _ENV_MODELS:
         slug = os.getenv(var)
         if slug and slug not in notes:
             notes[slug] = note
-    for slug, note in CURATED_MODELS:
-        notes.setdefault(slug, note)
-    notes.setdefault(default, "the configured default")
 
-    ordered = [default, *(s for s in notes if s != default)]
+    try:
+        discovered = copilot_provider.models()
+    except copilot_provider.CopilotError:
+        discovered = ()
+    if discovered:
+        for model in discovered:
+            notes.setdefault(model.id, f"{model.name}; available to your GitHub Copilot account")
+
+    notes.setdefault(default, "the configured default")
+    ordered = [default, *(slug for slug in notes if slug != default)]
     return schemas.ChatModelsRead(
         default=default,
-        models=[schemas.ChatModel(slug=s, note=notes[s]) for s in ordered],
+        models=[schemas.ChatModel(slug=slug, note=notes[slug]) for slug in ordered],
     )
 
 
@@ -1379,31 +1283,9 @@ def _found(found: websearch.Search) -> dict:
     }
 
 
-# Said to the model on the last round that has tools, and on no other. WHERE it
-# is said depends on the model.
-#
-# For most models it is appended to the system prompt rather than pushed into
-# `messages` as a turn of its own: an instruction from the APP belongs where the
-# app's instructions already are, and a system-role message wedged between a
-# tool result and the completion answering it is the one position providers
-# disagree about how to translate.
-#
-# For a model that caches only on request (Anthropic's, see
-# `advisor.caches_on_request`) that place costs the round its cache: the system
-# prompt comes before everything else the round sends again, so changing it
-# makes all of that new. Measured on 2026-10-05 on Opus 5.5, in a paid probe:
-# the same round read nothing from the cache and cost
-# 0.073253 USD with the notice in the system prompt, and read 13,244 tokens and
-# cost 0.0096948 with it at the end. So for those models it goes at the END, as
-# a user message after the round's tool results: not the system-role message
-# the paragraph above avoids, and a shape OpenRouter took to Opus 5.5 that day
-# without a refusal. It speaks of "the reader" in the third person, so it
-# cannot pass for something they said.
-#
-# The offline suite can prove this sentence reaches the model on that round and
-# cannot prove a model heeds it. Nothing here depends on it doing so: the round
-# after this one has no tools at all, so the notice is what turns a hard stop
-# into a warned one, never what enforces it.
+# Said to the model on the last round that has tools, and on no other. The
+# following round has no tools, so this is planning guidance rather than the
+# enforcement mechanism.
 LAST_TOOL_ROUND_NOTICE = (
     "ONE THING ABOUT THIS ROUND. It is your last round with tools. After it "
     "you will be asked once more with none, and whatever you write then is the "
@@ -1422,46 +1304,13 @@ def _asked(
     rounds: int = MAX_COMPLETIONS_PER_TURN,
     warn: bool = True,
 ) -> tuple[str, list[dict]]:
-    """The system prompt and the messages one round is asked with: the turn's
-    own, plus the deadline on the round before the last of `rounds`, where
-    `model` reads it without the round losing its cache (see
-    LAST_TOOL_ROUND_NOTICE). Not when `warn` is false: a turn that answers a
-    card has its own note, which asks for no tools at all, and a deadline
-    saying "propose it NOW" would undo it."""
+    """The prompt and conversation for one bounded Copilot round."""
     system = system_prompt(model)
     if not warn or completion != rounds - 1:
         return system, messages
-    if advisor.caches_on_request(model):
-        return system, [*messages, {"role": "user", "content": LAST_TOOL_ROUND_NOTICE}]
-    return system + "\n\n" + LAST_TOOL_ROUND_NOTICE, messages
+    return system, [*messages, {"role": "user", "content": LAST_TOOL_ROUND_NOTICE}]
 
 
-def _kept_prefixes(messages: list[dict]) -> tuple[int, ...]:
-    """Where a round asks the provider to keep what it read, besides the system
-    prompt and the end of the request, which `advisor.stream_llm` adds itself.
-
-    The picture, the first message: the next turn begins the same way for as
-    long as nothing in the records changes. And the question before the newest
-    one, which closes the part of the conversation the next turn sends again
-    byte for byte. Not the newest question: it goes out with the whole of its
-    screen note (see `_wire`), and the next turn sends it back with its label
-    only, so a marker there would keep a beginning nothing sends twice. That is
-    also why the end-of-request marker alone would carry nothing from one turn
-    to the next.
-
-    The rounds of one turn need none of this: each sends the one before it
-    whole, and the end-of-request marker covers them. Measured on 2026-10-05,
-    in a paid probe: a second turn read the tools, the
-    system prompt and the picture, 11,833 tokens, and a third read 81 more,
-    the earlier question this marker had kept.
-
-    A round that adds more than about twenty blocks (a model asking for ten
-    tools at once) passes the provider's lookback: the next round then reads
-    only up to these markers, and pays for the rest again. Rare enough to say
-    rather than handle."""
-    users = [i for i, m in enumerate(messages) if m["role"] == "user"]
-    before = users[-2] if len(users) > 1 else 0
-    return (0,) if before == 0 else (0, before)
 
 
 # What a turn that broke on a fault of this app's says: an exception nobody
@@ -1658,13 +1507,8 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         # turn: they come first in what a provider caches, so a round whose
         # tools changed would pay for everything it sends again.
         declared = tools.declarations() + tools.web_search(turn.model)
-        # Worked out once, on the conversation as it stands before any tool is
-        # called: every round of the turn begins with it.
-        kept = _kept_prefixes(messages)
         # How many web searches the turn has run, against WEB_SEARCHES_PER_TURN.
         searched = 0
-        # How many messages the round before this one sent.
-        sent = 0
         for completion in range(1, allowed + 1):
             # The last round is asked with no tools, so it can only write. That
             # is the whole of the old error path, deleted rather than caught.
@@ -1674,24 +1518,12 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
             system, asked = _asked(
                 completion, turn.model, messages, rounds=allowed, warn=turn.decision is None
             )
-            # On a question's turn the round before the last reads up to where
-            # the round before it ended, and keeps nothing new (its question,
-            # on a first round). Not on the turn after a decision (see above).
-            kept_to = (
-                max(sent - 1, 0) if turn.decision is None and completion == allowed - 1 else None
-            )
             rounds.append(None)
             for kind, piece in advisor.stream_llm(
                 system,
                 asked,
                 model=turn.model,
                 tools=None if last else declared,
-                # Nothing asked of the round with no tools: everything a
-                # provider caches begins with the tools, so what that round
-                # wrote could be read only by another round without them, and
-                # none follows it.
-                cache_at=None if last else kept,
-                kept_to=kept_to,
             ):
                 if kind == "thought":
                     _say(blocks, "thought", piece)
@@ -1711,7 +1543,6 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     calls.append(piece)
             # Counted before `messages` grows, since `asked` is that same list
             # on a round with no notice.
-            sent = len(asked)
             # `last` and not `not calls` alone: a call arriving on a round
             # that was offered no tools is a model contradicting the request,
             # and running it would spend a fetch on an answer no completion is

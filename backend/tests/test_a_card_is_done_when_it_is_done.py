@@ -1,42 +1,20 @@
 """A card is done when it is done, and the turn after it is short.
 
-The reader's first test round of the chat on real data (2026-10-08) asked for
-two funds and got two cards. The first confirmation was followed by a reply
-that redid the answer's lookups and wrote the answer again; the reply to the
-second failed with OpenRouter's 400 ('Server tool "openrouter:web_search"
-failed: invalid request (400)'), shown as it came, and the second card kept its
-buttons though its row was written: pressing again answered "That card was
-already confirmed. A decision is taken once."
-
-What these tests pin, in that order:
-- the decision is on the stream (`decided`, the card as stored) before the
-  reply, and stands when the reply fails;
-- the turn after a decision ends on the app's note, says what was decided and
-  what still waits, and is asked at most twice;
-- no request the chat sends ends on the model's own words, the shape the 400
-  answered: rebuilt on test data and sent to Opus 5.5 on 2026-10-08, it was
-  refused with or without the web, and cost nothing;
-- a failure from the provider reaches the reader as a sentence: what it
-  means, what to do, and OpenRouter's words last.
-
-Every fund here is invented. The model is faked at `advisor.stream_llm`, or
-at the transport under the real openai client where the sentence is built.
+The decision is emitted on the stream before the model's follow-up. It remains
+final if that follow-up fails, and later turns include the decision without
+ending a model request on the model's own words. Every fund here is invented;
+model calls are faked at `advisor.stream_llm`.
 """
 
 from __future__ import annotations
 
 import json
 
-import httpx
 import pandas as pd
 import pytest
 
 from app import advisor, catalogue, chat, tools
 
-REAL_STREAM_LLM, REAL_CALL_LLM = advisor.stream_llm, advisor.call_llm
-# The analyst's steps ask in rounds since brief AR (`advisor.call_round`).
-REAL_CALL_ROUND = advisor.call_round
-OPUS = "anthropic/claude-opus-5.5"
 
 # Two invented funds, the shape of the reader's request: two cards from one
 # answer.
@@ -64,13 +42,6 @@ WHY = {
     "unknowns": "Invented unknowns.",
 }
 
-# The body OpenRouter answered the reader's second reply with.
-READERS_400 = {
-    "error": {
-        "code": 400,
-        "message": 'Server tool "openrouter:web_search" failed: invalid request (400)',
-    }
-}
 
 
 @pytest.fixture
@@ -164,7 +135,7 @@ def test_the_decision_is_said_before_the_reply_and_stands_when_the_reply_fails(
     assert events[1]["card"]["outcome"] == "confirmed"
     assert events[1]["card"]["result"]["isin"] == FIRST
 
-    _script(monkeypatch, [advisor.AdvisorError("OpenRouter refused the call.")])
+    _script(monkeypatch, [advisor.AdvisorError("GitHub Copilot refused the call.")])
     events = _events(_decide(loaded, second["card_id"]))
     assert _kinds(events) == ["start", "decided", "error"]
     assert events[1]["card"]["card_id"] == second["card_id"]
@@ -183,22 +154,22 @@ def test_the_decision_is_said_before_the_reply_and_stands_when_the_reply_fails(
 
 def test_a_failure_after_the_decision_says_the_decision_is_saved(loaded, monkeypatch):
     _, (first, _) = _two_cards(loaded, monkeypatch)
-    _script(monkeypatch, [advisor.AdvisorError("OpenRouter refused the call.")])
+    _script(monkeypatch, [advisor.AdvisorError("GitHub Copilot refused the call.")])
 
     events = _events(_decide(loaded, first["card_id"]))
 
     assert events[-1]["detail"] == (
-        "OpenRouter refused the call. Your answer to the card is saved: only this "
-        "reply to it is missing."
+        "GitHub Copilot refused the call. Your answer to the card is saved: only "
+        "this reply to it is missing."
     )
 
 
 def test_a_failure_on_a_question_says_nothing_about_a_card(loaded, monkeypatch):
     """A guard: the sentence about a decision belongs to a turn that answers
     one."""
-    _script(monkeypatch, [advisor.AdvisorError("OpenRouter refused the call.")])
+    _script(monkeypatch, [advisor.AdvisorError("GitHub Copilot refused the call.")])
     events = _events(loaded.post("/api/chat", json={"content": "How am I doing?"}))
-    assert events[-1]["detail"] == "OpenRouter refused the call."
+    assert events[-1]["detail"] == "GitHub Copilot refused the call."
 
 
 # --- The turn after a decision ---------------------------------------------------------
@@ -231,9 +202,8 @@ def test_the_turn_after_a_decision_ends_on_the_apps_note(loaded, monkeypatch):
 def test_after_the_second_decision_the_request_ends_on_the_note_not_on_the_models_words(
     loaded, monkeypatch
 ):
-    """The shape OpenRouter refused. After the first card's reply, deciding
-    the second used to send a conversation ending on that reply: the model's
-    own words, last."""
+    """After the first card's reply, the second request must end on app words,
+    not on the model's prior answer."""
     _, (first, second) = _two_cards(loaded, monkeypatch)
     _script(monkeypatch, [[("text", "The first one is on your watchlist.")]])
     _events(_decide(loaded, first["card_id"]))
@@ -329,211 +299,3 @@ def test_no_request_the_chat_sends_ends_on_the_models_own_words(loaded, monkeypa
     assert "assistant" not in _last_roles(asked)
 
 
-# --- A provider failure, said in words ---------------------------------------------------
-
-
-@pytest.fixture
-def openrouter(monkeypatch):
-    """The real client over a transport answering with `openrouter.answer`, a
-    (status, body) pair, or raising `openrouter.raises`; the public list of
-    models holding the model asked, so a 400 is not taken for a model gone."""
-
-    class Fake:
-        answer: tuple = (400, READERS_400)
-        raises: Exception | None = None
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if Fake.raises is not None:
-            raise Fake.raises
-        status, body = Fake.answer
-        return httpx.Response(status, json=body)
-
-    def client():
-        return advisor.sdk().OpenAI(
-            base_url=advisor.OPENROUTER_BASE_URL,
-            api_key="invalid",
-            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-            max_retries=0,
-        )
-
-    monkeypatch.setattr(advisor, "stream_llm", REAL_STREAM_LLM)
-    monkeypatch.setattr(advisor, "call_llm", REAL_CALL_LLM)
-    monkeypatch.setattr(advisor, "call_round", REAL_CALL_ROUND)
-    monkeypatch.setattr(advisor, "_client", client)
-    monkeypatch.setattr(advisor, "_fetch_model_list", lambda: {OPUS})
-    monkeypatch.setenv("OPENROUTER_CHAT_MODEL", OPUS)
-    return Fake
-
-
-def _reads_as_words(sentence: str) -> None:
-    # chr(0x2014) is the em dash, kept out of the source so a count of dashes
-    # in this repository does not find the test that forbids them.
-    for raw in ("{", "}", "Error code", "AdvisorError", "LLM call failed", chr(0x2014)):
-        assert raw not in sentence, f"{raw!r} in: {sentence}"
-
-
-def _streamed_error(model: str = OPUS) -> None:
-    """Ask the real `stream_llm` once; the caller expects it to raise."""
-    pieces = list(REAL_STREAM_LLM("system", [{"role": "user", "content": "hi"}], model=model))
-    raise AssertionError(f"no failure, the stream gave {pieces}")
-
-
-def test_the_readers_400_reads_as_a_sentence_with_what_to_do(loaded, monkeypatch, openrouter):
-    """The reader's own failure, on the turn after a decision: what it means,
-    what they can do, OpenRouter's words last, and that the decision stands."""
-    _, (first, _) = _two_cards(loaded, monkeypatch)
-    monkeypatch.setattr(advisor, "stream_llm", REAL_STREAM_LLM)
-
-    events = _events(_decide(loaded, first["card_id"]))
-
-    assert _kinds(events) == ["start", "decided", "error"]
-    assert events[-1]["detail"] == (
-        f"OpenRouter refused the call to {OPUS} with 400: the request the app built "
-        "is not one it accepts, which is the app's fault and not your question's. "
-        "Ask again; if it happens again, pick another model in the menu under the "
-        'question. OpenRouter said: Server tool "openrouter:web_search" failed: '
-        "invalid request (400). Your answer to the card is saved: only this reply to "
-        "it is missing."
-    )
-    _reads_as_words(events[-1]["detail"])
-
-
-@pytest.mark.parametrize(
-    ("status", "means", "remedy"),
-    [
-        (
-            401,
-            "it does not accept the API key in backend/.env (OPENROUTER_API_KEY)",
-            "Check the key on openrouter.ai, put the right one in backend/.env, and start the app again.",
-        ),
-        (
-            # A 402 that names no source (brief AP): the key or its account, and
-            # where to act on either.
-            402,
-            "the API key or the account behind it does not have the credit this request needs",
-            "Add credit, or raise the key's limit, on openrouter.ai (Settings, Credits or Keys), "
-            "then ask again.",
-        ),
-        (
-            403,
-            "a moderation flag, a guardrail or a permission on the key stopped it",
-            "Rephrase it, or pick another model in the menu under the question.",
-        ),
-        (408, "the model took too long to answer", "Ask again in a moment."),
-        (
-            429,
-            "too many requests are reaching it or the model's provider right now",
-            "Wait a minute, then ask again.",
-        ),
-        (
-            502,
-            "the model is down, or sent back something OpenRouter could not read",
-            "Ask again in a few minutes, or pick another model in the menu under the question.",
-        ),
-        (
-            503,
-            "no provider can serve this model right now",
-            "Ask again in a few minutes, or pick another model in the menu under the question.",
-        ),
-    ],
-)
-def test_each_status_openrouter_documents_says_what_it_means_and_what_to_do(
-    openrouter, status, means, remedy
-):
-    openrouter.answer = (status, {"error": {"code": status, "message": "Invented words."}})
-
-    with pytest.raises(advisor.AdvisorError) as failed:
-        _streamed_error()
-
-    assert str(failed.value) == (
-        f"OpenRouter refused the call to {OPUS} with {status}: {means}. {remedy} "
-        "OpenRouter said: Invented words."
-    )
-    _reads_as_words(str(failed.value))
-
-
-def test_a_status_it_does_not_document_still_says_what_to_do(openrouter):
-    openrouter.answer = (418, {"error": {"code": 418, "message": "Invented words."}})
-
-    with pytest.raises(advisor.AdvisorError) as failed:
-        _streamed_error()
-
-    assert str(failed.value) == (
-        f"OpenRouter refused the call to {OPUS} with 418. Ask again; if it happens "
-        "again, pick another model in the menu under the question. OpenRouter said: "
-        "Invented words."
-    )
-
-
-def test_the_analysis_is_told_where_its_model_is_set(openrouter):
-    """The analysis has no menu: its models are named in backend/.env."""
-    openrouter.answer = (503, {"error": {"code": 503, "message": "Invented words."}})
-
-    with pytest.raises(advisor.AdvisorError) as failed:
-        REAL_CALL_LLM("system", "user", model=OPUS)
-
-    assert "Ask again in a few minutes, or set another model in backend/.env." in str(failed.value)
-
-
-def test_no_connection_says_to_check_the_computer_is_online(openrouter):
-    openrouter.raises = httpx.ConnectError("no route to host")
-
-    with pytest.raises(advisor.AdvisorError) as failed:
-        _streamed_error()
-
-    said = str(failed.value)
-    assert said.startswith("OpenRouter could not be reached (")
-    assert said.endswith("Check that this computer is online, then ask again.")
-    _reads_as_words(said)
-
-
-def test_a_timeout_says_to_ask_again(openrouter):
-    openrouter.raises = httpx.ReadTimeout("timed out")
-
-    with pytest.raises(advisor.AdvisorError) as failed:
-        _streamed_error()
-
-    said = str(failed.value)
-    assert said.startswith("OpenRouter did not answer in time (")
-    assert said.endswith("Ask again in a moment.")
-
-
-def test_a_stream_that_breaks_midway_says_so(openrouter, monkeypatch):
-    """A connection that drops after the answer started: the words already
-    shown stay, and the sentence says what happened and what to do."""
-
-    class Breaking(httpx.SyncByteStream):
-        def __iter__(self):
-            chunk = {
-                "id": "gen-test",
-                "object": "chat.completion.chunk",
-                "created": 1,
-                "model": OPUS,
-                "choices": [{"index": 0, "delta": {"content": "Hel"}, "finish_reason": None}],
-            }
-            yield f"data: {json.dumps(chunk)}\n\n".encode()
-            raise httpx.ReadError("connection reset")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, stream=Breaking(), headers={"content-type": "text/event-stream"})
-
-    monkeypatch.setattr(
-        advisor,
-        "_client",
-        lambda: advisor.sdk().OpenAI(
-            base_url=advisor.OPENROUTER_BASE_URL,
-            api_key="invalid",
-            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-            max_retries=0,
-        ),
-    )
-    pieces: list = []
-    with pytest.raises(advisor.AdvisorError) as failed:
-        for piece in REAL_STREAM_LLM("system", [{"role": "user", "content": "hi"}], model=OPUS):
-            pieces.append(piece)
-
-    assert pieces == [("text", "Hel")]
-    said = str(failed.value)
-    assert said.startswith("The connection to OpenRouter broke while the answer was being written (")
-    assert said.endswith("Ask again.")
-    _reads_as_words(said)

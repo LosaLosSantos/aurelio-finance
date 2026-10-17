@@ -1,22 +1,10 @@
 """The chat that reads, writes by proposing, and orchestrates the analyzer.
 
-Streamed answers over the whole picture, stored as they ended; the tools it may
-consult on the way; and the one card whose confirmation is a minute of model
-calls reported step by step down the panel.
-
-Every model call is faked at `advisor.stream_llm`, the boundary conftest
-refuses by default. Nothing here reaches OpenRouter, and that matters more
-than it did: a turn that calls a tool is TWO completions, so a fake that
-covers only the first one has already paid for the second. The fakes below are
-scripted per round for exactly that reason, and a round past the script is an
-AssertionError rather than a replay — "the loop terminates" is then asserted by
-construction and not by counting calls afterwards.
-
-The two tests that exercise the real `stream_llm` do so against a fake SDK
-client: one is about what the generator does when the reader leaves, which
-decides whether an abandoned answer keeps billing, and the other is about
-assembling a tool call out of the fragments it arrives in, which is the one
-piece of protocol this app implements itself.
+Streamed answers cover the current financial picture and are stored with their
+terminal state. Tools may supply bounded reads; writes become proposal cards.
+Every model call is faked at `advisor.stream_llm`, and the shared offline
+fixture refuses any omitted Copilot boundary fake. Tool-using turns are
+scripted round by round so an accidental extra completion fails immediately.
 """
 
 from __future__ import annotations
@@ -141,62 +129,8 @@ def test_a_broken_stream_ends_in_an_error_not_a_quiet_done(client, monkeypatch):
     assert "connection reset" in events[-1]["detail"]
 
 
-def test_a_missing_key_is_an_error_event_and_reaches_no_network(client, monkeypatch):
-    """The genuine stream_llm, with no key: it must refuse before it would
-    ever build a client, and the refusal must reach the reader as words. The
-    offline boundary is not what stops it here — the key check comes first,
-    which is what this test is standing on."""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(advisor, "stream_llm", _REAL_STREAM_LLM)
-    events = _events(_ask(client, "hi"))
-    assert _kinds(events) == ["start", "error"]
-    assert "OPENROUTER_API_KEY" in events[-1]["detail"]
 
 
-def test_leaving_mid_answer_closes_the_upstream_stream(monkeypatch):
-    """Closing the generator early must close the SDK stream — that is the
-    socket OpenRouter bills against. Starlette closes the generator when the
-    browser disconnects; this is the half that turns that into a closed
-    connection rather than a thread reading an answer nobody will see."""
-    state = {"closed": False, "read": 0}
-
-    class FakeChunk:
-        # tool_calls is None on every chunk of a plain answer, and it is here
-        # because a real ChoiceDelta always carries the attribute. A fake that
-        # leaves it off is not standing in for the object it claims to.
-        def __init__(self, text):
-            delta = type("Delta", (), {"content": text, "tool_calls": None})()
-            self.choices = [type("Choice", (), {"delta": delta})()]
-
-    class FakeStream:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            state["closed"] = True
-
-        def __iter__(self):
-            for text in ("a", "b", "c", "d"):
-                state["read"] += 1
-                yield FakeChunk(text)
-
-    class FakeCompletions:
-        def create(self, **kwargs):
-            assert kwargs["stream"] is True
-            return FakeStream()
-
-    class FakeClient:
-        chat = type("Chat", (), {"completions": FakeCompletions()})()
-
-    monkeypatch.setenv("OPENROUTER_API_KEY", "not-a-real-key")
-    monkeypatch.setattr(advisor, "_client", lambda: FakeClient())
-
-    gen = _REAL_STREAM_LLM("system", [{"role": "user", "content": "hi"}], model="m")
-    assert next(gen) == ("text", "a")
-    gen.close()  # the reader left
-
-    assert state["closed"], "the upstream stream was not closed"
-    assert state["read"] == 1, "kept reading an answer nobody will see"
 
 
 def test_the_models_reasoning_streams_as_thoughts_and_is_kept_folded(client, monkeypatch):
@@ -475,33 +409,45 @@ def test_the_system_prompt_carries_the_two_rules(client):
 
 
 def test_the_chat_model_is_the_request_then_the_env_then_the_app_default(client, monkeypatch):
-    monkeypatch.delenv("OPENROUTER_CHAT_MODEL", raising=False)
-    monkeypatch.setenv("OPENROUTER_MODEL", "app/default")
+    monkeypatch.delenv("COPILOT_CHAT_MODEL", raising=False)
+    monkeypatch.setenv("COPILOT_MODEL", "gpt-5.4")
     seen = _fake_stream(monkeypatch)
 
     _ask(client, "hi")
-    assert seen[-1]["model"] == "app/default"
+    assert seen[-1]["model"] == "gpt-5.4"
 
-    monkeypatch.setenv("OPENROUTER_CHAT_MODEL", "chat/model")
+    monkeypatch.setenv("COPILOT_CHAT_MODEL", "claude-sonnet-5.5")
     _ask(client, "hi")
-    assert seen[-1]["model"] == "chat/model"
+    assert seen[-1]["model"] == "claude-sonnet-5.5"
 
-    r = _ask(client, "hi", model="picked/model")
-    assert seen[-1]["model"] == "picked/model"
+    r = _ask(client, "hi", model="gpt-6.1-sol")
+    assert seen[-1]["model"] == "gpt-6.1-sol"
     done = _events(r)[-1]
-    assert done["kind"] == "done" and done["model"] == "picked/model"
+    assert done["kind"] == "done" and done["model"] == "gpt-6.1-sol"
 
 
-def test_the_dropdown_puts_the_default_first_and_lists_no_slug_twice(client, monkeypatch):
-    monkeypatch.setenv("OPENROUTER_CHAT_MODEL", "moonshotai/kimi-k2.6")
-    monkeypatch.setenv("OPENROUTER_ANALYST_MODEL", "moonshotai/kimi-k3")
+def test_the_dropdown_lists_every_account_model_once_with_the_default_first(
+    client, monkeypatch
+):
+    monkeypatch.setenv("COPILOT_CHAT_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("COPILOT_ANALYST_MODEL", "gpt-6.1-sol")
+    monkeypatch.setattr(
+        chat.copilot_provider,
+        "models",
+        lambda: (
+            chat.copilot_provider.Model("gpt-5.4-mini", "GPT 5.4 Mini"),
+            chat.copilot_provider.Model("claude-sonnet-5.5", "Claude Sonnet 5.5"),
+            chat.copilot_provider.Model("account-only-model", "Account Only"),
+        ),
+    )
+
     body = client.get("/api/chat/models").json()
-    slugs = [m["slug"] for m in body["models"]]
-    assert body["default"] == "moonshotai/kimi-k2.6"
-    assert slugs[0] == "moonshotai/kimi-k2.6"
+    slugs = [model["slug"] for model in body["models"]]
+    assert body["default"] == "gpt-5.4-mini"
+    assert slugs[0] == "gpt-5.4-mini"
     assert len(slugs) == len(set(slugs))
-    assert "moonshotai/kimi-k3" in slugs and "anthropic/claude-sonnet-4.6" in slugs
-    assert all(m["note"] for m in body["models"])
+    assert {"gpt-6.1-sol", "claude-sonnet-5.5", "account-only-model"} <= set(slugs)
+    assert all(model["note"] for model in body["models"])
 
 
 def test_an_empty_question_is_refused_before_anything_is_stored(client, monkeypatch):
@@ -669,58 +615,28 @@ def test_a_model_that_only_ever_asks_for_tools_is_stopped_without_an_error(
     assert all(r["tools"] for r in seen[:-1]), "every earlier round has them"
 
 
-@pytest.mark.parametrize(
-    "model, where",
-    [
-        # Anthropic's: after the round's tool results, where it does not cost
-        # the round its cache (LAST_TOOL_ROUND_NOTICE says why, with figures).
-        ("anthropic/claude-opus-5.5", "last message"),
-        # Every other model: in the system prompt, as it always was.
-        ("qwen/qwen3.8-max-0902", "system prompt"),
-    ],
-)
+@pytest.mark.parametrize("model", ["claude-opus-5.5", "gpt-5.4"])
 def test_the_last_round_is_offered_no_tools_and_the_one_before_is_told_so(
-    client, monkeypatch, model, where
+    client, monkeypatch, model
 ):
-    """The deadline, in the two places it lives.
-
-    `tools=None` on the final completion is what makes "ran out of rounds"
-    unrepresentable: `stream_llm` omits the field entirely for a falsy list, so
-    the model is not offered something it would get no answer to.
-
-    THE NOTICE IS PROSE AND THIS SUITE CANNOT JUDGE WHETHER A MODEL HEEDS IT,
-    the same way `test_a_request_for_a_recommendation_...` cannot judge whether
-    a model decides to suggest anything. What is asserted is delivery: the
-    sentence reaches the model on the second-to-last round and on no other.
-    Whether it then proposes early is a question for a live model, asked by
-    hand. Nothing depends on the answer — the round after it has no tools
-    regardless, so the notice removes a surprise and never enforces a thing.
-
-    Where it reaches the model depends on the model: at the end of the round
-    for one that caches only on request, in the system prompt for the rest.
-    """
+    """The deadline reaches every Copilot model as the final conversation item."""
     rounds = chat.MAX_COMPLETIONS_PER_TURN
     seen = _fake_stream(
         monkeypatch,
-        rounds=[[_wants("get_look_through")]] * (rounds - 1) + [[("text", "Here is what I have.")]],
+        rounds=[[_wants("get_look_through")]] * (rounds - 1)
+        + [[("text", "Here is what I have.")]],
     )
     _ask(client, "keep looking", model=model)
 
-    def told(r: dict) -> dict:
-        return {
-            "system prompt": chat.LAST_TOOL_ROUND_NOTICE in r["system"],
-            "last message": r["messages"][-1]
-            == {"role": "user", "content": chat.LAST_TOOL_ROUND_NOTICE},
-        }
-
-    carried = [n for n, r in enumerate(seen, 1) if any(told(r).values())]
-    assert carried == [rounds - 1], "told once, on the last round that can act on it"
-    assert told(seen[rounds - 2]) == {
-        "system prompt": where == "system prompt",
-        "last message": where == "last message",
-    }
-    assert "last round with tools" in chat.LAST_TOOL_ROUND_NOTICE
-    assert seen[rounds - 2]["tools"], "and that round still has them"
+    carried = [
+        n
+        for n, request in enumerate(seen, 1)
+        if request["messages"][-1]
+        == {"role": "user", "content": chat.LAST_TOOL_ROUND_NOTICE}
+    ]
+    assert carried == [rounds - 1]
+    assert seen[rounds - 2]["tools"]
+    assert seen[-1]["tools"] is None
 
 
 def test_a_turn_that_calls_nothing_is_still_one_round_trip(client, monkeypatch):
@@ -829,98 +745,31 @@ def test_the_look_through_says_what_it_could_not_look_inside(client):
     assert any("UNKNOWN, not empty" in line for line in result["reading"])
 
 
-def test_a_tool_call_is_assembled_from_the_fragments_it_arrived_in(monkeypatch):
-    """The one piece of the protocol this app implements itself. The name
-    arrives once and the arguments a few characters at a time, tied together
-    only by `index`; every fragment after the first carries None where the id
-    and the name were, and copying those across would erase them. Two calls
-    interleave, which is why the accumulator is keyed and not a running
-    string."""
-
-    def fragment(index, call_id=None, name=None, arguments=None):
-        function = type("Fn", (), {"name": name, "arguments": arguments})()
-        return type("Frag", (), {"index": index, "id": call_id, "function": function})()
-
-    class FakeChunk:
-        # A round that asks for tools ends on `tool_calls`, said by its last
-        # chunk; a stream that never says how it ended is refused as unfinished.
-        def __init__(self, *fragments, finish_reason=None):
-            delta = type("Delta", (), {"content": None, "tool_calls": list(fragments)})()
-            self.choices = [
-                type("Choice", (), {"delta": delta, "finish_reason": finish_reason})()
-            ]
-
-    chunks = [
-        FakeChunk(fragment(0, call_id="call_a", name="get_look_through", arguments="")),
-        FakeChunk(fragment(1, call_id="call_b", name="other", arguments='{"a"')),
-        FakeChunk(fragment(0, arguments='{"refr')),
-        FakeChunk(fragment(1, arguments=": 1}")),
-        FakeChunk(fragment(0, arguments='esh": true}'), finish_reason="tool_calls"),
-    ]
-
-    class FakeStream:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def __iter__(self):
-            return iter(chunks)
-
-    class FakeCompletions:
-        def create(self, **kwargs):
-            assert kwargs["tools"] == [{"a": 1}], "the tools travel to the API"
-            return FakeStream()
-
-    class FakeClient:
-        chat = type("Chat", (), {"completions": FakeCompletions()})()
-
-    monkeypatch.setenv("OPENROUTER_API_KEY", "not-a-real-key")
-    monkeypatch.setattr(advisor, "_client", lambda: FakeClient())
-
-    pieces = list(
-        _REAL_STREAM_LLM("system", [{"role": "user", "content": "hi"}], tools=[{"a": 1}])
-    )
-    assert pieces == [
-        ("tool_call", advisor.ToolCall("call_a", "get_look_through", '{"refresh": true}')),
-        ("tool_call", advisor.ToolCall("call_b", "other", '{"a": 1}')),
-    ]
 
 
 def test_a_turn_that_only_asked_for_a_tool_is_not_an_empty_response(monkeypatch):
-    """A turn that calls a tool writes no content at all, and "the model
-    returned an empty response" is exactly what an unfixed emptiness check
-    would say about every one of them — an error on the one path the whole step
-    exists to open."""
+    """A terminal Copilot tool request is a valid round even with no text."""
+    request = advisor.copilot_provider.ToolRequest("call_1", "get_look_through", "{}")
+    usage = advisor.copilot_provider.Usage(input_tokens=10, cached_tokens=0)
+    monkeypatch.setattr(
+        advisor.copilot_provider,
+        "stream",
+        lambda *args, **kwargs: iter((("tool_call", request), ("usage", usage))),
+    )
 
-    class FakeChunk:
-        def __init__(self):
-            fn = type("Fn", (), {"name": "get_look_through", "arguments": "{}"})()
-            frag = type("Frag", (), {"index": 0, "id": "call_1", "function": fn})()
-            delta = type("Delta", (), {"content": None, "tool_calls": [frag]})()
-            self.choices = [type("Choice", (), {"delta": delta, "finish_reason": "tool_calls"})()]
-
-    class FakeStream:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def __iter__(self):
-            return iter([FakeChunk()])
-
-    class FakeClient:
-        chat = type(
-            "Chat", (), {"completions": type("C", (), {"create": lambda self, **k: FakeStream()})()}
-        )()
-
-    monkeypatch.setenv("OPENROUTER_API_KEY", "not-a-real-key")
-    monkeypatch.setattr(advisor, "_client", lambda: FakeClient())
-
-    kinds = [k for k, _ in _REAL_STREAM_LLM("system", [{"role": "user", "content": "hi"}])]
-    assert kinds == ["tool_call"]
+    pieces = list(
+        _REAL_STREAM_LLM(
+            "system",
+            [{"role": "user", "content": "hi"}],
+            model="gpt-5.4-mini",
+            tools=tools.declarations(),
+        )
+    )
+    assert pieces[0] == (
+        "tool_call",
+        advisor.ToolCall("call_1", "get_look_through", "{}"),
+    )
+    assert pieces[1][0] == "usage"
 
 
 # --- Propose, confirm, resume -------------------------------------------------
@@ -1356,7 +1205,7 @@ def test_a_request_for_a_recommendation_searches_then_ends_on_a_card(client, mon
     NOTHING about whether a real model, reading the prompt, decides to make
     that call — that is a question about a live model and it is asked by hand,
     outside this suite, because the `offline` fixture means no test may ask
-    OpenRouter anything. Nobody should ever read a green here as the model
+    GitHub Copilot anything. Nobody should ever read a green here as the model
     complying.
     """
     monkeypatch.setattr(catalogue, "_fetch_overview", lambda: _SMALL_CAP_CATALOGUE)

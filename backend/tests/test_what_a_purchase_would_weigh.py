@@ -281,7 +281,7 @@ def test_every_figure_travels_with_what_it_means(held):
 
 
 def test_every_model_is_told_how_much_is_not_its_to_work_out():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("anthropic/claude-opus-5.5")):
+    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
         assert "`size_purchase` reads from their records the figures an amount stands on" in prompt
         assert "never work out a reserve, what is left after their commitments" in prompt
         assert "what a goal needs or lacks, or a weight yourself" in prompt

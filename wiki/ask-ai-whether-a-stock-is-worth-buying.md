@@ -110,8 +110,8 @@ answers, where the model's own arithmetic had given 631 and 650. Three cards car
 within what the records allowed, and oil drew none, every oil product in the catalogue being
 swap based. The web was searched for the share and for gold, every claim with its link.
 
-Such a question costs $0.067 to $0.24, searches included. See
-[How much does an AI financial advisor cost?](how-much-does-an-ai-financial-advisor-cost.md).
+This path uses multiple Copilot requests when it needs tools or web retrieval. See
+[GitHub Copilot usage in Aurelio](github-copilot-usage.md).
 
 ## Questions
 

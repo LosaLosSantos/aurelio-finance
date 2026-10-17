@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from app import chat, tools
 
-OPUS = "anthropic/claude-opus-5.5"
+OPUS = "claude-opus-5.5"
 EVALUATION = (
     "When they ask whether something is worth buying for them, and how much, answer it as "
     "one evaluation, in this order. What it is, read and never recalled: for a fund, what the "
@@ -49,5 +49,5 @@ def test_a_model_offered_the_web_is_told_to_search_what_the_instrument_is_doing(
     them, since they go out on every turn."""
     (declared,) = tools.web_search(OPUS)
     assert SEARCH_IT in declared["function"]["description"]
-    assert tools.web_search("qwen/qwen3.8-max-0902") == []
+    assert tools.web_search("unsupported-model") == []
     assert len(chat.WEB_RULES) < 1000

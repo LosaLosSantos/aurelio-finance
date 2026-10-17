@@ -38,7 +38,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, event  # noqa: E402
 from sqlalchemy.exc import OperationalError  # noqa: E402
 
-from app import advisor, catalogue, composition, database, fx, issuers, prices  # noqa: E402
+from app import (  # noqa: E402
+    advisor, catalogue, composition, copilot_provider, database, fx, issuers, prices,
+)
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -165,15 +167,11 @@ _NETWORK_BOUNDARY = {
     issuers: ("fetch", "fetch_ishares", "fetch_vanguard"),
     fx: ("_fetch_rates",),
     catalogue: ("_fetch_overview",),
-    # The LLM is a network call like any other, and the only one with a key
-    # attached: a test that forgets to fake it spends real money against the
-    # real account. chain.py goes through call_llm, and its analyst's steps,
-    # which look things up, through call_round (brief AR); the chat goes
-    # through its streaming sibling, which is easier to reach by accident - a
-    # test that only checks the first event has already paid for the whole
-    # answer. The public model list, asked after a refusal, carries no key but
-    # is a call all the same.
-    advisor: ("call_llm", "call_round", "stream_llm", "_fetch_model_list"),
+    # Copilot model calls are network calls backed by the signed-in GitHub
+    # account. Every test must replace the synchronous application boundary so
+    # an omitted fake cannot consume subscription quota.
+    advisor: ("call_llm", "call_round", "stream_llm"),
+    copilot_provider: ("models", "complete", "stream", "search_web"),
 }
 
 
@@ -188,14 +186,13 @@ def script_the_chain(monkeypatch, fake) -> None:
     sent (the role's own, its tools' rules after it for the analyst's steps),
     the step's question and the model, as it always did."""
 
-    def call_round(system_prompt, messages, model=None, tools=None, kept_to=None):
+    def call_round(system_prompt, messages, model=None, tools=None):
         got = fake(system_prompt, messages[0]["content"], model)
         return advisor.Round(
             content=got["analysis"],
             calls=(),
             usage=advisor.Usage(prompt_tokens=None, cached_tokens=None, cost=got.get("cost")),
             model=got.get("model"),
-            asked_again=got.get("asked_again"),
         )
 
     monkeypatch.setattr(advisor, "call_llm", fake)

@@ -21,7 +21,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-# Load backend/.env (if present) so secrets/config like OPENROUTER_API_KEY and
+# Load backend/.env (if present) so settings such as COPILOT_MODEL and
 # DATABASE_URL are available via os.getenv. Defensive: works even if the
 # python-dotenv package is not installed.
 try:

@@ -24,7 +24,7 @@ import pytest
 
 from app import advisor, chat, tools
 
-OPUS = "anthropic/claude-opus-5.5"
+OPUS = "claude-opus-5.5"
 PROMPTS = [chat.system_prompt(OPUS), chat.SYSTEM_PROMPT]
 
 

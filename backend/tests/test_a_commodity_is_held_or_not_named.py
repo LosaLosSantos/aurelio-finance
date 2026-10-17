@@ -89,7 +89,7 @@ def test_a_future_is_still_no_card(loaded, monkeypatch):
 
 
 def test_every_model_is_told_a_commodity_is_held_or_not_named():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("anthropic/claude-opus-5.5")):
+    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
         assert (
             "A commodity (gold, silver, oil, wheat) is named for buying only through a product "
             "the catalogue lists that holds it, which its replication says ('Physically backed')"

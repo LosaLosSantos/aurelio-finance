@@ -4,8 +4,8 @@
 
 **Aurelio** is a wealth-management and financial-planning app that runs on your
 own computer, with an AI advisor you can talk to. Your records are kept on your
-machine. The AI part is optional: it goes through
-[OpenRouter](https://openrouter.ai) with your own key.
+machine. The AI part is optional: model calls use the GitHub Copilot account
+authenticated on this machine.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/LosaLosSantos/aurelio-finance/main/docs/banner-dark.gif">
@@ -73,28 +73,25 @@ underneath. Guides, and how each number is worked out, are in the
 [ETF overlap and portfolio X-ray](https://github.com/LosaLosSantos/aurelio-finance/wiki/etf-overlap-and-portfolio-x-ray),
 [accumulating vs distributing ETFs](https://github.com/LosaLosSantos/aurelio-finance/wiki/accumulating-vs-distributing-etf),
 [how many months of emergency fund](https://github.com/LosaLosSantos/aurelio-finance/wiki/how-many-months-of-emergency-fund-do-you-need)
-and [what an AI financial advisor costs](https://github.com/LosaLosSantos/aurelio-finance/wiki/how-much-does-an-ai-financial-advisor-cost).
+and [how Aurelio uses GitHub Copilot](https://github.com/LosaLosSantos/aurelio-finance/wiki/github-copilot-usage).
 
 ## The AI part
 
-1. Create an account at <https://openrouter.ai>, add credit, and create a key at
-   <https://openrouter.ai/keys>.
-2. Copy `backend/.env.example` to `backend/.env` and set `OPENROUTER_API_KEY`.
+1. Install GitHub Copilot CLI and sign in: `copilot login`.
+2. Run `copilot --banner` once and accept GitHub's terms if prompted.
+3. Copy `backend/.env.example` to `backend/.env` only if you want to override
+   the default models.
 
-The default model is Claude Opus 5.5 ($4 per million input tokens, $20 per
-million output tokens); you can pick another in the chat. What it cost,
-measured in October 2026 (the chat's rows on 11 and 12 October, an analysis on
-12 October, a web search on 9 October, on a test database):
+The default is `claude-opus-5.5`. The chat model and the analysis roles can be
+changed independently. Aurelio discovers the models available to the signed-in
+Copilot account, so the chat menu reflects that account rather than a hard-coded
+provider catalogue.
 
-| | cost |
-|---|---|
-| A first question that drew a card, answered in one round | $0.11 to $0.12 |
-| A follow-up, answered in one round | $0.021 |
-| A follow-up that drew a card, answered in one round | $0.012 to $0.022 |
-| Confirming a card, with the reply after it | $0.014 to $0.049 |
-| Whether something is worth buying, and how much, in two or three rounds, its searches included | $0.067 to $0.24 |
-| Each web search, on top of the round that asked for it | $0.0073 to $0.0075 |
-| An analysis, its lookups included | $0.64 |
+Model prompts include the financial records needed to answer the question.
+Those prompts leave this machine and are processed by GitHub Copilot and its
+model providers under the terms of the signed-in account. Copilot subscription
+usage is not a dollar price, so Aurelio records token usage but leaves its
+historical USD cost fields empty for Copilot-backed calls.
 
 ## Development
 

@@ -2797,10 +2797,9 @@ class ChatSourcesBlock(BaseModel):
 
     Provenance, for the reason a `ChatToolBlock` is kept: an answer that says
     "Vanguard gives 0.03%" got that from somewhere, and the reader is owed the
-    page. These are what the search RETURNED (the app's search, on Exa through
-    OpenRouter, hands back every page it found, five a search), so they are
-    the pages the model was given to read, not a claim about which of them it
-    used; the sentence that uses one carries its link.
+    page. These are what the app's bounded Copilot web retrieval returned, so
+    they are the pages the model was given to read, not a claim about which of
+    them it used; the sentence that uses one carries its link.
 
     The query since brief AM (2026-10-09): the app runs each search itself, so
     it knows the query it sent, and the reader is shown it above the pages:
@@ -2946,7 +2945,7 @@ class ChatRequest(BaseModel):
     content: str = Field(..., min_length=1)
     model: str | None = Field(
         default=None,
-        description="OpenRouter slug; empty means the configured chat default",
+        description="GitHub Copilot model id; empty means the configured chat default",
     )
     page: ChatPage | None = Field(
         default=None,
@@ -3184,7 +3183,7 @@ class ChatCardDecision(BaseModel):
     decision: Literal["confirm", "reject"]
     model: str | None = Field(
         default=None,
-        description="OpenRouter slug for the follow-up; empty means the chat default",
+        description="GitHub Copilot model id for the follow-up; empty means the chat default",
     )
 
 

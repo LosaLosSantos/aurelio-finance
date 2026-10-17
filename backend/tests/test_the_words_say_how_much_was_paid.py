@@ -121,7 +121,7 @@ def test_a_book_all_paid_is_still_what_was_paid(client):
 
 
 def test_the_chat_is_told_how_to_read_a_book_partly_paid():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("anthropic/claude-opus-5.5")):
+    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
         assert "'book' is what was paid where a cost is on record and a situation's value where it is not" in prompt
         assert "'COST PARTLY PAID' says how much of a book was paid" in prompt
         assert "'book' is what was paid, 'market'" not in prompt

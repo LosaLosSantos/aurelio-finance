@@ -139,8 +139,8 @@ export default function Profile() {
         <h2 className="text-lg font-semibold text-ink">Profile &amp; goals</h2>
         <p className="text-sm text-ink-soft">
           A short questionnaire that gives Aurelio your context. Saved on your
-          machine; sent to the AI model through OpenRouter when you run an
-          analysis or ask the chat.
+          machine; sent to GitHub Copilot and its model providers when you run
+          an analysis or ask the chat.
         </p>
       </div>
 

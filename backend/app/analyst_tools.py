@@ -430,19 +430,15 @@ def _search_description(searches: int) -> str:
 
 
 def declarations(model: str, searches: int) -> list[dict]:
-    """Every tool of the analysis as the API's `tools=` wants it, the web search
-    for Anthropic's models only (as `tools.web_search` offers it to the chat),
-    told how many searches a step may run. Fixed for a model, so the tools
-    never change inside the prefix a provider caches between a step's rounds."""
-    sdk = advisor.sdk()
+    """Every read-only analyst tool, plus bounded web search when supported."""
     declared = [
-        sdk.pydantic_function_tool(t.arguments, name=t.name, description=t.description)
+        tools._declaration(t.name, t.description, t.arguments)
         for t in REGISTRY.values()
     ]
     if tools.web_search(model):
         declared.append(
-            sdk.pydantic_function_tool(
-                tools.SearchWebArgs, name=SEARCH_WEB, description=_search_description(searches)
+            tools._declaration(
+                SEARCH_WEB, _search_description(searches), tools.SearchWebArgs
             )
         )
     return declared

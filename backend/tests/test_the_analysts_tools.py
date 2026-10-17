@@ -292,13 +292,13 @@ def test_a_tool_the_analysis_is_not_offered_runs_nothing(records, monkeypatch, n
         "get_look_through, catalogue_same_index, instrument_facts, weigh_change, search_web.")}
 
 
-def test_the_web_is_declared_for_anthropics_models_only():
+def test_the_web_is_declared_for_supported_copilot_models():
     names = lambda model: [d["function"]["name"] for d in analyst_tools.declarations(model, 3)]  # noqa: E731
-    assert names("anthropic/claude-opus-5.5") == [
+    assert names("claude-opus-5.5") == [
         "get_look_through", "catalogue_same_index", "instrument_facts", "weigh_change", "search_web"]
-    assert names("qwen/qwen3.8-max-0902") == [
+    assert names("unsupported-model") == [
         "get_look_through", "catalogue_same_index", "instrument_facts", "weigh_change"]
-    (web,) = [d for d in analyst_tools.declarations("anthropic/claude-opus-5.5", 3)
+    (web,) = [d for d in analyst_tools.declarations("claude-opus-5.5", 3)
               if d["function"]["name"] == "search_web"]
     assert "At most 3 a step" in web["function"]["description"]
     assert "never put in it an amount, an account, an entry" in web["function"]["description"]

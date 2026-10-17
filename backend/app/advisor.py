@@ -1,38 +1,34 @@
-"""AI advisor: assemble the user's financial context and ask an LLM for an
+"""AI advisor: assemble financial context and ask GitHub Copilot for an
 educational analysis.
 
-Provider: OpenRouter (https://openrouter.ai), an OpenAI-compatible gateway, so
-we use the `openai` SDK pointed at OpenRouter's base URL.
+Model calls use the GitHub Copilot SDK and the account authenticated by the
+local Copilot CLI. No API key is read by this application.
 
 Configuration (from environment / backend/.env):
-- OPENROUTER_API_KEY : required to call the model.
-- OPENROUTER_MODEL   : model slug from https://openrouter.ai/models
-                       (default: a Claude Sonnet).
+- COPILOT_MODEL            : default model (default: claude-opus-5.5)
+- COPILOT_ANALYST_MODEL    : optional quantitative-analysis model
+- COPILOT_CONFIDANT_MODEL  : optional personal-context model
 
-PRIVACY NOTE: this sends the user's financial data to a third-party cloud LLM.
+PRIVACY NOTE: prompts send the financial context needed for the request to
+GitHub Copilot and its model providers.
 
-The `openai` import is done lazily (see `sdk()`), so the rest of the app keeps
-working even if the package is not installed yet.
-
-What this module does NOT do any more is run an analysis of its own. It builds
-the three contexts and owns the two ways to call a model; the analysis is the
-chain (`app/chain.py`), proposed and read from the chat.
+This module builds the three contexts and owns the two synchronous model-call
+boundaries. The analysis itself is the chain in `app/chain.py`, proposed and
+read from the chat.
 """
 
 from __future__ import annotations
 
 import datetime
 import os
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app import analytics, catalogue, crud, dated, fx, planning, schemas, sizing
+from app import analytics, catalogue, copilot_provider, crud, dated, fx, planning, schemas, sizing
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+DEFAULT_MODEL = "claude-opus-5.5"
 
 # One sentence of punctuation, for every prompt whose words reach a page: the
 # chat's answer, and each step the Analysis page shows. The reader asked for no
@@ -97,27 +93,7 @@ class AdvisorError(Exception):
 
 
 class Unfinished(AdvisorError):
-    """The provider ended an answer on anything but a normal stop.
-
-    An answer that did not finish is not an answer, and both ways of calling a
-    model raise this rather than hand one on. The first real analysis, on
-    2026-10-02, built five steps on an analyst's text that stopped at "The top
-    four": `call_llm` refused only an EMPTY answer, so a cut one went through
-    as a whole one, and the chat stored its own cut answers as finished.
-
-    `reason` is OpenRouter's normalised finish reason (None when nothing said
-    the answer had finished), `native` the provider's own word for it, and
-    `cost` what the provider reported the call cost, or None if it did not
-    say: a cut answer is billed like any other (measured on 2026-10-02), so a
-    caller that keeps an account of the spend has to be able to read it."""
-
-    def __init__(
-        self, sentence: str, *, reason: str | None, native: str | None, cost: float | None
-    ):
-        super().__init__(sentence)
-        self.reason = reason
-        self.native = native
-        self.cost = cost
+    """The provider ended an answer before producing a normal completion."""
 
 
 @dataclass(frozen=True)
@@ -140,26 +116,12 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class Usage:
-    """What the provider says one call read and cost, from the last chunk of
-    its stream. Each figure is None when it was not said: a zero is a
-    measurement, and "it did not say" is not one.
+    """Token usage for one Copilot call.
 
-    `prompt_tokens` counts every token the call read, whether it came from the
-    cache, was written to it, or neither (on 2026-10-05, on each of six calls
-    to Opus 5.5, the three parts summed to it). `cached_tokens` is how many of
-    them came from the cache, and `cost` what OpenRouter says the whole call
-    cost, in USD. With a cache the first figure stops saying what a call cost
-    on its own: a token read from the cache was billed at a twentieth of the
-    input price that day, and a token written to it at 1.25 times.
-
-    `searches` is how many web searches OpenRouter ran inside the call, None
-    for a call that said nothing about any. Since brief AM only the web
-    search's own request runs one (`websearch`), and no call of the chat does.
-    It arrived in `server_tool_use_details`, and not in the `server_tool_use`
-    OpenRouter's documentation names, in both paid probes that read it (a
-    stream on 2026-10-06, a search's answer on 2026-10-09); the documented
-    name is read too, after it. In both, `cost` proved to be what the key was
-    charged, the search's fee included."""
+    Copilot reports subscription usage rather than a USD call price. `cost`
+    therefore remains None. `searches` is retained for the app's separate web
+    retrieval accounting.
+    """
 
     prompt_tokens: int | None
     cached_tokens: int | None
@@ -1140,6 +1102,11 @@ def build_portfolio_context(db: Session) -> str:
     return "\n".join(lines)
 
 
+def _and(names: list[str]) -> str:
+    """Join names with an English final conjunction."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def _not_counting(names: list[str], why: str) -> str:
     """", not counting X and Y: <why>", or nothing when no record is left out."""
     return f", not counting {_and(names)}: {why}" if names else ""
@@ -1470,508 +1437,44 @@ def build_person_context(db: Session) -> str:
     return "\n".join(lines)
 
 
-def sdk():
-    """The `openai` package, or an AdvisorError saying how to get it.
-
-    Imported on use and not at module load, so the rest of the app keeps
-    working without it. Shared with `tools.declarations`, which renders the
-    tool schemas through the same SDK and would otherwise carry a second copy
-    of this sentence — and, being the thing a turn reaches first, would be the
-    copy the reader actually saw."""
-    try:
-        import openai
-    except ImportError as exc:
-        raise AdvisorError(
-            "The 'openai' package is not installed. Run: uv add openai"
-        ) from exc
-    return openai
-
-
-def _client():
-    """The configured OpenRouter client, or an AdvisorError saying what is
-    missing. Shared by the one-shot call and the streaming one so the two
-    cannot disagree about what "configured" means.
-
-    It sends each request once (brief AN, 2026-10-10). The SDK's default sends
-    a failed one up to twice more by itself (after a connection error, a
-    timeout, a 408, 409, 429 or any 5xx: openai 2.41.0, read in its
-    `_constants.py` and `_base_client.py`), with nothing said to the reader,
-    and whatever an attempt before the last one cost was in no record. A
-    failure is said instead (`_refused`), and the one second ask the app makes
-    is its own and said too (`call_llm`, ASKED_AGAIN_ON)."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise AdvisorError(
-            "OPENROUTER_API_KEY is not set. Add it to backend/.env (see .env.example)."
-        )
-
-    return sdk().OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=api_key,
-        default_headers={"X-Title": "Aurelio"},
-        max_retries=0,
-    )
-
-
 def resolve_model(model: str | None = None) -> str:
-    """The slug a call will actually use: the caller's choice, else the app
-    default from the environment, else the built-in one."""
-    return model or os.getenv("OPENROUTER_MODEL") or DEFAULT_MODEL
+    """The Copilot model a call uses: caller, configured default, then built-in."""
+    return model or os.getenv("COPILOT_MODEL") or DEFAULT_MODEL
 
 
-# --- A model OpenRouter no longer serves -----------------------------------------
-
-# Every variable that can name a model, in the order the chat reads them; the
-# two roles' come after, since only the analysis reads those.
-MODEL_VARIABLES = (
-    "OPENROUTER_CHAT_MODEL",
-    "OPENROUTER_MODEL",
-    "OPENROUTER_ANALYST_MODEL",
-    "OPENROUTER_CONFIDANT_MODEL",
-)
-
-# OpenRouter's public list of the models it serves. Asked only after it has
-# refused a call, with no key and nothing of the reader's in the request.
-MODEL_LIST_URL = "https://openrouter.ai/api/v1/models"
-
-
-class ModelGone(AdvisorError):
-    """OpenRouter refused a model that its public list no longer has."""
-
-
-def _fetch_model_list() -> set[str]:
-    """The ids OpenRouter lists today. Network, so the tests fake it."""
-    import httpx
-
-    response = httpx.get(MODEL_LIST_URL, timeout=10)
-    response.raise_for_status()
-    return {entry["id"] for entry in response.json()["data"]}
-
-
-def _dated(model: str, listed: set[str]) -> list[str]:
-    """The names OpenRouter lists as a dated version of `model`: the name, a
-    hyphen and digits, which is how it dates one (qwen/qwen3.8-max-0902).
-    Anything else after the hyphen is a different model, not a date:
-    qwen/qwen3.8-max-prime is one."""
-    dated = re.compile(re.escape(model) + r"-\d+")
-    return sorted(slug for slug in listed if dated.fullmatch(slug))
-
-
-def _and(names: list[str]) -> str:
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-
-
-def _where_set(model: str) -> str:
-    """Where the reader changes `model`: every variable in backend/.env that
-    names it, else the app's own default, else the chat's menu, which is the
-    only other way a name reaches a call."""
-    named = [var for var in MODEL_VARIABLES if os.getenv(var) == model]
-    if named:
-        return f"It is set by {_and(named)} in backend/.env."
-    if model == DEFAULT_MODEL:
-        return "It is the app's built-in default (DEFAULT_MODEL in backend/app/advisor.py)."
-    return "It was picked in the chat's model menu."
-
-
-# What each status OpenRouter documents means for the reader, after "OpenRouter
-# refused the call to <model> with <status>:". The codes and their meanings are
-# OpenRouter's (its page on errors, read 2026-10-08): 400 a bad request, 401
-# invalid credentials, 402 insufficient credits, 403 a guardrail block or a
-# moderation flag, 408 a timeout, 429 rate limiting, 502 a model that is down
-# or answered something invalid, 503 no provider meeting the request. 404 is
-# not on that page, and is what it answered for a model it had no endpoint for
-# (brief W part 2). A 402 is said by what OpenRouter names as its cause
-# (`_short_of_credit`), not here.
-_REFUSAL_MEANS = {
-    400: "the request the app built is not one it accepts, which is the app's "
-    "fault and not your question's",
-    401: "it does not accept the API key in backend/.env (OPENROUTER_API_KEY)",
-    403: "a moderation flag, a guardrail or a permission on the key stopped it",
-    404: "it has nowhere to send it",
-    408: "the model took too long to answer",
-    429: "too many requests are reaching it or the model's provider right now",
-    502: "the model is down, or sent back something OpenRouter could not read",
-    503: "no provider can serve this model right now",
-}
-
-
-def _remedy(status: int, chat: bool) -> str:
-    """What the reader can do about a refusal with `status`: in the chat, where
-    another model is one menu away, and in the analysis, whose models are set
-    in backend/.env."""
-    another = (
-        "pick another model in the menu under the question"
-        if chat
-        else "set another model in backend/.env"
-    )
-    if status == 401:
-        return (
-            "Check the key on openrouter.ai, put the right one in backend/.env, "
-            "and start the app again."
-        )
-    if status == 403:
-        return f"Rephrase it, or {another}."
-    if status == 408:
-        return "Ask again in a moment."
-    if status == 429:
-        return "Wait a minute, then ask again."
-    if status == 404 or status >= 500:
-        return f"Ask again in a few minutes, or {another}."
-    return f"Ask again; if it happens again, {another}."
-
-
-# What turned a request away for want of money, as OpenRouter names it in a
-# 402's `error.metadata.limit_source`. Its page on limits (read 2026-10-12)
-# names three and says to branch on them, never on the words of the
-# `remedy_hint` beside them: the key's own limit, the account's credit, and the
-# requests still running on the account, which pass. Until brief AP every 402
-# was said as "the account behind the API key has no credit left", and brief
-# AO's paid run met one that said nothing of the kind: the key's limit could
-# not cover the most the request might write ("This request requires more
-# credits, or fewer max_tokens", with the tokens asked for and those the key
-# could still pay for), while a reply costs cents. No 402 measured or documented says
-# that the credit is gone, so the app's own words never do; when OpenRouter's
-# message says so, the reader reads it there, after "OpenRouter said".
-_KEY_LIMIT = "openrouter_key_limit"
-_CREDITS = "openrouter_credits"
-_IN_FLIGHT = "openrouter_in_flight_budget"
-
-# The two figures in OpenRouter's message when the most a request may write is
-# what cannot be paid for (measured in brief AO's P1 bis).
-_AFFORDS = re.compile(r"requested up to (\d+) tokens, but can only afford (\d+)")
-
-
-def _short_of_credit(error, body: dict) -> tuple[str, str]:
-    """What a 402 means for the reader and what they can do about it, by its
-    source: the key's limit, the account's credit, the account's requests
-    still running, or a 402 that names none. With the tokens the request may
-    write and those that can be paid for, when OpenRouter gives them."""
-    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
-    source = metadata.get("limit_source")
-    found = _AFFORDS.search(str(body.get("message") or ""))
-
-    def figures(payer: str) -> str:
-        if found is None:
-            return ""
-        return (
-            f", which may write up to {int(found[1]):,} tokens while {payer} can pay "
-            f"for {int(found[2]):,}"
-        )
-
-    if source == _KEY_LIMIT:
-        return (
-            "what the API key may still spend under its limit does not cover this "
-            "request" + figures("the key"),
-            "Raise or remove the key's limit on openrouter.ai (Settings, Keys), then ask again.",
-        )
-    if source == _CREDITS:
-        return (
-            "the credit on the account behind the API key does not cover this request"
-            + figures("the credit"),
-            "Add credit on openrouter.ai (Settings, Credits), then ask again.",
-        )
-    if source == _IN_FLIGHT:
-        wait = str(error.response.headers.get("retry-after", "")).strip()
-        when = f"{int(wait)} seconds" if wait.isdigit() else "a moment"
-        return (
-            "the requests still running on the account, or just finished, are using "
-            "what OpenRouter lets it spend at once",
-            f"Wait {when}, then ask again; adding credit on openrouter.ai raises that amount.",
-        )
-    return (
-        "the API key or the account behind it does not have the credit this request "
-        "needs" + figures("what is left"),
-        "Add credit, or raise the key's limit, on openrouter.ai (Settings, Credits or "
-        "Keys), then ask again.",
-    )
-
-
-def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
-    """What the reader is told when a call to OpenRouter fails: what happened,
-    what they can do about it, and what OpenRouter said, last.
-
-    A refusal (400 or 404) of a model that OpenRouter's public list no longer
-    has is a model that is gone, and the sentence says which, where it is set,
-    and what dated versions of it are still listed. Neither sign alone is
-    proof: the documentation gives no wording for this case, and the reader's
-    short name had left the list while still answering (2026-09-24). Any other
-    refusal says what its status means and what to do (`_REFUSAL_MEANS`,
-    `_remedy`), with OpenRouter's own message after it. Until brief AJ it was
-    that message alone, which is how the reader met a 400 on 2026-10-08:
-    'Server tool "openrouter:web_search" failed: invalid request (400)', and
-    nothing about what it meant for them or what to do. A 402 says what
-    OpenRouter names as its cause, with its figures (`_short_of_credit`), and
-    is never asked again, by the chat or by the analysis (ASKED_AGAIN_ON). A
-    failure that is not a refusal (no network, a timeout) says that, with the
-    SDK's words.
-
-    `chat` is whether the call answers the chat, where another model is one
-    menu away; the analysis's models are set in backend/.env.
-    """
-    openai = sdk()
-    if isinstance(error, openai.APITimeoutError):
-        return AdvisorError(
-            f"OpenRouter did not answer in time ({error}). Ask again in a moment."
-        )
-    if isinstance(error, openai.APIConnectionError):
-        return AdvisorError(
-            f"OpenRouter could not be reached ({error}). Check that this computer is "
-            "online, then ask again."
-        )
-    if not isinstance(error, openai.APIStatusError):
-        return AdvisorError(
-            f"The call to OpenRouter failed before it was answered ({error}). Ask "
-            "again in a moment."
-        )
-    body = error.body if isinstance(error.body, dict) else {}
-    said = str(body.get("message") or error.message).strip().rstrip(".")
-    status = error.status_code
-    if status == 402:
-        means, remedy = _short_of_credit(error, body)
-    else:
-        means, remedy = _REFUSAL_MEANS.get(status), _remedy(status, chat)
-    refused = (
-        f"OpenRouter refused the call to {model} with {status}"
-        + (f": {means}. " if means else ". ")
-        + f"{remedy} OpenRouter said: {said}."
-    )
-    if status not in (400, 404):
-        return AdvisorError(refused)
-    try:
-        listed = _fetch_model_list()
-    except Exception as unreachable:
-        return AdvisorError(
-            f"{refused} Whether it still serves {model} could not be checked: its "
-            f"public list of models did not answer ({unreachable})."
-        )
-    if model in listed:
-        return AdvisorError(refused)
-    gone = (
-        f"The model {model} is no longer served by OpenRouter: it refused the call "
-        f"({said}), and its public list of models no longer has it. {_where_set(model)}"
-    )
-    dated = _dated(model, listed)
-    if dated:
-        versions = "a dated version" if len(dated) == 1 else "dated versions"
-        gone += f" OpenRouter still lists {_and(dated)}, {versions} of it."
-    return ModelGone(gone)
-
-
-# How an answer ended, in OpenRouter's normalised words, said for the reader.
-# Its documentation names five: stop, length, tool_calls, content_filter,
-# error. Only "stop" is an answer that finished, and "tool_calls" too in the
-# chat, whose rounds end by asking for tools.
-_WHY = {
-    "length": "it reached its length limit",
-    "content_filter": "a content filter stopped it",
-    "error": "the provider failed while it was writing",
-    "tool_calls": "it asked for a tool, and this call offers none",
-}
-
-
-def _unfinished(
-    reason: str | None,
-    native: str | None,
-    cost: float | None,
-    *,
-    wrote: bool,
-    ceiling: int | None = None,
-    per: str = "",
-) -> Unfinished:
-    """The sentence for an answer that ended on anything but a normal stop:
-    why, in words, then what OpenRouter and the provider reported, verbatim.
-
-    `wrote` tells "before finishing its answer" from "before writing" it.
-    Measured on 2026-10-02: a model that spends its whole limit reasoning ends
-    on `length` with no text at all, and was refused as "an empty response",
-    which said nothing about why.
-
-    `ceiling` is the `max_tokens` the request was sent with, and `per` what it
-    bounds ("a reply", "a step"): an answer cut there says the figure, since
-    every request names one (brief AP), and "its length limit" alone left the
-    reader to guess how long that was."""
-    if reason is None:
-        why = "the provider never said it had finished"
-    elif reason == "length" and ceiling is not None:
-        why = (
-            f"it reached its length limit, the {ceiling:,} tokens the app allows {per}, "
-            "its reasoning included"
-        )
-    else:
-        why = _WHY.get(reason, f'it stopped for a reason OpenRouter calls "{reason}"')
-    reported = ""
-    if reason is not None:
-        provider = f", the provider {native}" if native and native != reason else ""
-        reported = f" (OpenRouter reported {reason}{provider})"
-    before = "finishing" if wrote else "writing"
-    return Unfinished(
-        f"The model stopped before {before} its answer: {why}{reported}.",
-        reason=reason,
-        native=native,
-        cost=cost,
-    )
-
-
-def _failed_partway(failure, cost: float | None) -> Unfinished:
-    """OpenRouter's documented answer to a provider failing partway through a
-    plain request: a 200 whose body holds an `error` object and no text. It was
-    refused already, as "an empty response", with the provider's words
-    dropped."""
-    said = failure.get("message") if isinstance(failure, dict) else getattr(failure, "message", None)
-    detail = f": {str(said).strip().rstrip('.')}" if said else ""
-    return Unfinished(
-        "The provider failed partway through the answer, and OpenRouter sent its "
-        f"error instead of the text{detail}.",
-        reason="error",
-        native=None,
-        cost=cost,
-    )
-
-
-# The statuses a step of the analysis is asked again on, once (brief AN). A
-# failed step stops the run, and the next run starts from its first step, so a
-# refusal that would have passed in a second costs the reader a whole
-# analysis. OpenRouter answers 200 as soon as a provider accepts a request
-# (its page on errors, read 2026-10-10), so one of these statuses means that no
-# provider took it, and its page on failover (updated 2026-09-24) says that a
-# request which fails is not billed. Not a 429: the same page reports 429s
-# that consumed credits. Not a timeout (408, 504, or the SDK's own) nor a
-# dropped connection, where a provider may have been at work.
-ASKED_AGAIN_ON = (500, 502, 503)
-
-
-# --- How much one request may write ------------------------------------------------
-
-# Every request the app sends names the most its answer may be, its reasoning
-# included: OpenRouter counts reasoning inside `max_tokens` (its page on
-# reasoning tokens, read 2026-10-12). Until brief AP the chat's rounds and the
-# analysis's steps named none, and OpenRouter then holds, against what the key
-# may still spend, the input and a fixed cap of output (its page on limits,
-# read the same day). Brief AO's paid run met that cap on 2026-10-11: 65,536
-# tokens on Opus 5.5, $1.31 at $20 per million, refused with a 402 at the sixth
-# request ("requires more credits, or fewer max_tokens") while a reply costs
-# cents. The web search names its own (`websearch.MAX_TOKENS`).
-#
-# Each ceiling is set from the longest answers on record, Opus 5.5 through the
-# app's own loop with nothing capped, and an answer that reaches it is cut
-# (`Unfinished`, whose sentence says the figure).
-#
-# A round of the chat: 8,192 tokens, $0.16 held on Opus. The longest reply on
-# record is 2,316 tokens, 626 of them reasoning (brief AG's paid proof,
-# 2026-10-06: an advice answer written from five web pages), 28% of it; the
-# most a round reasoned is 718 (brief AN's P1 bis).
+# Retained as public bounds for the orchestration contracts. Copilot's hosted
+# model catalog owns the actual per-model output ceiling.
 CHAT_MAX_TOKENS = 8_192
-
-# A step of the analysis: 16,384 tokens, $0.33 held on Opus. The longest step
-# on record is the analyst's, 4,361 tokens with 1,584 of reasoning (brief AD's
-# run, 2026-10-05, on a test copy), 27% of it. More room than a reply's: a step
-# cut stops the run and loses what its steps had already cost, and an analyst's
-# step on records larger than that copy's has not been measured.
 STEP_MAX_TOKENS = 16_384
 
 
 def call_llm(system_prompt: str, user_content: str, model: str | None = None) -> dict:
-    """Shared OpenRouter call. `model` overrides the configured default, so a
-    chain can give each role its own model. Returns {"analysis", "model",
-    "cost", "asked_again"}; raises AdvisorError, and `Unfinished` for an
-    answer that did not end on a normal stop.
-
-    Asked once, or twice when the first ask is turned away with a status of
-    ASKED_AGAIN_ON. `asked_again` is then the words the step's line carries,
-    and None otherwise. A second refusal stops the step with its own sentence
-    and says that it was the second ask.
-
-    How the answer ended is read before what it says. A token cap ends it on
-    `length` (measured on 2026-10-02, on Anthropic and on Alibaba), and the
-    text that comes back with it reads like any other: the analysis of run 1
-    stopped at "The top four" and nothing downstream could tell.
-
-    Both asks name STEP_MAX_TOKENS, so a key near its limit is held only what
-    a step can cost (brief AP).
-
-    It asks the provider for no cache, unlike the chat (`stream_llm`), and on
-    purpose. The chain's steps each have a system prompt of their own, and the
-    system prompt comes first in what a provider caches, so no step can read
-    what another wrote: a marker would have every step pay for its input 1.25
-    times over, for an entry nothing reads. The one prefix two steps share is
-    the second revision repeating the first's figures, which pays only on the
-    runs that get that far. A step that looks things up (brief AR) asks in
-    rounds through `call_round` instead, which does ask on every round that
-    offers tools: each sends the one before it whole, and reads it."""
-    client = _client()
-    model = resolve_model(model)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
-    asked_again = None
+    """Ask one GitHub-hosted Copilot model for a complete analysis step."""
+    selected = resolve_model(model)
     try:
-        completion = client.chat.completions.create(
-            model=model, messages=messages, max_tokens=STEP_MAX_TOKENS
-        )
-    except Exception as exc:  # network / auth / model errors -> a sentence (_refused)
-        status = getattr(exc, "status_code", None)
-        if not isinstance(exc, sdk().APIStatusError) or status not in ASKED_AGAIN_ON:
-            raise _refused(exc, model) from exc
-        try:
-            completion = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=STEP_MAX_TOKENS
-            )
-        except Exception as again:
-            refused = _refused(again, model)
-            refused.args = (
-                f"{refused} The step was asked twice: OpenRouter had refused the first "
-                f"ask with {status} too, which it says it does not bill.",
-            )
-            raise refused from again
-        asked_again = f"asked again after OpenRouter's {status}, which it says it does not bill"
-
-    failure = getattr(completion, "error", None)
-    if failure:
-        raise _failed_partway(failure, _cost(completion))
-    choice = completion.choices[0] if completion.choices else None
-    content = choice.message.content if choice is not None else None
-    ended = getattr(choice, "finish_reason", None)
-    if choice is not None and ended != "stop":
-        raise _unfinished(
-            ended,
-            getattr(choice, "native_finish_reason", None),
-            _cost(completion),
-            wrote=bool(content),
-            ceiling=STEP_MAX_TOKENS,
-            per="a step",
-        )
-    if not content:
-        raise AdvisorError("The model returned an empty response.")
+        result = copilot_provider.complete(system_prompt, user_content, selected)
+    except copilot_provider.CopilotError as exc:
+        raise AdvisorError(str(exc)) from exc
     return {
-        "analysis": content,
-        "model": model,
-        "cost": _cost(completion),
-        "asked_again": asked_again,
+        "analysis": result.content,
+        "model": result.model,
+        # Copilot subscription usage is not a dollar price. Keep the existing
+        # nullable cost contract honest rather than relabeling quota as USD.
+        "cost": None,
     }
 
 
-# --- A step of the analysis that looks things up (brief AR) ------------------------
-
-# The session every request of the analysis to an Anthropic model says it belongs
-# to, as the chat's requests name SESSION_ID: a step's rounds then reach the
-# provider that holds what the round before them wrote. The analysis's own, not
-# the chat's: no request of one begins as a request of the other, and
-# OpenRouter's logs tell the two apart.
-ANALYSIS_SESSION_ID = "aurelio-analysis"
+# --- A step of the analysis that looks things up -----------------------------
 
 
 @dataclass(frozen=True)
 class Round:
-    """One request of a step that may look things up: what it wrote, the tools
-    it asked for, what it read and cost, the model that answered, and the words
-    for its second ask when there was one."""
+    """One Copilot request that may return text, terminal tool calls, or both."""
 
     content: str
     calls: tuple[ToolCall, ...]
     usage: Usage
     model: str
-    asked_again: str | None = None
 
 
 def call_round(
@@ -1979,223 +1482,32 @@ def call_round(
     messages: list[dict],
     model: str | None = None,
     tools: list[dict] | None = None,
-    kept_to: int | None = None,
 ) -> Round:
-    """One round of a step of the analysis that may look things up (brief AR):
-    not streamed, as `call_llm` asks, with the step's ceiling, STEP_MAX_TOKENS,
-    and asked once more on ASKED_AGAIN_ON and on nothing else, a cut least of
-    all.
-
-    `messages` is the step's conversation so far: its question, then each
-    round's tool calls and what they answered. `tools` is what the round
-    offers; None for the round with none, which has to answer in words.
-    `kept_to` is for the last round that offers tools: the index in
-    `messages` of the last message the round before it sent.
-
-    For a model that caches only on request (`caches_on_request`) every round
-    that offers tools asks the provider to keep what it read: at the system
-    prompt, which keeps the tools with it since they come first; at the step's
-    question, the figures, the long part, so that a round after one of many
-    tool calls still reads them (a marker looks back about twenty blocks for an
-    earlier entry); and at the end, through the top-level marker, which the next
-    round, sending this one whole, reads up to. Three markers, under
-    Anthropic's four. The last round that offers tools puts its third at
-    `kept_to` instead of the end: it reads all the round before it wrote and
-    keeps nothing new, since the round after it offers no tool and could read
-    none of it. Measured in brief AR's check (2026-10-13), on P1's requests
-    replayed: a round marked so read the 11,376 tokens the round before it had
-    written and wrote none, so OpenRouter carries a marker on a tool's answer
-    to Anthropic. The round with no tool asks for nothing to be kept:
-    without the tools its request no longer begins as the rounds' before it
-    did, so it reads nothing they wrote, and no round comes after it to read
-    what it would write. In brief AR's P1 (2026-10-12) one such round read
-    nothing and wrote 16,915 tokens that no request read, each billed a
-    quarter above an unmarked one. The chat's last round asks for nothing
-    either (`chat.py`), and since brief AT its round before the last is marked
-    as here (`stream_llm`'s `kept_to`). Every request of the step names the
-    analysis's session (ANALYSIS_SESSION_ID); any other model's request
-    carries neither.
-
-    How the round ended is read before what it says. "stop" is an answer, and
-    "tool_calls" too on a round that offered tools; anything else raises
-    `Unfinished`, with the round's own cost. A round with neither words nor
-    calls is an empty response."""
-    client = _client()
-    model = resolve_model(model)
-    system: str | list[dict] = system_prompt
-    asked = messages
-    extra: dict = {}
-    if caches_on_request(model):
-        extra = {"session_id": ANALYSIS_SESSION_ID}
-        if tools:
-            system = [{"type": "text", "text": system_prompt, "cache_control": _EPHEMERAL}]
-            marked = {0} if kept_to is None else {0, kept_to}
-            asked = [_kept(m) if i in marked else m for i, m in enumerate(messages)]
-            if kept_to is None:
-                extra["cache_control"] = _EPHEMERAL
-    request = {
-        "model": model,
-        "messages": [{"role": "system", "content": system}, *asked],
-        "max_tokens": STEP_MAX_TOKENS,
-        **({"tools": tools} if tools else {}),
-        **({"extra_body": extra} if extra else {}),
-    }
-    asked_again = None
+    """Ask one Copilot round, capturing terminal tool requests for the caller."""
+    selected = resolve_model(model)
+    content: list[str] = []
+    calls: list[ToolCall] = []
+    usage = Usage(None, None, None)
     try:
-        completion = client.chat.completions.create(**request)
-    except Exception as exc:  # network / auth / model errors -> a sentence (_refused)
-        status = getattr(exc, "status_code", None)
-        if not isinstance(exc, sdk().APIStatusError) or status not in ASKED_AGAIN_ON:
-            raise _refused(exc, model) from exc
-        try:
-            completion = client.chat.completions.create(**request)
-        except Exception as again:
-            refused = _refused(again, model)
-            refused.args = (
-                f"{refused} The request was asked twice: OpenRouter had refused the first "
-                f"ask with {status} too, which it says it does not bill.",
-            )
-            raise refused from again
-        asked_again = f"asked again after OpenRouter's {status}, which it says it does not bill"
-
-    failure = getattr(completion, "error", None)
-    if failure:
-        raise _failed_partway(failure, _cost(completion))
-    choice = completion.choices[0] if completion.choices else None
-    message = choice.message if choice is not None else None
-    content = (getattr(message, "content", None) or "") if message is not None else ""
-    ended = getattr(choice, "finish_reason", None)
-    if choice is not None and ended not in (("stop", "tool_calls") if tools else ("stop",)):
-        raise _unfinished(
-            ended,
-            getattr(choice, "native_finish_reason", None),
-            _cost(completion),
-            wrote=bool(content),
-            ceiling=STEP_MAX_TOKENS,
-            per="a step",
-        )
-    calls = tuple(
-        ToolCall(id=c.id, name=c.function.name, arguments=c.function.arguments or "")
-        for c in ((getattr(message, "tool_calls", None) or ()) if tools else ())
-    )
-    if ended == "tool_calls" and not calls:
-        # Asked for tools and named none: neither an answer nor a request this
-        # loop can answer, so not taken for a finished one.
-        native = getattr(choice, "native_finish_reason", None)
-        provider = f", the provider {native}" if native and native != ended else ""
-        raise Unfinished(
-            f"The model stopped before {'finishing' if content else 'writing'} its answer: it "
-            f"said it was asking for a tool and named none (OpenRouter reported {ended}{provider}).",
-            reason=ended,
-            native=native,
-            cost=_cost(completion),
-        )
-    if not content and not calls:
-        raise AdvisorError("The model returned an empty response.")
+        for kind, piece in copilot_provider.stream(
+            system_prompt, messages, selected, tools
+        ):
+            if kind == "text":
+                content.append(piece)
+            elif kind == "tool_call":
+                calls.append(ToolCall(piece.id, piece.name, piece.arguments))
+            elif kind == "usage":
+                usage = Usage(piece.input_tokens, piece.cached_tokens, None)
+    except copilot_provider.CopilotError as exc:
+        raise AdvisorError(str(exc)) from exc
     return Round(
-        content=content,
-        calls=calls,
-        usage=_usage(getattr(completion, "usage", None)),
-        model=model,
-        asked_again=asked_again,
+        content="".join(content),
+        calls=tuple(calls),
+        usage=usage,
+        model=selected,
     )
 
 
-def _cost(completion) -> float | None:
-    """What the provider says this call cost, in USD, or None if it did not say.
-
-    OpenRouter puts it on `usage` as an extra field the OpenAI SDK does not
-    declare — verified live on 2026-09-03: `CompletionUsage(..., cost=0.00225,
-    ...)` for one small call. Read with getattr for exactly that reason, and
-    kept as None rather than 0.0 when it is absent: a zero is a price, and the
-    card that quotes the last run's spend must be able to say nothing instead
-    of saying free.
-    """
-    usage = getattr(completion, "usage", None)
-    cost = getattr(usage, "cost", None)
-    return float(cost) if isinstance(cost, (int, float)) else None
-
-
-def _usage(reported) -> Usage:
-    """The figures on a call's usage: a stream's last chunk, or a whole
-    answer's. `cached_tokens` sits one level down, in `prompt_tokens_details`,
-    and `cost` is OpenRouter's own field, which the SDK keeps as an extra
-    attribute (see `_cost`). So is the count of web searches, which arrives as
-    a plain dict, under the name it was measured with or the documented one."""
-    prompt = getattr(reported, "prompt_tokens", None)
-    details = getattr(reported, "prompt_tokens_details", None)
-    cached = getattr(details, "cached_tokens", None)
-    cost = getattr(reported, "cost", None)
-    searches = None
-    for name in ("server_tool_use_details", "server_tool_use"):
-        used = getattr(reported, name, None)
-        counted = (
-            used.get("web_search_requests")
-            if isinstance(used, dict)
-            else getattr(used, "web_search_requests", None)
-        )
-        if isinstance(counted, int):
-            searches = counted
-            break
-    return Usage(
-        prompt_tokens=prompt if isinstance(prompt, int) else None,
-        cached_tokens=cached if isinstance(cached, int) else None,
-        cost=float(cost) if isinstance(cost, (int, float)) else None,
-        searches=searches,
-    )
-
-
-# --- The provider's cache --------------------------------------------------------
-
-# Anthropic's models cache a prompt only when the request asks for it, and only
-# at the points the request marks. The other families in the chat's menu are
-# left alone, and their requests are what they were: on OpenRouter's page (read
-# 2026-10-05) OpenAI's GPT-5.6 and later already cache unasked, and charge the
-# write; Moonshot caches unasked; Alibaba caches only at markers, for the models
-# it names, and not on dated snapshots. What a marker would do to any of them
-# has not been measured, and a model the reader can pick is not where to find
-# out.
-_EPHEMERAL = {"type": "ephemeral"}
-
-# Anthropic's limit, four markers in a request, with a fifth refused with a 400.
-# The system prompt takes one and the end of the request another, so the caller
-# names two messages at most.
-_MARKED_MESSAGES = 2
-
-
-def caches_on_request(model: str) -> bool:
-    """Whether `model` caches a prompt only when the request asks: Anthropic's,
-    by its slug, an OpenRouter `~` alias included."""
-    return model.removeprefix("~").startswith("anthropic/")
-
-
-# The session every chat request to an Anthropic model says it belongs to, as
-# OpenRouter's `session_id`: what its sticky routing keys on, so that a turn
-# goes to the provider holding what the turn before it kept (brief AM).
-#
-# Without it OpenRouter names a conversation by hashing its first system
-# message and its first other one (its page on prompt caching, read 2026-10-08
-# and 2026-10-09), and the chat's first other message is the picture, which
-# changes with every write: a confirmed card made the next turn a stranger,
-# free to go to a provider holding nothing, the tools and the system prompt
-# included. And without it routing sticks only once a cache hit has been seen;
-# with it, from the first request that succeeds.
-#
-# One for the app, not one per conversation: every conversation begins with the
-# same tools and system prompt, so a new one can read what the last one kept;
-# it says nothing about the reader; and nothing has to be stored to keep it.
-# Its price is that OpenRouter's logs show the app's chat as one session.
-SESSION_ID = "aurelio-chat"
-
-
-def _kept(message: dict) -> dict:
-    """`message` with a cache marker at its end: the same words, as the
-    one-part list a marker has to sit on. A message with no words of its own
-    (an assistant turn that only asked for tools) is left as it is."""
-    content = message.get("content")
-    if not isinstance(content, str) or not content:
-        return message
-    return {**message, "content": [{"type": "text", "text": content, "cache_control": _EPHEMERAL}]}
 
 
 def stream_llm(
@@ -2203,207 +1515,18 @@ def stream_llm(
     messages: list[dict],
     model: str | None = None,
     tools: list[dict] | None = None,
-    cache_at: tuple[int, ...] | None = None,
-    kept_to: int | None = None,
 ) -> Iterator[tuple[str, str | ToolCall | Usage]]:
-    """The streaming sibling of `call_llm`: yields the answer as it is written,
-    one `(kind, piece)` pair at a time, for a whole conversation rather than a
-    single question. Four kinds:
-
-      "thought"    the model's reasoning — models that think stream it first,
-                   for seconds, on a separate field. `piece` is text.
-      "text"       the answer itself. `piece` is text.
-      "tool_call"  a tool the model wants run before it can answer. `piece` is
-                   a completed `ToolCall`, not a string.
-      "usage"      what the provider says this call read and cost: a `Usage`,
-                   at most once, at the end. Asked for with `stream_options`,
-                   because a stream reports usage only when the request says
-                   it should: the final chunk then carries no choice and only
-                   that. The tokens are what `_cost` reads beside on a
-                   non-streamed completion, and they are the reason `chat.py`
-                   no longer has to believe a docstring about what a turn
-                   costs.
-
-    No call of the chat declares a search OpenRouter runs, since brief AM: the
-    web is a tool of the app's (`websearch`), and its pages come back as that
-    tool's result, never on this stream.
-
-    `cache_at` asks the provider to keep what this call read, so that the next
-    call that begins the same way pays a fraction for it. None asks for
-    nothing. A tuple asks, for a model that caches only on request
-    (`caches_on_request`), at three kinds of point: the system prompt, which
-    keeps the tool declarations with it since they come first in what is
-    cached; each message the tuple names, by its index in `messages`; and the
-    end of the request, through the top-level marker, where the provider
-    places it on the last block. For every other model the request is the one
-    it would be without the argument. Measured on 2026-10-05 through OpenRouter
-    on Opus 5.5, in a paid probe: a round that adds a tool
-    exchange read all 12,035 tokens the round before it had written, and a
-    read was billed at a twentieth of the input price.
-
-    `kept_to` is for the round before the last of a question's turn
-    (`chat.py`): the index in `messages` of the last message the round before
-    it sent. The end's marker goes there instead, so the round reads all the
-    round before it wrote and keeps nothing new: what it would keep only a
-    round with the same tools could read, and the round after it offers none.
-    It takes the end's place, so a request still carries four markers at most.
-    Measured in brief AT's replay (2026-10-14), two requests the chat built,
-    on Opus 5.5: a later turn's sixth round so marked read the 23,600 tokens
-    its fifth had written and wrote none. The analysis's rounds do the same
-    (`call_round`, measured in brief AR's check).
-
-    Every call to a model that caches only on request also names its session
-    (`SESSION_ID`), whatever `cache_at` says: the round with no tools reads
-    nothing from the cache, and still has to reach the provider that holds
-    what the next turn reads.
-
-    Raises AdvisorError — before the first piece if nothing is configured or
-    the call is refused, in the middle if the stream breaks. A stream that
-    thinks but never answers is an empty response; a stream that asks for a
-    tool is NOT, which is why `produced` counts tool calls too. Getting that
-    backwards would turn every tool-using turn into "the model returned an
-    empty response", since a turn that only calls tools writes no content at
-    all.
-
-    And `Unfinished` at the END, after the words have gone out, when the
-    stream ended on anything but `stop`, or `tool_calls` for a round that asks
-    for tools: a token cap ends it on `length` (measured on 2026-10-02), and
-    every round names one, CHAT_MAX_TOKENS (brief AP), the round with no tools
-    included; a stream that closes without saying how it ended has not said
-    it finished.
-    The words are not taken back; they are what the reader saw. What changes
-    is that the turn cannot end as `done`. The tool calls of such a round are
-    not handed on: their arguments may have stopped mid-JSON, and nothing
-    finished asking for them.
-
-    Why the tool calls come out at the END, after the last chunk. They arrive
-    in fragments — the name once, the JSON arguments a few characters at a
-    time — and the only thing tying the fragments together is `index`, an int
-    on each fragment. Nothing in the protocol marks a call as finished; you
-    only learn it was, from the stream stopping. So the fragments are
-    accumulated by index and each call is yielded when nothing is left that
-    could still belong to it. Yielding earlier would mean yielding an argument
-    string that does not parse yet.
-
-    `tools` is passed straight through and omitted entirely when it is empty:
-    "no tools" and "an empty list of tools" are not the same request, and only
-    the first is what a call with nothing to offer means.
-
-    `call_llm` stays as it is. The chain stores whole steps and has no reason to
-    change; only a chat needs the words as they come.
-
-    Closing this generator early closes the upstream connection, which is how
-    a reader who leaves mid-answer stops the model: OpenRouter bills the tokens
-    it generates, and it generates until the socket goes away. Starlette closes
-    the generator when the browser disconnects; the `with` below is what turns
-    that into a closed socket rather than a thread still reading an answer
-    nobody will see."""
-    client = _client()
-    model = resolve_model(model)
-    system: str | list[dict] = system_prompt
-    asked = messages
-    # The session and the top-level marker are not parameters the SDK knows,
-    # so they travel in extra_body, which it merges into the request as it is.
-    extra: dict = {}
-    if caches_on_request(model):
-        extra["session_id"] = SESSION_ID
-    if cache_at is not None and caches_on_request(model):
-        if len(cache_at) > _MARKED_MESSAGES:
-            raise ValueError(
-                f"{len(cache_at)} messages named for the cache; Anthropic refuses a "
-                f"request with more than four markers, so {_MARKED_MESSAGES} at most"
-            )
-        system = [{"type": "text", "text": system_prompt, "cache_control": _EPHEMERAL}]
-        marked = set(cache_at) if kept_to is None else {*cache_at, kept_to}
-        asked = [_kept(m) if i in marked else m for i, m in enumerate(messages)]
-        if kept_to is None:
-            extra["cache_control"] = _EPHEMERAL
+    """Stream one GitHub Copilot SDK turn in Aurelio's existing event shape."""
+    selected = resolve_model(model)
     try:
-        stream = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": system}, *asked],
-            stream=True,
-            stream_options={"include_usage": True},
-            max_tokens=CHAT_MAX_TOKENS,
-            **({"tools": tools} if tools else {}),
-            **({"extra_body": extra} if extra else {}),
-        )
-    except Exception as exc:
-        raise _refused(exc, model, chat=True) from exc
-
-    produced = False
-    # index -> the call being assembled. A dict rather than a list: `index` is
-    # the protocol's own numbering and nothing promises it starts at zero or
-    # arrives without gaps.
-    building: dict[int, dict] = {}
-    received: Usage | None = None
-    # How the answer ended, which only its last chunks say: on OpenRouter the
-    # last two both carried it (measured on 2026-10-02). None until one does.
-    ended: str | None = None
-    native: str | None = None
-    try:
-        with stream:
-            for chunk in stream:
-                # The usage chunk is the one with no choices in it, so this is
-                # read BEFORE the line that skips those — which is where it
-                # would otherwise be dropped, silently and for good.
-                usage = getattr(chunk, "usage", None)
-                if usage:
-                    received = _usage(usage)
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                if getattr(choice, "finish_reason", None):
-                    ended = choice.finish_reason
-                    native = getattr(choice, "native_finish_reason", None)
-                delta = choice.delta
-                # OpenRouter puts reasoning on its own delta field, which the
-                # SDK keeps as an extra attribute. Measured on qwen3.8-max: six
-                # seconds of these before the first word of the answer.
-                thought = getattr(delta, "reasoning", None)
-                if thought:
-                    yield ("thought", thought)
-                if delta.content:
-                    produced = True
-                    yield ("text", delta.content)
-                for fragment in delta.tool_calls or ():
-                    call = building.setdefault(
-                        fragment.index, {"id": "", "name": "", "arguments": ""}
-                    )
-                    # Each field is written only where the fragment carries
-                    # one. The id and the name arrive once, on a call's first
-                    # fragment, and every fragment after it holds None there —
-                    # copying those across would erase what the first said.
-                    if fragment.id:
-                        call["id"] = fragment.id
-                    if fragment.function:
-                        if fragment.function.name:
-                            call["name"] = fragment.function.name
-                        if fragment.function.arguments:
-                            call["arguments"] += fragment.function.arguments
-    except Exception as exc:
-        # GeneratorExit is a BaseException, so a reader leaving is not caught
-        # here: it passes through, the `with` closes the stream, and no error
-        # is invented for something that was a choice.
-        raise AdvisorError(
-            f"The connection to OpenRouter broke while the answer was being "
-            f"written ({exc}). Ask again."
-        ) from exc
-    if ended not in ("stop", "tool_calls"):
-        # The usage first, for the reason the empty case below gives: a turn
-        # that was cut still cost what it was sent.
-        if received is not None:
-            yield ("usage", received)
-        raise _unfinished(
-            ended, native, None, wrote=produced, ceiling=CHAT_MAX_TOKENS, per="a reply"
-        )
-    for index in sorted(building):
-        produced = True
-        yield ("tool_call", ToolCall(**building[index]))
-    # Before the raise below, not after: a turn that ended empty still cost
-    # what it was sent, and the record of what a turn costs must not be the
-    # record of the turns that went well.
-    if received is not None:
-        yield ("usage", received)
-    if not produced:
-        raise AdvisorError("The model returned an empty response.")
+        for kind, piece in copilot_provider.stream(
+            system_prompt, messages, selected, tools
+        ):
+            if kind == "tool_call":
+                yield kind, ToolCall(piece.id, piece.name, piece.arguments)
+            elif kind == "usage":
+                yield kind, Usage(piece.input_tokens, piece.cached_tokens, None)
+            else:
+                yield kind, piece
+    except copilot_provider.CopilotError as exc:
+        raise AdvisorError(str(exc)) from exc

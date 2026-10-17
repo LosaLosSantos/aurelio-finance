@@ -307,7 +307,7 @@ def test_the_migration_adds_the_amounts_and_keeps_every_line_as_it_was(before_th
 
 
 def test_the_chat_is_told_the_card_carries_the_amount():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("anthropic/claude-opus-5.5")):
+    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
         assert "When they asked how much, the card carries the amount" in prompt
         assert "the card refuses an amount above what the records allow" in prompt
     described = tools.REGISTRY["suggest_instrument"].description

@@ -43,10 +43,9 @@ instant lane waits for the slow one while an outage empties a list that had
 good local results in it.
 
 `search_web` fails the first too, and is the one read tool REGISTRY does not
-hold. What it reads is the web, through a request of its own to OpenRouter
-(`websearch`), and the pages it finds and what it costs belong to the turn
-that ran it, so the chat loop answers it. It is declared here like the others
-(`web_search`), for Anthropic's models only (brief AM).
+hold. It runs as a separate GitHub Copilot request carrying only the bounded
+query; the chat loop returns the pages to the model and shows those sources to
+the reader. It is offered to Claude and GPT models supported by the adapter.
 
 Tools that WRITE do not run from here. They are proposed: a card the reader
 confirms, and only then does the normal write path run — `crud`, a unit of
@@ -4787,9 +4786,7 @@ def _propose_analysis(db: Session, args: RunAnalysisArgs) -> Proposal:
         touches="a new analysis",
         consequence=(
             f"{chain.MIN_STEPS} steps, up to {chain.MAX_STEPS} if the disagreement is "
-            f"real, on {' and '.join(engines)}. {looks} {last} A request OpenRouter "
-            "turns away with 500, 502 or 503, which it says it does not bill, is asked "
-            "once more."
+            f"real, on {' and '.join(engines)}. {looks} {last}"
         ),
     )
 
@@ -4816,11 +4813,9 @@ def _walk_analysis(db: Session, args: RunAnalysisArgs) -> Iterator[Working]:
         except StopIteration as done:
             run = done.value
             break
-        # A step OpenRouter turned away once and that was asked again says so
-        # on its own line, where the reader reads the run as it goes.
-        # And one that looked things up says how much, there too (brief AR).
-        said = "; ".join(s for s in (step.looked_up, step.asked_again) if s)
-        label = f"{step.title} ({said})" if said else step.title
+        label = (
+            f"{step.title} ({step.looked_up})" if step.looked_up else step.title
+        )
         yield Working(step_no=step.step_no, label=label, duration_ms=step.duration_ms)
 
     return {
@@ -5287,39 +5282,28 @@ REGISTRY: dict[str, Tool] = {
 # --- What the model is shown, and what comes back ----------------------------
 
 
+def _declaration(name: str, description: str, arguments: type[BaseModel]) -> dict:
+    """One custom-tool declaration consumed by the Copilot SDK adapter."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": arguments.model_json_schema(),
+        },
+    }
+
+
 def declarations() -> list[dict]:
-    """Every tool as the API's `tools=` parameter wants it.
-
-    The conversion is `openai.pydantic_function_tool`, the SDK's own — so the
-    schema is generated twice over, once by Pydantic from the model and once
-    by the SDK into the strict dialect, and this module contributes no copy of
-    either. Written out by hand it would be the fourth place a field name
-    lives, after the model, the crud function and the column.
-
-    Through `advisor.sdk` rather than importing the package here, so a missing
-    `openai` says the one sentence that tells you how to fix it. This is the
-    first thing a turn touches, so a bare ImportError here would be caught as
-    an unexpected failure and reported as "the answer broke off" — a true
-    statement that helps nobody, in front of the specific one.
-    """
-    return [
-        advisor.sdk().pydantic_function_tool(
-            t.arguments, name=t.name, description=t.description
-        )
-        for t in REGISTRY.values()
-    ]
+    """Every application tool exposed to the Copilot model."""
+    return [_declaration(t.name, t.description, t.arguments) for t in REGISTRY.values()]
 
 
-# --- The web --------------------------------------------------------------------
+# --- The web -----------------------------------------------------------------
 #
-# A tool of this app since brief AM (2026-10-09), and not one of REGISTRY's: a
-# search's pages and its cost belong to the turn that ran it (the reader is
-# shown the pages where the search ran, and the turn's cost includes the
-# search's), so the chat loop answers it (`chat._searches`), and the search is
-# a request of its own (`websearch`). Until then it was OpenRouter's server
-# tool, declared on every request of the chat, and brief AL's paid probe P1
-# (2026-10-08) found that a request declaring it keeps none of the cache's
-# markers but the last: no turn read the one before it.
+# A separate Copilot request carrying only the query. It is not in REGISTRY
+# because its pages and usage belong to the turn that requested them, and the
+# chat loop must show those sources to the reader.
 
 SEARCH_WEB = "search_web"
 
@@ -5351,28 +5335,15 @@ _SEARCH_WEB_DESCRIPTION = (
     "this app for a search engine, and the reader is shown it above the pages "
     "it found: write it about instruments and facts, and never put the "
     "reader's figures, names or anything else about them in it. Each search "
-    "costs a little, and the app caps how many one answer runs."
+    "uses Copilot subscription quota, and the app caps how many one answer runs."
 )
 
 
 def web_search(model: str) -> list[dict]:
-    """`search_web`'s declaration for a model that is offered it, else nothing.
-
-    Anthropic's models only, the line brief AD drew for the cache and brief AG
-    for the web, and for the same reason: the web was measured with Opus 5.5
-    and Sonnet 4.6 and with no other family, and a model the reader can pick
-    from a menu is not where to find out what it does with a tool it has never
-    been measured with. A plain function since brief AM, so the other families
-    could be offered it as it is, once it has been measured with them.
-
-    Fixed, so the tools never change inside the prefix the provider caches."""
-    if not model.removeprefix("~").startswith("anthropic/"):
+    """Offer Aurelio's bounded web-search tool to supported Copilot models."""
+    if not (model.startswith("claude-") or model.startswith("gpt-")):
         return []
-    return [
-        advisor.sdk().pydantic_function_tool(
-            SearchWebArgs, name=SEARCH_WEB, description=_SEARCH_WEB_DESCRIPTION
-        )
-    ]
+    return [_declaration(SEARCH_WEB, _SEARCH_WEB_DESCRIPTION, SearchWebArgs)]
 
 
 def search_query(call: advisor.ToolCall) -> str | dict:

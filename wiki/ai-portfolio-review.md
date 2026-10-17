@@ -74,11 +74,11 @@ conversation could steer would only repeat the conversation.
 
 ## Different models for different roles
 
-Each role can run on its own model, set in `backend/.env` (`OPENROUTER_ANALYST_MODEL` and
-`OPENROUTER_CONFIDANT_MODEL`). Different models bring different blind spots, which is what a
+Each role can run on its own model, set in `backend/.env` (`COPILOT_ANALYST_MODEL` and
+`COPILOT_CONFIDANT_MODEL`). Different models bring different blind spots, which is what a
 panel is for. One model in both seats still works, because what separates the roles is what
 each one is shown, not the model behind it. See
-[An AI financial advisor with your own OpenRouter key](ai-financial-advisor-with-your-own-openrouter-key.md).
+[Use Aurelio with GitHub Copilot](github-copilot-models.md).
 
 ## Questions
 
@@ -86,9 +86,9 @@ each one is shown, not the model behind it. See
 rest of your finances and say what stands out. What it cannot do on its own is disagree with
 itself, which is why Aurelio splits the review between roles that see different things.
 
-**Which AI model is best for a portfolio review?** Any model OpenRouter serves can run it;
-Aurelio defaults to Claude Opus 5.5. Putting a different model in each role adds different
-blind spots, which is the point of a panel.
+**Which AI model is best for a portfolio review?** Any suitable model offered to the signed-in
+Copilot account can run it; Aurelio defaults to Claude Opus 5.5. Putting a different model in
+each role adds different blind spots, which is the point of a panel.
 
 **Does the review change my records?** No. It writes a document you read; your records change
 only through cards you confirm.
@@ -103,4 +103,4 @@ educational information, not regulated financial advice.
 - The roles, their prompts and the variable depth: [chain.py](https://github.com/LosaLosSantos/aurelio-finance/blob/main/backend/app/chain.py).
 - What the analyst can look up: [analyst_tools.py](https://github.com/LosaLosSantos/aurelio-finance/blob/main/backend/app/analyst_tools.py).
 - [Ask AI whether a stock is worth buying](ask-ai-whether-a-stock-is-worth-buying.md)
-- [How much does an AI financial advisor cost?](how-much-does-an-ai-financial-advisor-cost.md)
+- [GitHub Copilot usage in Aurelio](github-copilot-usage.md)

@@ -211,7 +211,7 @@ def test_the_model_is_told_every_form_question_and_what_it_takes():
 def test_the_chat_writes_a_goal_with_its_own_tool_and_never_as_an_answer():
     """Brief AL told the chat that no tool writes a goal; since brief AN one
     does, and the questionnaire still takes none."""
-    for model in ("anthropic/claude-opus-5.5", "qwen/qwen3.8-max-0902"):
+    for model in ("claude-opus-5.5", "unsupported-model"):
         prompt = chat.system_prompt(model)
         assert "no tool here creates, changes or deletes a goal yet" not in prompt
         assert "A goal is not one of those answers: never write one into the questionnaire" in prompt

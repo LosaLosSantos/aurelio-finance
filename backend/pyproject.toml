@@ -5,10 +5,10 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.4",
     "fastapi>=0.136.3",
+    "github-copilot-sdk>=1.0.22",
     "justetf-scraping",
     "mcp>=2.2.0",
     "mstarpy>=11.0.1",
-    "openai>=2.41.0",
     "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.50",
     "uvicorn[standard]>=0.48.0",

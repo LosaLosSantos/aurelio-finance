@@ -1,6 +1,6 @@
 ---
 title: "Aurelio: an open-source personal finance app with an AI advisor"
-description: "Aurelio tracks your net worth, investments, ETFs, cash and debts on your own computer, and answers questions about them with an AI model you choose. Guides, how each number is worked out, and what it costs."
+description: "Aurelio tracks net worth, investments, cash and debts locally, and answers questions with models from your GitHub Copilot account."
 nav_order: 0
 ---
 
@@ -9,8 +9,8 @@ nav_order: 0
 **Aurelio is an open-source personal finance app that runs on your own computer: you record
 your accounts, investments, home and debts, and it shows your net worth, what your funds
 really hold and what is left each month.** A chat answers questions about those records with
-an AI model you choose. Your records are kept in a file on your machine; the AI part is
-optional, and it goes through [OpenRouter](https://openrouter.ai) with your own key.
+an AI model you choose. Your records are kept in a file on your machine; the optional AI uses
+the GitHub Copilot account authenticated on that machine.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/LosaLosSantos/aurelio-finance/main/docs/banner-dark.gif">
@@ -25,10 +25,9 @@ optional, and it goes through [OpenRouter](https://openrouter.ai) with your own 
   `localhost:8000`.
 - **What it tracks:** bank and broker accounts, ETFs and shares, cash, homes and other real
   assets, debts, income, expenses and goals.
-- **The AI:** optional; any model OpenRouter serves, with your own key; Claude Opus 5.5 by
-  default.
-- **What it costs:** the app is free (MIT license); a question to the AI costs about $0.01 to
-  $0.24 on the default model, a full analysis $0.64.
+- **The AI:** optional; models offered to your signed-in GitHub Copilot account, with Claude
+  Opus 5.5 as the default.
+- **Usage:** the app is free (MIT license); model usage belongs to the Copilot subscription.
 - **Your records:** one SQLite file on your machine.
 - **Code:** [github.com/LosaLosSantos/aurelio-finance](https://github.com/LosaLosSantos/aurelio-finance).
 
@@ -41,15 +40,14 @@ here can be reproduced on your own computer with one command.
 
 - [Self-hosted personal finance app: run Aurelio on your own computer](self-hosted-personal-finance-app.md):
   three tools, one command, and an invented household to try it on.
-- [An AI financial advisor with your own OpenRouter key](ai-financial-advisor-with-your-own-openrouter-key.md):
-  the key, a cap on what it can spend, and which model answers.
-- [How much does an AI financial advisor cost?](how-much-does-an-ai-financial-advisor-cost.md):
-  measured on real requests, from about two cents for a follow-up to 51 cents for a full
-  analysis.
+- [Use Aurelio with GitHub Copilot](github-copilot-models.md): authentication, model choice
+  and what context leaves your computer.
+- [GitHub Copilot usage in Aurelio](github-copilot-usage.md): token accounting, tool rounds
+  and account-owned quota.
 
 ## Browse by topic
 
-- [Guides](guides.md): running Aurelio, connecting the AI, and what it costs.
+- [Guides](guides.md): running Aurelio, connecting Copilot, and understanding model usage.
 - [Net worth and cash](net-worth-and-cash.md): how to calculate net worth, with a mortgage,
   and how to follow your cash without bank sync.
 - [ETFs and funds](etfs-and-funds.md): ETF overlap, the portfolio X-ray, and accumulating vs

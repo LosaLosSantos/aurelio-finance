@@ -44,15 +44,12 @@ where there is — deeper than the old fixed four, exactly where depth earns it.
 An analyst's step is one request when it looks nothing up, and up to
 ROUNDS_PER_STEP when it does.
 
-What that saves is the WAIT, not the money. Four steps writing full analyses
-land in the low cents; a minute of a person's attention is the expensive part.
-Which is also why the cost is now measured per step instead of estimated:
-`ChainStep.cost` is what the provider reported, and the card that asks the
-reader to spend it quotes the last run rather than a feeling.
+Copilot subscription usage is not a dollar price. `ChainStep.cost` therefore
+stays null for Copilot-backed runs rather than presenting quota as USD.
 
-Models per role (env, all optional, falling back to OPENROUTER_MODEL):
-    OPENROUTER_ANALYST_MODEL    — quantitative work
-    OPENROUTER_CONFIDANT_MODEL  — reading a person, choosing words
+Models per role (env, all optional, falling back to COPILOT_MODEL):
+    COPILOT_ANALYST_MODEL    — quantitative work
+    COPILOT_CONFIDANT_MODEL  — reading a person, choosing words
 Different models add genuinely different blind spots, which is the point of a
 panel; the same model in both seats still works because the asymmetry is in
 the *context*, not the weights.
@@ -270,9 +267,6 @@ class Step:
     model: str
     duration_ms: int
     cost: float | None
-    # Words for the step's line when OpenRouter turned its first ask away and
-    # it was asked once more (`advisor.call_llm`, ASKED_AGAIN_ON); else None.
-    asked_again: str | None = None
     # Words for the step's line when it looked things up: its rounds, its
     # lookups and its web searches (`_looked_up`); None when it looked up
     # nothing. Said while the run goes, never stored: no column of a step's
@@ -288,24 +282,19 @@ def _steps(numbers: list[int]) -> str:
 
 
 def _what_it_cost(costs: list[float | None]) -> str:
-    """What a run that stopped had cost, one entry per step it reached, the
-    stopped one included, as OpenRouter reported each.
-
-    A step whose price was not reported is said as unknown and never summed as
-    zero (the reader's rule, 2026-10-02). A run that is not saved is recorded
-    nowhere else, so this sentence is the only place its spend is written."""
+    """Describe dollar pricing only when the provider actually reported it."""
     known = [n for n, cost in enumerate(costs, start=1) if cost is not None]
     unknown = [n for n, cost in enumerate(costs, start=1) if cost is None]
     total = f"${sum(cost for cost in costs if cost is not None):.4g}"
     if not unknown:
-        return f"Until it stopped it had cost {total}, as OpenRouter reported it."
+        return f"Until it stopped it had cost {total}, as the provider reported it."
     if not known:
         return (
-            f"OpenRouter reported no price for {_steps(unknown)}, so what the run "
-            "cost is not known."
+            f"GitHub Copilot reports no dollar price for {_steps(unknown)}, so this "
+            "subscription-backed run has no per-step USD cost to show."
         )
     return (
-        f"OpenRouter reported {total} for {_steps(known)} and no price for "
+        f"The provider reported {total} for {_steps(known)} and no price for "
         f"{_steps(unknown)}, so what the run cost is not known."
     )
 
@@ -325,9 +314,9 @@ def _stopped(error: advisor.AdvisorError, step_no: int, title: str, costs: list[
 
 
 def _model_for(role: str) -> str | None:
-    """Per-role model override, or None to use the app default."""
+    """Per-role Copilot model override, or None to use the app default."""
     return os.getenv(
-        {"analyst": "OPENROUTER_ANALYST_MODEL", "confidant": "OPENROUTER_CONFIDANT_MODEL"}.get(
+        {"analyst": "COPILOT_ANALYST_MODEL", "confidant": "COPILOT_CONFIDANT_MODEL"}.get(
             role, ""
         )
     ) or None
@@ -392,72 +381,44 @@ def _answered(
 
 
 def _looked_up(db: Session, system: str, user: str, model: str | None) -> dict:
-    """A step that may look things up before it answers (brief AR), in rounds:
-    each round may ask for the analysis's tools (`analyst_tools`) and the web,
-    their answers go back to it, and the step ends on the first round that
-    answers in words. At most ROUNDS_PER_STEP rounds, the last offered no tool
-    and the one before it told so (LAST_TOOL_ROUND_NOTICE), and reading the
-    cache up to where the round before it ended, keeping nothing new; at most
-    SEARCHES_PER_STEP searches. Every round names STEP_MAX_TOKENS and may be
-    asked once more on a 500, 502 or 503, never on a cut (`advisor.call_round`).
-
-    Returns what `advisor.call_llm` does, with the step's cost being every
-    round's and every search's, unknown when any one is unknown, and
-    `looked_up`, its lookups in words. A round that stops the step raises
-    with the cost the step had run up until then, that round's own included
-    when it was said, so the run's sentence counts it (`_stopped`)."""
+    """Run a bounded analyst step whose Copilot rounds may request read tools."""
     from app import analyst_tools, tools  # here: tools imports this module
 
     resolved = advisor.resolve_model(model)
     declared = analyst_tools.declarations(resolved, SEARCHES_PER_STEP)
     offered = [d["function"]["name"] for d in declared]
-    marked = advisor.caches_on_request(resolved)
     messages: list[dict] = [{"role": "user", "content": user}]
     costs: list[float | None] = []
-    asked_again: list[str] = []
     lookups = searches = 0
-    sent = 0  # how many messages the round before sent
     for n in range(1, ROUNDS_PER_STEP + 1):
         last = n == ROUNDS_PER_STEP
-        round_system, asked, kept_to = system, messages, None
+        asked = messages
         if n == ROUNDS_PER_STEP - 1:
-            # What this round would keep, only a round with the same tools
-            # could read, and none follows: it reads up to where the round
-            # before it ended instead (its question, on a first round).
-            kept_to = max(sent - 1, 0)
-            if marked:
-                asked = [*messages, {"role": "user", "content": LAST_TOOL_ROUND_NOTICE}]
-            else:
-                round_system = f"{system}\n\n{LAST_TOOL_ROUND_NOTICE}"
+            asked = [*messages, {"role": "user", "content": LAST_TOOL_ROUND_NOTICE}]
         try:
             answered = advisor.call_round(
-                round_system, asked, model=model, tools=None if last else declared, kept_to=kept_to
+                system, asked, model=model, tools=None if last else declared
             )
         except advisor.AdvisorError as exc:
             exc.cost = _total([*costs, getattr(exc, "cost", None)])
             raise
         costs.append(answered.usage.cost)
-        if answered.asked_again:
-            asked_again.append(answered.asked_again)
         if not answered.calls:
             return {
                 "analysis": answered.content,
                 "model": answered.model,
                 "cost": _total(costs),
-                "asked_again": "; ".join(asked_again) or None,
                 "looked_up": _said(n - 1, lookups, searches),
             }
         outcomes, ran = _answered(db, answered.calls, SEARCHES_PER_STEP - searches, offered)
         lookups += len(answered.calls)
         searches += len(ran)
         costs.extend(s.usage.cost if s.usage is not None else None for s in ran)
-        sent = len(asked)
         messages = [
             *messages,
             tools.request_message(answered.content, list(answered.calls)),
             *(tools.result_message(call, outcome) for call, outcome in zip(answered.calls, outcomes)),
         ]
-    # The last round offers no tool, so it answers in words or raises.
     raise AssertionError("a step's last round asked for tools it was not offered")
 
 
@@ -539,17 +500,11 @@ def run_chain(db: Session) -> Iterator[Step]:
     the third yielded step still leaves nothing behind: what was said while it
     ran was true when it was said, and none of it is a record.
 
-    A step whose answer did not FINISH fails the same way (advisor.Unfinished,
-    raised by `call_llm`). Run 1, on 2026-10-02, went on for five steps from an
-    analyst's text cut at "The top four" and was saved whole, because a cut
-    answer did not raise. Whatever stops a step, the error says, after its
-    cause, which step the run stopped at, that nothing was kept, and what the
-    run had cost until then, since a run that is not saved records its spend
-    nowhere. A cut is not retried: a cut on the same prompt and limit would
-    repeat. The one second ask is `call_llm`'s, and each round's of a step that
-    looks things up (`advisor.call_round`), for a request no provider took (a
-    500, 502 or 503, which OpenRouter says it does not bill); the card says so
-    before the run, and the step's line when it happens.
+    Any failed step stops the run, says where it stopped, and leaves no partial
+    verdict on record. GitHub Copilot SDK failures are surfaced as
+    `advisor.AdvisorError`; each tool-using step is still bounded by
+    `ROUNDS_PER_STEP`, with its last round offered no tools so it must answer in
+    words.
     """
     portfolio_ctx = advisor.build_portfolio_context(db)
     person_ctx = advisor.build_person_context(db)
@@ -586,7 +541,6 @@ def run_chain(db: Session) -> Iterator[Step]:
                 "output": result["analysis"],
                 "duration_ms": int((time.monotonic() - started) * 1000),
                 "cost": result.get("cost"),
-                "asked_again": result.get("asked_again"),
                 "looked_up": result.get("looked_up"),
             }
         )
@@ -602,7 +556,6 @@ def run_chain(db: Session) -> Iterator[Step]:
             model=last["model"],
             duration_ms=last["duration_ms"],
             cost=last["cost"],
-            asked_again=last["asked_again"],
             looked_up=last["looked_up"],
         )
 
