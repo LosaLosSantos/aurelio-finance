@@ -12,14 +12,21 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { modelName, modelsHelp, optionLabel, pickToSend } from "../src/components/modelMenu.ts";
+import { modelName, modelNotices, modelsHelp, optionLabel, pickToSend } from "../src/components/modelMenu.ts";
 
 const OPUS = "anthropic/claude-opus-5.5";
 const SONNET = "anthropic/claude-sonnet-4.6";
 const KIMI = "moonshotai/kimi-k2.6";
 
-function entry(slug: string, retires: string | null, listed: boolean | null, note = "a note") {
-  return { slug, note, retires, listed };
+function entry(
+  slug: string,
+  retires: string | null,
+  listed: boolean | null,
+  note = "a note",
+  warning: string | null = null,
+  searches = false,
+) {
+  return { slug, note, retires, listed, warning, searches };
 }
 
 const MENU = {
@@ -29,6 +36,7 @@ const MENU = {
     entry(SONNET, "2026-10-31", true, "1M context"),
     entry(KIMI, null, false, "about six times cheaper than K3"),
   ],
+  search_warning: null,
 };
 
 test("a model the list dates reads its date beside its name", () => {
@@ -56,8 +64,29 @@ test("the panel's ? lists the models, then says what the list says of each it da
       "kimi-k2.6, about six times cheaper than K3. " +
       "OpenRouter may retire claude-sonnet-4.6 after 2026-10-31. OpenRouter no longer lists kimi-k2.6.",
   );
-  const unread = { default: OPUS, models: [entry(OPUS, null, null, "the default")] };
+  const unread = { default: OPUS, models: [entry(OPUS, null, null, "the default")], search_warning: null };
   assert.equal(modelsHelp(unread), "The models: claude-opus-5.5, the default.");
+});
+
+// The sentences are the backend's (`model_list.warning`), invented here.
+const SAID = "OpenRouter may retire anthropic/claude-sonnet-4.6 after 2026-10-31, the date its list of models gives.";
+const SEARCH_SAID = "The web searches run on anthropic/claude-haiku-5.5, which OpenRouter may retire after 2026-11-11.";
+
+test("above the question box: the warning of the model the question goes to, and the search's when it searches", () => {
+  const menu = {
+    default: SONNET,
+    models: [
+      entry(SONNET, "2026-10-31", true, "1M context", SAID, true),
+      entry("qwen/qwen3.8-max-0902", null, true, "1M context", null, false),
+    ],
+    search_warning: SEARCH_SAID,
+  };
+  assert.deepEqual(modelNotices(SONNET, menu), [SAID, SEARCH_SAID]);
+  assert.deepEqual(modelNotices("qwen/qwen3.8-max-0902", menu), [], "a model that does not search says nothing of the search's");
+  assert.deepEqual(modelNotices("not/in-the-menu", menu), []);
+  assert.deepEqual(modelNotices(SONNET, null), [], "nothing before the menu has loaded");
+  const quiet = { ...menu, models: [entry(SONNET, null, true, "1M context", null, true)], search_warning: null };
+  assert.deepEqual(modelNotices(SONNET, quiet), []);
 });
 
 test("a pick the menu offers is sent, one it no longer offers is not, and the default answers", () => {

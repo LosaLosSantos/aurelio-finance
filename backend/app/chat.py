@@ -527,6 +527,11 @@ _ENV_MODELS = (
 )
 
 
+# The variables `default_model` reads, in order, before the app's built-in
+# default: what the panel names as where the chat's default is set (brief BB).
+DEFAULT_READS = ("OPENROUTER_CHAT_MODEL", "OPENROUTER_MODEL")
+
+
 def default_model() -> str:
     """The chat's own model, falling back through the app default."""
     return advisor.resolve_model(os.getenv("OPENROUTER_CHAT_MODEL") or None)
@@ -535,7 +540,11 @@ def default_model() -> str:
 def available_models(db: Session) -> schemas.ChatModelsRead:
     """The dropdown: the default first, then the rest, no slug twice, each with
     what today's read of OpenRouter's list says of it (`model_list`): the day
-    after which it may be removed, and whether the list has it at all.
+    after which it may be removed, whether the list has it at all, and what the
+    panel says above the question box while it is the model a question goes
+    to. The default is said where it is set (backend/.env, or built in); every
+    other entry is a pick from the menu. The web search's model is said apart,
+    for the models that search.
 
     Nothing leaves the menu on the list's say-so. A name OpenRouter no longer
     lists may still answer (the reader's short name did, on 2026-09-24), so it
@@ -561,9 +570,14 @@ def available_models(db: Session) -> schemas.ChatModelsRead:
                 note=notes[s],
                 retires=listing.retires(s) if listing else None,
                 listed=listing.has(s) if listing else None,
+                warning=model_list.warning(
+                    s, listing, model_list.where_set(s, DEFAULT_READS) if s == default else model_list.PICKED
+                ),
+                searches=bool(tools.web_search(s)),
             )
             for s in ordered
         ],
+        search_warning=model_list.search_warning(listing),
     )
 
 

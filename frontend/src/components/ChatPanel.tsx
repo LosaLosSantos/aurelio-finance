@@ -36,7 +36,7 @@ import {
   type Pane,
 } from "./followStream";
 import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
-import { modelsHelp, optionLabel, pickToSend } from "./modelMenu";
+import { modelNotices, modelsHelp, optionLabel, pickToSend } from "./modelMenu";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
 import { STALE_LINE, heading, waiting, workHeading } from "./cardOutcome";
@@ -348,6 +348,14 @@ function Card({
           before it produces anything. Both figures are read off the last run. */}
       {block.confirmation !== "diff" && block.consequence && (
         <p className="mt-1 text-xs text-ink-faint">{block.consequence}</p>
+      )}
+      {/* A model the card would call that OpenRouter's list dates or no longer
+          has, said while the card waits: before the run, where the reader
+          decides it (brief BB). Only the analysis's card calls a model. */}
+      {pending && block.warning && (
+        <p className="mt-2 border-l-2 border-warn bg-warn-tint px-3 py-2 text-xs text-warn">
+          {block.warning}
+        </p>
       )}
 
       {block.confirmation === "diff" ? (
@@ -963,6 +971,7 @@ export default function ChatPanel({
 
   // What the select shows is what a question goes with (`pickToSend`).
   const currentModel = pickToSend(model, models) ?? models?.default ?? "";
+  const notices = modelNotices(currentModel, models);
   // What the panel's "?" says, read once: what a question is sent with, the
   // keys, and what is known of each model. The select's tooltip used to say it
   // of the current model alone, to a pointer only (brief AU).
@@ -1149,6 +1158,16 @@ export default function ChatPanel({
             the model as a pill, the send arrow on the right. One object to
             look at, not a field with loose buttons under it. */}
         <form onSubmit={onSubmit} className="px-4 pb-4 pt-2">
+          {/* The model the next question goes to, and the web search's when it
+              searches, said here when OpenRouter's list dates it or no longer
+              has it: before the question, with where it is set (brief BB). */}
+          {notices.length > 0 && (
+            <div className="mb-2 space-y-1 border-l-2 border-warn bg-warn-tint px-3 py-2 text-xs text-warn">
+              {notices.map((said) => (
+                <p key={said}>{said}</p>
+              ))}
+            </div>
+          )}
           <div className="rounded-sm border border-rule bg-surface transition focus-within:border-olive focus-within:ring-1 focus-within:ring-olive">
             <textarea
               value={draft}

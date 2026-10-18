@@ -324,13 +324,19 @@ def _stopped(error: advisor.AdvisorError, step_no: int, title: str, costs: list[
     )
 
 
+# The variables each role reads for its model, in order, before the app's
+# built-in default: its own, then everything's (`advisor.resolve_model`). What
+# the analysis's card names as where a role's model is set (brief BB).
+ROLE_READS = {
+    "analyst": ("OPENROUTER_ANALYST_MODEL", "OPENROUTER_MODEL"),
+    "confidant": ("OPENROUTER_CONFIDANT_MODEL", "OPENROUTER_MODEL"),
+}
+
+
 def _model_for(role: str) -> str | None:
     """Per-role model override, or None to use the app default."""
-    return os.getenv(
-        {"analyst": "OPENROUTER_ANALYST_MODEL", "confidant": "OPENROUTER_CONFIDANT_MODEL"}.get(
-            role, ""
-        )
-    ) or None
+    own = ROLE_READS.get(role)
+    return (os.getenv(own[0]) if own else None) or None
 
 
 def _total(costs: list[float | None]) -> float | None:

@@ -6,7 +6,8 @@
    list has not been read today). The menu says either beside the name from the
    first day the list says it. Nothing leaves the menu on the list's say-so: a
    name that had left the list was seen still answering (2026-09-24), so it
-   stays, marked.
+   stays, marked. Above the question box the panel says the backend's
+   sentence for the model a question would call, with where it is set.
 
    No runtime imports, so `npm test` reaches it. */
 
@@ -40,6 +41,18 @@ export function modelsHelp(menu: Menu): string {
     return [];
   });
   return [`The models: ${known}.`, ...listSays].join(" ");
+}
+
+/** What the panel says above the question box of the models the next question
+    would call: the `current` model's own warning, and the web search's when
+    that model searches. Each is the backend's sentence, written only when
+    OpenRouter's list dates the model within its days, has passed its day, or
+    no longer has it; empty otherwise, and before the menu has loaded. */
+export function modelNotices(current: string, menu: Menu | null): string[] {
+  const entry = menu?.models.find((m) => m.slug === current);
+  if (!menu || !entry) return [];
+  const said = [entry.warning, entry.searches ? menu.search_warning : null];
+  return said.filter((s): s is string => Boolean(s));
 }
 
 /** The model a question is sent with: the reader's pick while the menu offers

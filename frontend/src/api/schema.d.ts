@@ -2393,6 +2393,12 @@ export interface components {
              * @default
              */
             verb?: string;
+            /**
+             * Warning
+             * @description What the card says, in a band of its own while it waits, of a model it would call that OpenRouter's list dates, has passed the day of, or no longer has, with where that model is set. Only the analysis's card calls a model; empty on every other
+             * @default
+             */
+            warning?: string;
         };
         /**
          * ChatCardChange
@@ -2613,8 +2619,19 @@ export interface components {
              * @description The day after which OpenRouter's public list says the model may be removed (its `expiration_date`), as read today; null when the list gives it none, or has not been read today
              */
             retires: string | null;
+            /**
+             * Searches
+             * @description Whether a question to this model may search the web, which runs on a model of its own (`search_warning`)
+             * @default false
+             */
+            searches: boolean;
             /** Slug */
             slug: string;
+            /**
+             * Warning
+             * @description What the panel says above the question box while this model is the one a question goes to: that OpenRouter's list dates it within `model_list.WARN_DAYS` days, or on a day already past, or no longer has it; with where it is set and how to change it. Null when there is nothing to say
+             */
+            warning: string | null;
         };
         /**
          * ChatModelsRead
@@ -2625,6 +2642,11 @@ export interface components {
             default: string;
             /** Models */
             models: components["schemas"]["ChatModel"][];
+            /**
+             * Search Warning
+             * @description What the panel says of the web search's model, with a model that `searches`: dated, past its day, or no longer listed, as a model's `warning`. Null when there is nothing to say
+             */
+            search_warning: string | null;
         };
         /**
          * ChatPageAccount

@@ -1817,11 +1817,18 @@ def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
         f"The model {model} is no longer served by OpenRouter: it refused the call "
         f"({said}), and its public list of models no longer has it. {_where_set(model)}"
     )
+    return ModelGone(gone + still_listed(entry, listed))
+
+
+def still_listed(entry: str, listed: Iterable[str]) -> str:
+    """The sentence after a model the list no longer has, naming the dated
+    versions of it the list still has, or "" when it has none. Said after a
+    refusal (`_refused`) and before a call (`model_list.warning`)."""
     dated = _dated(entry, listed)
-    if dated:
-        versions = "a dated version" if len(dated) == 1 else "dated versions"
-        gone += f" OpenRouter still lists {_and(dated)}, {versions} of it."
-    return ModelGone(gone)
+    if not dated:
+        return ""
+    versions = "a dated version" if len(dated) == 1 else "dated versions"
+    return f" OpenRouter still lists {_and(dated)}, {versions} of it."
 
 
 # How an answer ended, in OpenRouter's normalised words, said for the reader.

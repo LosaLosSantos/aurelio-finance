@@ -95,8 +95,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import (
-    advisor, analytics, cash_moves, catalogue, chain, composition, crud, dated, fx, models, pac,
-    positions, prices, questionnaire, schemas, sizing,
+    advisor, analytics, cash_moves, catalogue, chain, composition, crud, dated, fx, model_list,
+    models, pac, positions, prices, questionnaire, schemas, sizing,
 )
 from app.database import unit_of_work
 
@@ -178,6 +178,10 @@ class Proposal:
     answer to "Your age?""), or is empty for a card that only adds a row. One
     answer draws one card a record (`chat.stream`): confirming the first of two
     would leave the second stale. Not stored with the card.
+
+    `warning` is what the card says, in a band of its own, of a model that
+    confirming it would call and that OpenRouter's list dates or no longer has
+    (brief BB): only the analysis's card calls a model, so only it has one.
     """
 
     title: str
@@ -187,6 +191,7 @@ class Proposal:
     verb: str = ""
     diff: list[dict] = field(default_factory=list)
     touches: str = ""
+    warning: str = ""
 
 
 @dataclass(frozen=True)
@@ -4799,7 +4804,8 @@ def _propose_analysis(db: Session, args: RunAnalysisArgs) -> Proposal:
     run = crud.get_latest_chain_run(db)
     took, spent = _seconds(run), _spent(run)
     analyst = advisor.resolve_model(chain._model_for("analyst"))
-    engines = sorted({analyst, advisor.resolve_model(chain._model_for("confidant"))})
+    confidant = advisor.resolve_model(chain._model_for("confidant"))
+    engines = sorted({analyst, confidant})
     looks = (
         "The analyst's steps may look things up first, in up to "
         f"{chain.ROUNDS_PER_STEP} requests"
@@ -4828,7 +4834,24 @@ def _propose_analysis(db: Session, args: RunAnalysisArgs) -> Proposal:
             "turns away with 500, 502 or 503, which it says it does not bill, is asked "
             "once more."
         ),
+        warning=_models_said(db, {"analyst": analyst, "confidant": confidant}),
     )
+
+
+def _models_said(db: Session, roles: dict[str, str]) -> str:
+    """What the analysis's card says, before a run, of the models it would
+    call (brief BB): each role's model that OpenRouter's list of the day dates
+    within `model_list.WARN_DAYS`, has passed the day of, or no longer has,
+    with where it is set for the roles that take it; and the web search's
+    model, when the analyst may search. Empty when there is nothing to say."""
+    listing = model_list.known(db)
+    uses: dict[str, list[tuple[str, ...]]] = {}
+    for role, model in roles.items():
+        uses.setdefault(model, []).append(chain.ROLE_READS[role])
+    said = [model_list.warning(m, listing, model_list.where_set(m, *reads)) for m, reads in uses.items()]
+    if web_search(roles["analyst"]):
+        said.append(model_list.search_warning(listing))
+    return " ".join(s for s in said if s)
 
 
 def _walk_analysis(db: Session, args: RunAnalysisArgs) -> Iterator[Working]:
@@ -5550,6 +5573,7 @@ def answer(db: Session, call: advisor.ToolCall) -> dict:
             consequence=proposal.consequence,
             verb=proposal.verb,
             diff=proposal.diff,
+            warning=proposal.warning,
             fingerprint=proposal.fingerprint,
         )
     except ValidationError as exc:
