@@ -13,14 +13,17 @@ import datetime
 import json
 import threading
 
+import anyio
 import pandas as pd
 import pytest
 from pydantic import BaseModel
+from starlette.requests import ClientDisconnect
 
 from app import (
     advisor, catalogue, chain, chat, composition, crud, models, prices, schemas, tools
 )
 from app.database import SessionLocal
+from app.routers.chat import _stream
 from conftest import script_the_chain
 
 # The real streaming function, captured at import time — before the autouse
@@ -259,6 +262,70 @@ def test_a_reader_who_leaves_leaves_a_cut_answer_on_record(client, monkeypatch):
     seen = _fake_stream(monkeypatch)
     _ask(client, "go on", conversation_id=turn.conversation_id)
     assert seen[0]["messages"][-2] == {"role": "assistant", "content": "partial answer "}
+
+
+@pytest.mark.parametrize("asgi_version", ["2.0", "2.4"])
+def test_http_disconnect_closes_the_provider_before_storing_the_cut_answer(
+    client, monkeypatch, asgi_version
+):
+    closed = threading.Event()
+
+    def provider():
+        try:
+            yield "text", "partial answer"
+            yield "text", "not sent"
+        finally:
+            closed.set()
+
+    # Keep the iterator alive: disconnect cleanup must not depend on GC.
+    pending = provider()
+    monkeypatch.setattr(advisor, "stream_llm", lambda *args, **kwargs: pending)
+    store_answer = chat._store_answer
+
+    def store_after_close(*args, **kwargs):
+        assert closed.is_set(), "The provider must be closed before persistence"
+        return store_answer(*args, **kwargs)
+
+    monkeypatch.setattr(chat, "_store_answer", store_after_close)
+    with SessionLocal() as db:
+        turn = chat.prepare(db, schemas.ChatRequest(content="hi"))
+
+    async def disconnect():
+        sent = anyio.Event()
+
+        async def receive():
+            await sent.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and b"partial answer" in message["body"]:
+                # A history refresh races with Stop in the real client.
+                await anyio.to_thread.run_sync(
+                    lambda: client.get(f"/api/chat/conversations/{turn.conversation_id}")
+                )
+                if asgi_version == "2.4":
+                    raise OSError("client disconnected")
+                sent.set()
+                await anyio.sleep_forever()
+
+        await _stream(chat.stream(turn))(
+            {"type": "http", "asgi": {"spec_version": asgi_version}}, receive, send
+        )
+
+    try:
+        if asgi_version == "2.4":
+            with pytest.raises(ClientDisconnect):
+                anyio.run(disconnect)
+        else:
+            anyio.run(disconnect)
+        assert closed.is_set(), "HTTP disconnect did not explicitly close the provider"
+        with SessionLocal() as db:
+            answer = crud.get_chat_conversation(db, turn.conversation_id).messages[-1]
+            assert answer.role == "assistant"
+            assert answer.status == "cut"
+            assert json.loads(answer.blocks) == [{"kind": "text", "text": "partial answer"}]
+    finally:
+        pending.close()
 
 
 def test_an_answer_with_no_words_is_not_repeated_to_the_model(client, monkeypatch):

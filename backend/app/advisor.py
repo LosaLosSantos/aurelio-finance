@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import datetime
 import os
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -1505,18 +1506,19 @@ def stream_llm(
     messages: list[dict],
     model: str | None = None,
     tools: list[dict] | None = None,
-) -> Iterator[tuple[str, str | ToolCall | Usage]]:
+) -> Generator[tuple[str, str | ToolCall | Usage], None, None]:
     """Stream one GitHub Copilot SDK turn in Aurelio's existing event shape."""
     selected = resolve_model(model)
     try:
-        for kind, piece in copilot_provider.stream(
+        with closing(copilot_provider.stream(
             system_prompt, messages, selected, tools
-        ):
-            if kind == "tool_call":
-                yield kind, ToolCall(piece.id, piece.name, piece.arguments)
-            elif kind == "usage":
-                yield kind, Usage(piece.input_tokens, piece.cached_tokens, None)
-            else:
-                yield kind, piece
+        )) as response:
+            for kind, piece in response:
+                if kind == "tool_call":
+                    yield kind, ToolCall(piece.id, piece.name, piece.arguments)
+                elif kind == "usage":
+                    yield kind, Usage(piece.input_tokens, piece.cached_tokens, None)
+                else:
+                    yield kind, piece
     except copilot_provider.CopilotError as exc:
         raise AdvisorError(str(exc)) from exc

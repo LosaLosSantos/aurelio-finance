@@ -15,7 +15,7 @@ import queue
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -199,6 +199,7 @@ def _client(storage: str) -> CopilotClient:
 
 @dataclass
 class _TurnState:
+    model: str
     usage_by_call: dict[str, Usage] = field(default_factory=dict)
     idle: bool = False
     failure: str | None = None
@@ -208,7 +209,12 @@ class _TurnState:
         if isinstance(data, AssistantUsageData):
             key = data.api_call_id or data.provider_call_id or event.id
             self.usage_by_call[key] = Usage(data.input_tokens, data.cache_read_tokens)
-            if data.content_filter_triggered:
+            if data.model != self.model:
+                self.failure = (
+                    f"GitHub Copilot used model {data.model!r} instead of "
+                    f"the requested model {self.model!r}."
+                )
+            elif data.content_filter_triggered:
                 self.failure = "GitHub Copilot filtered the response."
             elif data.finish_reason is not None and data.finish_reason not in (
                 "stop", "end_turn", "tool_calls", "tool_use",
@@ -281,7 +287,7 @@ async def _run(
     declarations: list[dict] | None,
 ) -> None:
     calls: dict[str, ToolRequest] = {}
-    state = _TurnState()
+    state = _TurnState(model)
     final = ""
     wrote_text = False
     try:
@@ -362,8 +368,11 @@ def stream(
     messages: list[dict],
     model: str,
     declarations: list[dict] | None = None,
-) -> Iterator[tuple[str, str | ToolRequest | Usage]]:
-    """Stream one Copilot turn, ending on words or captured terminal tools."""
+) -> Generator[tuple[str, str | ToolRequest | Usage], None, None]:
+    """Stream one Copilot turn; reject SDK model substitution before completion.
+
+    Closing the iterator aborts the SDK turn and waits for session cleanup.
+    """
     output: queue.Queue = queue.Queue()
     holder: dict[str, Any] = {"ready": threading.Event()}
 
@@ -436,7 +445,7 @@ def models() -> tuple[Model, ...]:
 
 
 async def _search_web(query: str, model: str) -> WebResult:
-    state = _TurnState()
+    state = _TurnState(model)
     fetching: dict[str, str] = {}
     fetched: dict[str, str] = {}
     with tempfile.TemporaryDirectory(prefix="aurelio-copilot-search-") as storage:

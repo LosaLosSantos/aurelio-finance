@@ -27,8 +27,9 @@ import datetime
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -1396,7 +1397,7 @@ def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]
         return messages, decided
 
 
-def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
+def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
     """The answer as events: `start`, the deltas and whatever the model asked
     for along the way, then exactly one `done` — or an `error` in its place,
     saying why. Whatever way it ends, the answer is stored with that ending.
@@ -1514,28 +1515,29 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 completion, turn.model, messages, rounds=allowed, warn=turn.decision is None
             )
             rounds.append(None)
-            for kind, piece in advisor.stream_llm(
+            with closing(advisor.stream_llm(
                 system,
                 asked,
                 model=turn.model,
                 tools=None if last else declared,
-            ):
-                if kind == "thought":
-                    _say(blocks, "thought", piece)
-                    yield schemas.ChatThought(text=piece)
-                elif kind == "text":
-                    said.append(piece)
-                    _say(blocks, "text", piece)
-                    yield schemas.ChatDelta(text=piece)
-                elif kind == "usage":
-                    # One per round, and all of them count: a turn that called
-                    # a tool asked the model twice and paid for both. Kept out
-                    # of `blocks` and out of the events — this is a fact about
-                    # the turn, not part of the answer, and the reader did not
-                    # ask what their question weighed.
-                    rounds[-1] = piece
-                else:
-                    calls.append(piece)
+            )) as response:
+                for kind, piece in response:
+                    if kind == "thought":
+                        _say(blocks, "thought", piece)
+                        yield schemas.ChatThought(text=piece)
+                    elif kind == "text":
+                        said.append(piece)
+                        _say(blocks, "text", piece)
+                        yield schemas.ChatDelta(text=piece)
+                    elif kind == "usage":
+                        # One per round, and all of them count: a turn that called
+                        # a tool asked the model twice and paid for both. Kept out
+                        # of `blocks` and out of the events — this is a fact about
+                        # the turn, not part of the answer, and the reader did not
+                        # ask what their question weighed.
+                        rounds[-1] = piece
+                    else:
+                        calls.append(piece)
             # Counted before `messages` grows, since `asked` is that same list
             # on a round with no notice.
             # `last` and not `not calls` alone: a call arriving on a round

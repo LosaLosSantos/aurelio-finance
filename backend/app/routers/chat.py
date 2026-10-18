@@ -25,11 +25,14 @@ first byte, and the reader still hears what the model makes of it afterwards.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from starlette.types import Send
 
 from app import chat, copilot_provider, crud, models, schemas, tools
 from app.database import get_db
@@ -103,17 +106,30 @@ _STREAMS = {
 }
 
 
-def _stream(events: Iterator[schemas.ChatEvent]) -> StreamingResponse:
+class _ChatResponse(StreamingResponse):
+    def __init__(self, events: Generator[schemas.ChatEvent, None, None]):
+        self.events = events
+        super().__init__(
+            _sse(events),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def stream_response(self, send: Send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            # Starlette does not close synchronous iterators on disconnect.
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(self.events.close)
+
+
+def _stream(events: Generator[schemas.ChatEvent, None, None]) -> StreamingResponse:
     """One streamed answer, with the headers that keep it a stream."""
-    return StreamingResponse(
-        _sse(events),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            # A proxy that buffers a stream turns it back into a frozen box.
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _ChatResponse(events)
 
 
 @router.post("", response_class=StreamingResponse, responses=_STREAMS)

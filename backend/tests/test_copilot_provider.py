@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -39,6 +40,7 @@ class _Session:
         self.captured = captured
         self.failure = failure
         self.receiver = None
+        self.stopped = asyncio.Event()
 
     async def __aenter__(self):
         return self
@@ -68,7 +70,7 @@ class _Session:
                     self.captured.get("tool_arguments", {"symbol": "VWCE"}),
                 ),
                 AssistantUsageData(
-                    model="claude-opus-5.5", input_tokens=123, cache_read_tokens=17,
+                    model=self.captured["session"]["model"], input_tokens=123, cache_read_tokens=17,
                     finish_reason="stop",
                 ),
                 SessionIdleData(),
@@ -77,6 +79,9 @@ class _Session:
         events = self.captured.get("events", events)
         for data in events:
             self.receiver(SimpleNamespace(agent_id=None, data=data, id=str(id(data))))
+        if self.captured.get("wait_for_abort"):
+            self.captured["worker"] = threading.current_thread()
+            await self.stopped.wait()
         if self.captured.get("raise_after_events"):
             raise RuntimeError("unavailable")
         return SimpleNamespace(data=AssistantMessageData("Hello", "message-1"))
@@ -87,6 +92,7 @@ class _Session:
 
     async def abort(self):
         self.captured["aborted"] = True
+        self.stopped.set()
 
 
 class _Client:
@@ -322,6 +328,60 @@ def test_failed_sdk_turn_persists_reported_tokens_without_executing_a_card(clien
         stored = crud.get_chat_conversation(db, events[0]["conversation_id"]).messages[-1]
         assert (stored.prompt_tokens, stored.cached_tokens, stored.cost) == (100, 20, None)
     assert client.get("/api/goals").json() == []
+
+
+def test_sdk_model_fallback_is_an_error_not_a_successful_answer(client, monkeypatch):
+    captured = {"events": [
+        AssistantMessageDeltaData("Hello", "message-1"),
+        ExternalToolRequestedData("req", "session", "call", "write_goal", {}),
+        AssistantUsageData(model="claude-sonnet-5.5", input_tokens=100,
+                           finish_reason="stop"),
+        SessionIdleData(),
+    ]}
+    monkeypatch.setattr(
+        copilot_provider, "CopilotClient", lambda **options: _Client(captured, **options)
+    )
+    monkeypatch.setattr(copilot_provider, "stream", _REAL_STREAM)
+    monkeypatch.setattr(advisor, "stream_llm", _REAL_ADVISOR_STREAM)
+
+    response = client.post(
+        "/api/chat", json={"content": "Hello", "model": "definitely-not-a-copilot-model"}
+    )
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines() if line.startswith("data: ")
+    ]
+    assert events[-1]["kind"] == "error"
+    assert "definitely-not-a-copilot-model" in events[-1]["detail"]
+    assert "claude-sonnet-5.5" in events[-1]["detail"]
+    assert not any(event["kind"] in ("done", "card") for event in events)
+    saved = client.get(f"/api/chat/conversations/{events[0]['conversation_id']}").json()
+    assert saved["messages"][-1]["status"] == "error"
+    assert client.get("/api/goals").json() == []
+
+
+def test_closing_advisor_stream_aborts_sdk_and_removes_session_files(monkeypatch):
+    captured = {
+        "events": [AssistantMessageDeltaData("Partial", "message-1")],
+        "wait_for_abort": True,
+        "persist_transcript": True,
+    }
+    monkeypatch.setattr(
+        copilot_provider, "CopilotClient", lambda **options: _Client(captured, **options)
+    )
+    pending = _REAL_STREAM("system", [], "gpt-5.4")
+    monkeypatch.setattr(copilot_provider, "stream", lambda *args, **kwargs: pending)
+    response = _REAL_ADVISOR_STREAM("system", [], "gpt-5.4")
+    try:
+        assert next(response) == ("text", "Partial")
+        response.close()
+        assert captured["aborted"] is True
+        assert not captured["worker"].is_alive()
+        assert not captured["transcript"].exists()
+        assert not Path(captured["client"]["working_directory"]).exists()
+    finally:
+        response.close()
+        pending.close()
 
 
 @pytest.mark.parametrize("operation", ["chat", "search"])
