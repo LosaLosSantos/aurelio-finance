@@ -16,7 +16,7 @@ import shutil
 import tempfile
 import threading
 from collections.abc import Generator, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -471,6 +471,9 @@ def models() -> tuple[Model, ...]:
 
 
 async def _search_web(query: str, model: str) -> WebResult:
+    cancelled = _cancellation.get()
+    if cancelled is not None and cancelled.is_set():
+        raise asyncio.CancelledError
     state = _TurnState(model)
     fetching: dict[str, str] = {}
     fetched: dict[str, str] = {}
@@ -513,8 +516,8 @@ async def _search_web(query: str, model: str) -> WebResult:
                             fetched[url] = " ".join(data.result.content.split())
 
                 unsubscribe = session.on(receive)
-                try:
-                    answer = await session.send_and_wait_typed(
+                request = asyncio.create_task(
+                    session.send_and_wait_typed(
                         "Query: "
                         + query
                         + "\nStart by fetching: https://www.google.com/search?q="
@@ -522,7 +525,21 @@ async def _search_web(query: str, model: str) -> WebResult:
                         _WebAnswer,
                         timeout=120,
                     )
+                )
+                try:
+                    while cancelled is not None and not request.done():
+                        if cancelled.is_set():
+                            await session.abort()
+                            raise asyncio.CancelledError
+                        await asyncio.wait((request,), timeout=0.1)
+                    if cancelled is not None and cancelled.is_set():
+                        raise asyncio.CancelledError
+                    answer = await request
                 finally:
+                    if not request.done():
+                        request.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await request
                     unsubscribe()
                 state.validate()
                 if not fetched:

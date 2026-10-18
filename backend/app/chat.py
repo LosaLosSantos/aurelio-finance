@@ -30,6 +30,7 @@ import os
 from collections.abc import Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from contextvars import copy_context
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -1166,7 +1167,11 @@ def _searches(
             queued.append((place, query))
     if queued:
         with ThreadPoolExecutor(max_workers=len(queued)) as pool:
-            ran = list(pool.map(websearch.search, [query for _, query in queued]))
+            pending = [
+                pool.submit(copy_context().run, websearch.search, query)
+                for _, query in queued
+            ]
+            ran = [result.result() for result in pending]
         for (place, _), found in zip(queued, ran):
             answered[place] = (websearch.outcome(found), found)
     return answered

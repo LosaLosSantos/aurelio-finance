@@ -202,6 +202,95 @@ def test_disconnect_aborts_a_provider_waiting_for_its_next_event(
     assert not any(b"event: done" in message.get("body", b"") for message in sent)
 
 
+@pytest.mark.parametrize("asgi_version", ["2.0", "2.4"])
+@pytest.mark.parametrize("search_count", [1, 2])
+def test_disconnect_aborts_all_active_web_retrievals(
+    client, monkeypatch, asgi_version, search_count
+):
+    waiting = threading.Barrier(search_count + 1)
+    captured = []
+
+    class WaitingSession(_Session):
+        async def send_and_wait_typed(self, prompt, response_type, timeout):
+            self.captured["worker"] = threading.current_thread()
+            waiting.wait(timeout=2)
+            try:
+                await asyncio.wait_for(self.stopped.wait(), timeout=2)
+            except TimeoutError:
+                self.captured["timed_out"] = True
+                raise
+            return response_type(pages=[])
+
+        async def __aexit__(self, *exc):
+            self.captured["closed"] = True
+            return False
+
+    class WaitingClient(_Client):
+        async def create_session(self, **options):
+            await super().create_session(**options)
+            return WaitingSession(self.captured)
+
+    def make_client(**options):
+        found = {"persist_transcript": True}
+        captured.append(found)
+        return WaitingClient(found, **options)
+
+    def request_searches(*args, **kwargs):
+        yield "text", "Checking sources."
+        for index in range(search_count):
+            yield "tool_call", advisor.ToolCall(
+                str(index), "search_web", json.dumps({"query": f"rate decision {index}"})
+            )
+
+    monkeypatch.setattr(copilot_provider, "CopilotClient", make_client)
+    monkeypatch.setattr(copilot_provider, "search_web", _REAL_SEARCH_WEB)
+    monkeypatch.setattr(advisor, "stream_llm", request_searches)
+    store_answer = chat._store_answer
+
+    def store_after_cleanup(*args, **kwargs):
+        assert len(captured) == search_count
+        assert all(found.get("closed") for found in captured)
+        assert all(not found["transcript"].exists() for found in captured)
+        return store_answer(*args, **kwargs)
+
+    monkeypatch.setattr(chat, "_store_answer", store_after_cleanup)
+    with SessionLocal() as db:
+        turn = chat.prepare(db, schemas.ChatRequest(content="Check the latest rates"))
+    sent = []
+
+    async def disconnect():
+        async def receive():
+            await anyio.to_thread.run_sync(lambda: waiting.wait(timeout=2))
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+
+        await _stream(chat.stream(turn))(
+            {"type": "http", "asgi": {"spec_version": asgi_version}}, receive, send
+        )
+
+    anyio.run(disconnect)
+    assert all(found.get("aborted") for found in captured)
+    assert not any(found.get("timed_out") for found in captured)
+    assert all(not found["worker"].is_alive() for found in captured)
+    with SessionLocal() as db:
+        answer = crud.get_chat_conversation(db, turn.conversation_id).messages[-1]
+        assert answer.status == "cut"
+        assert json.loads(answer.blocks) == [{"kind": "text", "text": "Checking sources."}]
+    assert not any(b"event: done" in message.get("body", b"") for message in sent)
+
+
+def test_cancelled_web_retrieval_never_starts_an_sdk_client(monkeypatch):
+    make_client = Mock()
+    monkeypatch.setattr(copilot_provider, "CopilotClient", make_client)
+    with copilot_provider.cancellation_scope() as stopped:
+        stopped.set()
+        with pytest.raises(asyncio.CancelledError):
+            _REAL_SEARCH_WEB("rates", "gpt-5.4")
+        make_client.assert_not_called()
+
+
 def test_stream_maps_copilot_text_tools_and_usage(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
@@ -635,6 +724,43 @@ def test_search_verifies_fetched_excerpts_and_accumulates_usage(monkeypatch):
     result = asyncio.run(copilot_provider._search_web("rates", "gpt-5.4"))
     assert result.pages == (page,)
     assert result.usage == copilot_provider.Usage(600, 30)
+
+
+def test_parallel_chat_searches_preserve_sources_and_usage_with_cancellation_scope(monkeypatch):
+    page = {"url": "https://example.com/rates", "title": "Rates", "excerpt": "Rates stayed at 4%."}
+    captured = []
+
+    def make_client(**options):
+        found = {
+            "events": [
+                *_fetch_events(),
+                AssistantUsageData(
+                    model="claude-haiku-5.5", input_tokens=100, cache_read_tokens=10,
+                    finish_reason="stop",
+                ),
+                SessionIdleData(),
+            ],
+            "answer": {"pages": [page]},
+        }
+        captured.append(found)
+        return _Client(found, **options)
+
+    monkeypatch.setattr(copilot_provider, "CopilotClient", make_client)
+    monkeypatch.setattr(copilot_provider, "search_web", _REAL_SEARCH_WEB)
+    calls = [
+        advisor.ToolCall(str(index), "search_web", json.dumps({"query": f"rate decision {index}"}))
+        for index in range(2)
+    ]
+    with copilot_provider.cancellation_scope():
+        results = chat._searches(calls, allowed=2)
+    assert len(captured) == 2
+    assert set(results) == {0, 1}
+    for index, (outcome, found) in results.items():
+        assert outcome["ok"]
+        assert outcome["result"]["pages"] == [page]
+        assert found.query == f"rate decision {index}"
+        assert found.usage == advisor.Usage(100, 10, None, searches=1)
+    assert not any(found.get("aborted") for found in captured)
 
 
 @pytest.mark.parametrize("terminal", [
