@@ -1582,6 +1582,29 @@ def _dated(model: str, listed: set[str]) -> list[str]:
     return sorted(slug for slug in listed if dated.fullmatch(slug))
 
 
+# OpenRouter's two kinds of suffix on a model's name (its page on model
+# variants, read 2026-10-17). A routing variant is accepted on any model, only
+# changes how the request is routed, and is never an entry of the public list:
+# `:nitro`, `:floor`, `:exacto`, `:online`. A catalog variant is an entry of its
+# own, which does not fall back to its base: `:free`, `:batch`, `:thinking`,
+# `:extended`. "Only the suffixes listed on this page are variants": any other
+# stays part of the name.
+_ROUTING_VARIANTS = frozenset({"nitro", "floor", "exacto", "online"})
+
+
+def catalog_id(model: str) -> str:
+    """The id of the public list's entry that describes `model`: its base slug
+    and its catalog variant, every routing variant dropped, which is the rule
+    OpenRouter gives (`openai/gpt-5.2:nitro` is `openai/gpt-5.2`, and
+    `poolside/laguna-s-2.1:free:nitro` is `poolside/laguna-s-2.1:free`).
+
+    Until brief BB the list was searched for the name as written, which no
+    routing variant ever is: a 400 on `anthropic/claude-sonnet-4.6:nitro`, a
+    model still served, read as a model OpenRouter no longer serves."""
+    base, *suffixes = model.split(":")
+    return ":".join([base, *(s for s in suffixes if s not in _ROUTING_VARIANTS)])
+
+
 def _and(names: list[str]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
@@ -1778,13 +1801,16 @@ def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
             f"{refused} Whether it still serves {model} could not be checked: its "
             f"public list of models did not answer ({unreachable})."
         )
-    if model in listed:
+    # The list's entry for the name, not the name: a routing variant is never
+    # listed, and a 400 on one is not a model gone (brief BB).
+    entry = catalog_id(model)
+    if entry in listed:
         return AdvisorError(refused)
     gone = (
         f"The model {model} is no longer served by OpenRouter: it refused the call "
         f"({said}), and its public list of models no longer has it. {_where_set(model)}"
     )
-    dated = _dated(model, listed)
+    dated = _dated(entry, listed)
     if dated:
         versions = "a dated version" if len(dated) == 1 else "dated versions"
         gone += f" OpenRouter still lists {_and(dated)}, {versions} of it."
