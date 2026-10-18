@@ -125,8 +125,8 @@ make the copy, and if the change fails it puts the copy back.
 
 All of them are in one SQLite file, `backend/data.db`. To back it up, copy the file while
 Aurelio is stopped. To move to another computer, install Aurelio there and copy the file into
-`backend/`. Git ignores `*.db` files and `backend/.env` (where the AI key goes), so `git pull`
-never touches your records or your key.
+`backend/`. Git ignores `*.db` files and `backend/.env` (local settings), so `git pull`
+never touches your records or those settings.
 
 The server listens on your own computer only (`localhost`), and it has no login. It is meant
 to be opened in the browser of the machine it runs on, not exposed to a network.

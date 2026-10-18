@@ -25,11 +25,11 @@ context did not hold it could not check: in the brief's P0 it called a fund's
 stated a coin's history from memory. The analyst and its revision now have
 read-only tools (`analyst_tools`): the look-through, what the catalogue holds
 on a fund's index, what an instrument is, what a change would weigh, and for
-Anthropic's models the web. None of them reads the profile, the goals or the
+Claude and GPT models the web. None of them reads the profile, the goals or the
 questionnaire, and a test plants markers there to hold that line; the
 confidant and the synthesis have none. A step that may look things up asks in
 rounds (`_looked_up`): at most ROUNDS_PER_STEP requests and SEARCHES_PER_STEP
-searches, its cost every one of them.
+searches.
 
 THE DEPTH IS VARIABLE, and that is what makes this an orchestration rather than
 a pipeline. Steps 1, 2 and 4 always run: the asymmetry is the chain, and the
@@ -224,10 +224,8 @@ MAX_STEPS = 2 + MAX_REVISION_ROUNDS * 2
 # what a step may answer: its last round always ends in words.
 ROUNDS_PER_STEP = 4
 
-# How many web searches one step may run: three, about $0.022 at brief AM's
-# measured $0.0073 a search. One past them is answered in words and runs
-# nothing, the tools left as they are, so the cache holds
-# (`chat.WEB_SEARCHES_PER_TURN`).
+# Calls past the search bound run nothing and receive a tool result explaining
+# the limit; the declarations remain unchanged (`chat.WEB_SEARCHES_PER_TURN`).
 SEARCHES_PER_STEP = 3
 
 SEARCHES_SPENT = (
@@ -237,9 +235,7 @@ SEARCHES_SPENT = (
 
 # The round before the last says so, as the chat's does
 # (`chat.LAST_TOOL_ROUND_NOTICE`): a deadline told is one the model can plan
-# against. For Anthropic's models it is a user message after the round's tool
-# results, so the round still reads the one before it from the cache; for the
-# others, a line of the round's system prompt.
+# against. It follows the tool results as a user message for every model.
 LAST_TOOL_ROUND_NOTICE = (
     "ONE THING ABOUT THIS ROUND. It is your last round with tools. After it you "
     "will be asked once more with none, and what you write then is your whole "

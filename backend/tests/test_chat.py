@@ -812,10 +812,15 @@ def test_a_turn_that_only_asked_for_a_tool_is_not_an_empty_response(monkeypatch)
     """A terminal Copilot tool request is a valid round even with no text."""
     request = advisor.copilot_provider.ToolRequest("call_1", "get_look_through", "{}")
     usage = advisor.copilot_provider.Usage(input_tokens=10, cached_tokens=0)
+
+    def stream(*args, **kwargs):
+        yield "tool_call", request
+        yield "usage", usage
+
     monkeypatch.setattr(
         advisor.copilot_provider,
         "stream",
-        lambda *args, **kwargs: iter((("tool_call", request), ("usage", usage))),
+        stream,
     )
 
     pieces = list(

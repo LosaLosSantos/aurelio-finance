@@ -95,15 +95,11 @@ class AdvisorError(Exception):
 
 @dataclass(frozen=True)
 class ToolCall:
-    """One tool the model asked for, assembled from the fragments it arrived in.
+    """One terminal tool request captured from the Copilot SDK.
 
-    `arguments` is the raw JSON string the model wrote, not a parsed dict, and
-    that is deliberate twice over. It has to travel back to the API verbatim
-    inside the assistant turn — a re-serialised dict is a different string and
-    some providers check. And whether it parses at all is not this module's
-    business: a model that writes broken JSON has made a mistake the caller
-    running the tool can describe back to it, which is a better answer than a
-    stream that dies of a ValueError.
+    String arguments are preserved; structured SDK arguments are serialized at
+    the provider boundary. Parsing belongs to the tool caller, so malformed JSON
+    becomes an explainable tool result rather than breaking the stream.
     """
 
     id: str

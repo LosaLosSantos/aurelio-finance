@@ -627,9 +627,8 @@ class ChainStep(Base):
     duration_ms: Mapped[int | None] = mapped_column(nullable=True)
     # Historical USD cost reported by the model provider. GitHub Copilot uses
     # subscription quota rather than a per-call USD price, so new Copilot-backed
-    # steps leave this nullable field empty. Sibling of duration_ms
-    # for the same reason — the card that asks the reader to spend a minute and
-    # a few cents quotes both from the last run, and neither may be a guess.
+    # steps leave this nullable field empty. Historical prices and measured
+    # durations remain available to the analysis proposal card.
     cost: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     run: Mapped["ChainRun"] = relationship(back_populates="steps")
@@ -932,11 +931,8 @@ class ChatMessage(Base):
     # and on a prompt that had since grown by half.
     prompt_tokens: Mapped[int | None] = mapped_column(nullable=True)
     # Of those, how many the provider read from its cache, summed the same way.
-    # Since the chat asks Anthropic's models to cache (2026-10-05), the token
-    # count alone stopped saying what a turn cost: on Opus 5.5 a cached token
-    # was billed at a twentieth of the input price. A zero is kept as zero,
-    # since it is an answer (nothing read from the cache); None means the
-    # provider did not say.
+    # Zero means no cached input; None means the provider did not say. These
+    # counts describe usage, not a subscription's dollar price.
     cached_tokens: Mapped[int | None] = mapped_column(nullable=True)
     # Historical provider-reported USD cost summed over a turn's rounds.
     # Copilot-backed turns leave it empty because subscription quota is not a

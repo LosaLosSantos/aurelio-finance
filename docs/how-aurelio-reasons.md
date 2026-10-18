@@ -165,7 +165,7 @@ you and not one figure, a revision when the challenge is contested, and a
 synthesis. The analyst and its revision can look things up before they answer:
 every axis of the look-through, what the fund catalogue holds on a held fund's
 index and at which costs, what an instrument is and its latest close, what a
-purchase or a sale would do to your exposure, and, on Anthropic's models, the
+purchase or a sale would do to your exposure, and, on Claude and GPT models, the
 web. None of these reads your profile answers or your goals. Of your Profile
 the analyst reads one field, the country you pay tax in, with the rates you
 declared beside it, so that a tax is quoted rather than invented. A test plants
@@ -173,7 +173,7 @@ markers in the rest and checks that none reaches anything the analyst reads,
 its tools' answers included, that the tax country does, and that nothing of
 your records reaches the confidant, who is offered no tool at all. A step looks
 things up in at most
-four requests and three web searches, so what a run costs moves with what it
+four requests and three web searches, so its subscription usage moves with what it
 looks up.
 
 **Stale is a fingerprint, not a clock.** Every proposal declares what it

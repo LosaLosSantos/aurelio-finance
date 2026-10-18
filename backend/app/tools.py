@@ -70,11 +70,11 @@ security reads as approval of a purchase nobody proposed.
 
 `run_analysis` is a write like the others and stretches the word in one
 direction only: what it writes is a `ChainRun`, and what makes it a proposal is
-not that it is hard to undo but that it costs the reader a minute of waiting
-and a few cents before it produces anything. The card asks first and quotes the
-last run's measured time and price. It is also the only tool with a `walk`
-instead of a `run`, because a minute of silence is the thing a confirmation
-card should not buy you.
+not that it is hard to undo but that it consumes waiting time and subscription
+quota before it produces anything. The card asks first and quotes the last
+run's measured duration, and a historical price only when recorded. It is also
+the only tool with a `walk` instead of a `run`, because a minute of silence is
+the thing a confirmation card should not buy you.
 """
 
 from __future__ import annotations
@@ -4743,20 +4743,10 @@ def _spent(run: models.ChainRun | None) -> float | None:
 def _propose_analysis(db: Session, args: RunAnalysisArgs) -> Proposal:
     """The card that asks before the spend, quoting measurements only.
 
-    Three things the reader is owed before a minute of their attention goes:
-    how many steps, how long the last run took, and what it cost. The first is
-    a fact about the code; the other two are read off the last run and left
-    out entirely when there has never been one: "about a minute, a few cents"
-    would be a guess printed as a fact, and the reader would have no way to
-    tell it from the measured version of the same sentence.
-
-    And since brief AR, what a run may look up, with its bounds: the analyst's
-    steps can ask in rounds and search the web, so a run's cost moves with
-    what they look up, and the last run's price is one run's. No column of a
-    step says whether it looked anything up, and none was added for the card
-    (the reader's choice, 2026-10-12), so the card says the bounds and not
-    what the last run did. It said "model calls" until then, which a step
-    that asks in rounds made untrue.
+    Step and lookup bounds describe the upcoming run. Duration and any historical
+    USD price come only from the last saved run, never an estimate. Copilot-backed
+    runs have no USD price. Lookup counts are not persisted, so the card quotes
+    the bounds rather than claiming to know what the last run looked up.
     """
     run = crud.get_latest_chain_run(db)
     took, spent = _seconds(run), _spent(run)

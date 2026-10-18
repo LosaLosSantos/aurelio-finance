@@ -33,6 +33,8 @@ resumable history. This does not redirect or remove the CLI's saved authenticati
 The default is `claude-opus-5.5`. The chat menu asks Copilot for every model available to the
 signed-in account, including supported Claude and GPT models. Availability and quota depend on
 the account's Copilot plan and may change in GitHub's service.
+Configured defaults and role overrides also appear, even if discovery does not list them;
+their presence in the menu does not establish account access.
 If discovery fails or the account offers no models, the menu reports an error rather than
 substituting a configured list.
 The backend queries Copilot for each catalogue request without an application-level cache.
@@ -46,8 +48,8 @@ Optional settings in `backend/.env` choose defaults:
 |---|---|
 | `COPILOT_MODEL` | the default for everything |
 | `COPILOT_CHAT_MODEL` | the chat when no model is picked in its menu |
-| `COPILOT_ANALYST_MODEL` | the quantitative analyst |
-| `COPILOT_CONFIDANT_MODEL` | the confidant who reads personal context |
+| `COPILOT_ANALYST_MODEL` | the quantitative analyst and its revisions |
+| `COPILOT_CONFIDANT_MODEL` | the confidant who reads personal context and the synthesis |
 
 Each role-specific setting falls back to `COPILOT_MODEL`, then to the built-in default. Giving
 the two analysis roles different models can add different blind spots; one model in both seats
@@ -61,20 +63,18 @@ selected model provider. The analyst receives financial figures without personal
 answers; the confidant receives personal context without portfolio figures. The chat receives
 the current financial picture needed to answer its question.
 
-Web retrieval runs in a separate Copilot request. It carries the bounded search query, not the
-conversation or financial records, and returns at most five pages to the requesting model.
+Claude and GPT models can request web retrieval; other model IDs, including `auto`, are not
+offered that tool. Retrieval runs in a separate Copilot request. It carries the bounded search
+query, not the conversation or financial records, and returns at most five pages to the requesting model.
 It uses the fixed `claude-haiku-5.5` retrieval model. Sources must match successfully fetched
 URLs, and excerpts must occur in the fetched text; a failed retrieval is not an empty search.
 
+Aborted, filtered and length-limited answers are failures, not completed answers.
+
 ## Usage and cost
 
-Copilot reports token and subscription usage, not a per-request USD charge. Aurelio records input
-and cached token counts when Copilot supplies them, but leaves its historical USD cost fields
-empty for Copilot-backed calls. Plan limits, premium-request multipliers and billing belong to
-the signed-in GitHub account; check GitHub Copilot's own usage page for the authoritative figures.
-Token counts include each distinct model call in a request and remain recorded when a chat
-turn fails after reporting usage. Aborted, filtered and length-limited answers are failures,
-not completed answers.
+See [GitHub Copilot usage in Aurelio](github-copilot-usage.md) for token accounting,
+subscription quota and historical cost fields.
 
 ## Questions
 

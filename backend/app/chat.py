@@ -851,16 +851,9 @@ DECISION_ROUNDS = 2
 # rule about running a tool again sent it straight to them. And once anything
 # had been said after the card (the reply to the first card of an answer that
 # drew two, or any later exchange), the turn ended on the model's own words.
-# Measured on Opus 5.5 that day, on the reader's sequence rebuilt on test
-# data: that request was refused with a 400 whether the web was offered
-# ("Server tool ... failed: invalid request") or not ("Provider returned
-# error"), and cost nothing either way; the same request with this note at its
-# end was taken, the model reasoning when the probe's cap of 300 tokens
-# stopped it (0.073601 USD).
-#
-# A user turn at the end, where the last-round notice goes for those models
-# and for its reason: everything before it is the conversation as it stands,
-# so the cache is read up to here.
+# The note is the final user message, as is the last-round notice: it describes
+# what the application now needs instead of leaving the model to continue its
+# earlier answer.
 DECISION_NOTE = (
     "THE READER HAS JUST ANSWERED A CARD and asked nothing new; this note is "
     "the app's. {outcome}{waiting}Say what that means for them briefly, in the "
@@ -1020,12 +1013,9 @@ def _store_answer(
     request's session is closed by the time the stream finishes, and this runs
     even when the reader has gone. Returns the stored message's id.
 
-    The three figures are what the provider reported for the turn (`_spent`):
-    every token its rounds read, how many of those came from the cache, and
-    what it all cost, its web searches included. The answer to "what does a
-    turn cost", kept per turn instead of in a sentence somebody measured once.
-    The tokens alone stopped answering it the day the cache came in: on Opus
-    5.5 a cached token cost a twentieth of one sent fresh (2026-10-05)."""
+    Usage is measured on the answering rounds (`_spent`), not inferred from
+    prompt size. Historical USD costs can include web retrieval; Copilot-backed
+    turns leave cost empty rather than converting quota into dollars."""
     with SessionLocal() as db:
         conv = crud.get_chat_conversation(db, turn.conversation_id)
         if conv is None:  # deleted while the answer was being written
@@ -1056,15 +1046,11 @@ def _spent(
     and None when none did. They exist to show what the cache reads, and a
     search is another model's request that reads nothing from it: counted
     in, they would lower the share read from the cache without saying why. A
-    zero in `prompt_tokens` is stored as None too, as it always was: a turn
-    that cost nothing to send does not exist. A zero in `cached_tokens` is
+    zero total in `prompt_tokens` is stored as None. A zero in `cached_tokens` is
     kept, because it is a real answer: nothing was read from the cache.
 
-    The cost is everything the turn spent, its rounds and its searches, and a
-    sum only when every one of them reported a cost. One whose price nobody
-    said makes the turn's cost unknown, never smaller: the rule the reader set
-    for the analysis's spend (2026-10-02), since a figure about money that is
-    low without saying so is the worse mistake."""
+    Historical USD costs include rounds and searches only when every entry
+    reported a price. Copilot usage carries no USD price, so cost remains None."""
 
     def total(figures: list) -> int | None:
         known = [f for f in figures if f is not None]
@@ -1146,11 +1132,7 @@ MAX_COMPLETIONS_PER_TURN = 7
 # How many web searches one turn may run, for a model offered the web
 # (`tools.web_search`). Six is the reader's figure (2026-10-06). The app counts
 # the searches it runs (`_searches`) and answers a call past them itself, in
-# words (SEARCHES_SPENT), with the tools left as they are. Until brief AM the
-# rounds after the sixth were asked without the web, and a round whose tools
-# changed paid for its whole prefix again, since the tools come first in what
-# a provider caches. At brief AM's measured price ($0.0073 a search, P1) six
-# searches are about $0.044, before the chat's model reads their pages.
+# words (SEARCHES_SPENT), with the tools left as they are.
 WEB_SEARCHES_PER_TURN = 6
 
 # What the model reads for a search past the turn's six, which does not run.
@@ -1168,10 +1150,8 @@ def _searches(
     None for a call that did not run (its arguments do not fit, or the turn's
     searches are spent).
 
-    At most `allowed` run, the first ones asked for, and they run at the same
-    time: each is a request of a few seconds (3.5 to 4.4 in brief AM's P1)
-    that waits for nothing but itself, and the reader would otherwise wait for
-    them one after the other."""
+    At most `allowed` run, the first ones asked for. Independent retrieval
+    requests run concurrently so the reader need not wait for them in sequence."""
     answered: dict[int, tuple[dict, websearch.Search | None]] = {}
     queued: list[tuple[int, str]] = []
     for place, call in enumerate(calls):
@@ -1436,20 +1416,10 @@ def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
     round and not the second is not a boundary.
 
     The loop has a deadline and the model is told about it. The round before the
-    last carries `LAST_TOOL_ROUND_NOTICE`, where that model reads it without the
-    round losing its cache, and the last one is offered no tools at all. The
-    first is so a plan can be finished early; the second is so a plan that was
+    last carries `LAST_TOOL_ROUND_NOTICE` as a final user message, and the last
+    one is offered no tools at all. The first is so a plan can be finished early;
+    the second is so a plan that was
     NOT finished ends in readable words instead of an exception.
-
-    Every round but that last one asks the provider to keep what it read
-    (`_kept_prefixes`), which only Anthropic's models need asking for; the
-    request to any other model is what it was before the cache came in. On a
-    question's turn the round before the last keeps nothing new: it reads up to
-    where the round before it ended (`advisor.stream_llm`'s `kept_to`), since
-    what it would keep only a round with the same tools could read, and the
-    last has none. The turn after a decision is left as it was: its round
-    before the last is its first, which ends on the note about the decision,
-    and whether a later turn reads what it keeps there is unmeasured.
 
     Tools run in a session of this function's own, for the reason `_store_answer`
     opens one: the request's session belongs to the request, and by the time a
@@ -1501,9 +1471,8 @@ def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
             messages, decided = yield from _work(turn.pending, turn.conversation_id)
             settled = True
             yield schemas.ChatDecided(card=schemas.ChatCardBlock(**tools.present(decided)))
-        # The same on every round that has tools, whatever happens in the
-        # turn: they come first in what a provider caches, so a round whose
-        # tools changed would pay for everything it sends again.
+        # Keep declarations stable across tool rounds; execution enforces the
+        # remaining search budget without changing what the model may request.
         declared = tools.declarations() + tools.web_search(turn.model)
         # How many web searches the turn has run, against WEB_SEARCHES_PER_TURN.
         searched = 0
@@ -1542,8 +1511,6 @@ def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
                         resolved_model = piece
                     else:
                         calls.append(piece)
-            # Counted before `messages` grows, since `asked` is that same list
-            # on a round with no notice.
             # `last` and not `not calls` alone: a call arriving on a round
             # that was offered no tools is a model contradicting the request,
             # and running it would spend a fetch on an answer no completion is

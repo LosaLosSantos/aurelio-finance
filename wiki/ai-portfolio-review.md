@@ -11,9 +11,8 @@ nav_order: 2
 Aurelio's AI portfolio review gets a second opinion out of what each role is allowed to see:
 an analyst judges the numbers without knowing whose they are, a confidant who knows the
 person challenges the findings without seeing the numbers, and the final answer keeps any
-disagreement instead of averaging it away.** A review cost $0.64 on the default model when
-it was measured in October 2026, and runs on your own records, inside Aurelio, an
-open-source personal finance app.
+disagreement instead of averaging it away.** The review runs on your own records, inside
+Aurelio, an open-source personal finance app.
 
 ## Why is one model not enough?
 
@@ -33,7 +32,7 @@ built on what they are not shown.
 
 The analyst and its revision can look things up before they answer: the look-through of your
 funds, what the fund catalogue holds on a fund's index and at which costs, what an instrument
-is and its latest close, what a purchase or a sale would change, and, on Anthropic's models,
+is and its latest close, what a purchase or a sale would change, and, on Claude and GPT models,
 the web. None of these reads your profile answers or your goals, and a test in the code plants
 markers there to check that none of them reaches the analyst.
 
@@ -49,15 +48,14 @@ challenge still stands, and the analyst answers once more. A run is three steps 
 nothing to argue about and up to six when there is. A step of the analyst's is one request to
 the model, or up to four, with up to three web searches, when it looks things up.
 
-Measured on 12 October 2026, a review cost $0.64: the analyst looked up ten things in three
-rounds, one of them a web search, before it wrote. What skipping the revision saves is mostly
-your time: a minute of waiting matters more than the cents.
+Tool rounds and web retrieval consume additional subscription quota; see
+[GitHub Copilot usage in Aurelio](github-copilot-usage.md) for usage accounting.
 
 ## How do you run one?
 
-You ask the chat for an analysis. It answers with a card that says what the run will cost,
-quoting the last run rather than an estimate, and nothing starts until you confirm it. You can
-then watch each step arrive, and read the result in the main column, where each step is
+You ask the chat for an analysis. It answers with a card describing the steps and lookup bounds,
+quoting the last run's measured duration when available, and nothing starts until you confirm it.
+You can then watch each step arrive, and read the result in the main column, where each step is
 labelled: "Analyst · sees only the numbers", "Knows you · has not seen the numbers", "Analyst ·
 answers the challenge", and "The answer". Past analyses are listed from the chat's history.
 
@@ -74,8 +72,7 @@ conversation could steer would only repeat the conversation.
 
 ## Different models for different roles
 
-Each role can run on its own model, set in `backend/.env` (`COPILOT_ANALYST_MODEL` and
-`COPILOT_CONFIDANT_MODEL`). Different models bring different blind spots, which is what a
+Each role can run on its own model. Different models bring different blind spots, which is what a
 panel is for. One model in both seats still works, because what separates the roles is what
 each one is shown, not the model behind it. See
 [Use Aurelio with GitHub Copilot](github-copilot-models.md).
@@ -87,8 +84,8 @@ rest of your finances and say what stands out. What it cannot do on its own is d
 itself, which is why Aurelio splits the review between roles that see different things.
 
 **Which AI model is best for a portfolio review?** Any suitable model offered to the signed-in
-Copilot account can run it; Aurelio defaults to Claude Opus 5.5. Putting a different model in
-each role adds different blind spots, which is the point of a panel.
+Copilot account can run it; see the [model guide](github-copilot-models.md) for defaults. Putting
+a different model in each role adds different blind spots, which is the point of a panel.
 
 **Does the review change my records?** No. It writes a document you read; your records change
 only through cards you confirm.

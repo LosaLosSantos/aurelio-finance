@@ -18,8 +18,8 @@ reads the profile, the goals or the questionnaire:
   a symbol and its latest close.
 - `weigh_change`: what a purchase, a sale or both would do to the look-through
   (`composition.weigh_change`).
-- `search_web`, for Anthropic's models: the web search the chat has, which the
-  step runs itself, since a search is a request of its own with a cost
+- `search_web`, for Claude and GPT models: the web search the chat has, which the
+  step runs itself as a separate subscription-backed request
   (`chain`).
 
 Not offered, on purpose: `size_purchase`, whose room reads the profile and the

@@ -15,7 +15,10 @@ USD price per question.** Aurelio itself remains free and open source.
 
 When the Copilot SDK reports usage, Aurelio stores the input-token count and how many input
 tokens came from cache. A tool-using turn can contain several model rounds, so those figures are
-summed across the turn. Missing usage remains empty rather than becoming an invented zero.
+summed across distinct calls within each round and across the turn. Reported counts remain
+recorded when a chat turn subsequently fails. These stored token counts cover the answering
+rounds, not the separate web-retrieval requests. Missing usage remains empty rather than
+becoming an invented zero.
 
 The database retains nullable historical USD cost columns for existing installations, but every
 Copilot-backed call leaves them empty. Copilot subscription quota, premium-request multipliers
