@@ -77,8 +77,30 @@ roles of the analysis different models brings different blind spots, which is th
 the [AI portfolio review](ai-portfolio-review.md); one model in both seats still works,
 because what separates the roles is what each is shown.
 
-If OpenRouter stops serving a model you set, the chat says so, names the setting that chose
-it, and lists the dated versions OpenRouter still serves, if there are any.
+## What happens when OpenRouter retires a model?
+
+OpenRouter's public list of models gives some of them "the date after which the model may be
+removed"
+([API reference, models](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)):
+17 of the 470 it listed on 17 October 2026, from 3 to 75 days ahead. Aurelio reads that list
+once a day and says it before a call to such a model fails:
+
+- The chat's menu shows the date beside the model's name ("may be retired after
+  2026-10-31"), and marks a model the list no longer has ("no longer listed by OpenRouter")
+  without hiding it, since a model has been seen to leave the list and still answer.
+- From 30 days before the date, a line above the chat's question box names the model the
+  next question goes to, the date, and where it is set: a setting in `backend/.env`, the
+  app's built-in default, or the menu. The analysis's card says the same of the models a run
+  would call; both say it, too, of the model the web searches run on, when the model in use
+  can search.
+
+If OpenRouter then stops serving a model you set, the chat says so, names the setting that
+chose it, and lists the dated versions OpenRouter still serves, if there are any.
+
+Reading the list is one request a day to OpenRouter, with no key and nothing of yours in it:
+it reaches OpenRouter from your computer's address, as every question to the chat does, and
+nothing more is sent. With no key set it is never made, and on a day the list cannot be read
+the app says nothing about dates.
 
 ## Can it search the web?
 
