@@ -136,7 +136,8 @@ def _fetch_close_window(
     symbol: str, start: datetime.date, end: datetime.date
 ) -> list[tuple[str, float | None]]:
     """[(day_iso, close or None), ...] for every row Yahoo has in [start, end),
-    ascending, rows with no prices INCLUDED as None. Network call.
+    ascending, rows with no prices INCLUDED as None. Network call. Transport
+    failures propagate; only an answered window without prices returns [].
 
     `keepna=True` is the whole point of this helper, and a line in this
     module that must not be simplified. yfinance drops a row whose prices are
@@ -162,10 +163,15 @@ def _fetch_close_window(
     ISF.L's 2026-09-16 as 1046.1134 for 1046.20. So a plan's occurrence priced
     after an ex-date of its fund had passed was bought below its day's price."""
     import yfinance as yf
+    from yfinance.exceptions import YFPricesMissingError
 
-    hist = yf.Ticker(symbol).history(
-        start=start.isoformat(), end=end.isoformat(), keepna=True, auto_adjust=False
-    )
+    try:
+        hist = yf.Ticker(symbol).history(
+            start=start.isoformat(), end=end.isoformat(), keepna=True, auto_adjust=False,
+            raise_errors=True,
+        )
+    except YFPricesMissingError:
+        return []
     if hist is None or len(hist) == 0:
         return []
     out: list[tuple[str, float | None]] = []

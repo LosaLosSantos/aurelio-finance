@@ -26,9 +26,11 @@ from alembic.config import Config
 
 from app import database, fx, models, prices, yahoo_rates
 from app.database import SessionLocal
+from tests.yahoo_chart import Listing, install
 
 TODAY = datetime.date.today()
 ECB_DAY = "2025-11-03"
+REAL_FETCH_CLOSE_WINDOW = prices._fetch_close_window
 
 
 def ago(n: int) -> str:
@@ -282,6 +284,77 @@ def test_a_code_neither_source_quotes_is_said_so_and_without_a_yet(client, feed,
         "worked out in EUR. State the amount from your statement. That is the figure the "
         "account actually moved by."
     )
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("failure", [TimeoutError, ConnectionError])
+def test_a_transport_failure_does_not_certify_a_cached_rate_or_suppress_retry(
+    client, feed, monkeypatch, tmp_path, cached, failure
+):
+    monkeypatch.setattr(prices, "_fetch_close_window", REAL_FETCH_CLOSE_WINDOW)
+    chart = install(monkeypatch, tmp_path)
+    chart.listings["USDTWD=X"] = Listing(
+        closes={"2026-01-06": 32.0, "2026-01-07": 32.0, "2026-01-09": 33.0},
+        currency="TWD", timezone="UTC",
+    )
+    now = datetime.datetime(2026, 1, 10, tzinfo=datetime.timezone.utc)
+    before = datetime.datetime(2026, 1, 8, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr(yahoo_rates, "_now", lambda: now)
+    if cached:
+        with SessionLocal() as db:
+            yahoo_rates._asked_back(db, "TWD", datetime.date(2025, 12, 1))
+            yahoo_rates._store(
+                db, "TWD", [("2026-01-06", 32.0), ("2026-01-07", 32.0)],
+                before, asked_for_newer=True,
+            )
+    answer = chart.answer
+
+    def unavailable(url, params):
+        if "period1" in params:
+            raise failure("Yahoo transport unavailable")
+        return answer(url, params)
+
+    monkeypatch.setattr(chart, "answer", unavailable)
+    refused = _arrived(client, "2026-01-09")
+    assert refused.status_code == 422
+    assert refused.json()["detail"].startswith(
+        "No final exchange rate from EUR to TWD is known for 2026-01-09 yet"
+    )
+    assert client.get("/api/transfers").json() == []
+    with SessionLocal() as db:
+        assert yahoo_rates._stamp(db, yahoo_rates._ASKED.format(code="TWD")) == (
+            before if cached else None
+        )
+        assert db.get(models.Setting, yahoo_rates._NO_HISTORY.format(code="TWD")) is None
+        assert not yahoo_rates.final(db, "TWD", "2026-01-09", "2026-01-07")
+        back = db.get(models.Setting, yahoo_rates._BACK.format(code="TWD"))
+        assert (back.value if back else None) == ("2025-12-01" if cached else None)
+
+    monkeypatch.setattr(chart, "answer", answer)
+    eur, twd = (i["id"] for i in _made(client.get("/api/institutions")))
+    made = _made(client.post("/api/transfers", json={
+        "date": "2026-01-09", "amount": 100.0, "currency": "EUR", "to_currency": "TWD",
+        "from_institution_id": eur, "to_institution_id": twd,
+    }))
+    assert (made["to_amount"], made["fx_as_of"]) == (4125.0, "2026-01-09")
+    (stored,) = client.get("/api/transfers").json()
+    assert (stored["to_amount"], stored["fx_as_of"]) == (4125.0, "2026-01-09")
+
+
+def test_a_successful_empty_yahoo_history_still_marks_a_code_as_unquoted(
+    client, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(prices, "_fetch_close_window", REAL_FETCH_CLOSE_WINDOW)
+    chart = install(monkeypatch, tmp_path)
+    chart.listings["USDBTN=X"] = Listing(closes={}, currency="BTN", timezone="UTC")
+    with SessionLocal() as db:
+        yahoo_rates.ensure(db, "BTN", ["2026-01-09"])
+        assert yahoo_rates.no_source(db, "BTN")
+        assert db.get(models.Setting, yahoo_rates._ASKED.format(code="BTN")) is None
+        assert db.get(models.Setting, yahoo_rates._BACK.format(code="BTN")) is None
+        asked = len(chart.asked)
+        yahoo_rates.ensure(db, "BTN", ["2026-01-09"])
+        assert len(chart.asked) == asked
 
 
 def test_the_catch_up_says_no_source_quotes_a_plans_code(client, feed, yahoo, monkeypatch):
