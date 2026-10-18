@@ -19,7 +19,7 @@ import datetime
 
 import pytest
 
-from app import advisor, analytics, chain, models, tools
+from app import advisor, analytics, chain, models, tools, yahoo_rates
 from app.database import SessionLocal
 from conftest import script_the_chain
 
@@ -326,11 +326,13 @@ def test_nothing_recorded_is_said_as_none_not_as_zero(client):
         assert line in analyst.splitlines(), line
 
 
-def test_an_amount_the_app_cannot_convert_is_named_and_sized(client):
+@pytest.mark.parametrize("rate_answer", [None, []], ids=["fetch-failed", "no-quotes"])
+def test_an_amount_the_app_cannot_convert_is_named_and_sized(client, monkeypatch, rate_answer):
     """Added as written, as on the Dashboard, with what kind of code it is and
     its share of the net worth, measured on the net worth itself (brief BA;
     it used to be named and not sized, when the only number was a volume of
     rows that bounded no error)."""
+    monkeypatch.setattr(yahoo_rates, "_fetch", lambda *args, **kwargs: rate_answer)
     _bank(client, "Banca Alfa", cash=6000)
     land = _made(client.post("/api/real-assets",
                              json={"name": "Terreno", "category": "land", "currency": "TWD"}))
@@ -338,7 +340,7 @@ def test_an_amount_the_app_cannot_convert_is_named_and_sized(client):
     with SessionLocal() as db:
         analyst = _analyst(db)
     assert (
-        "- Amounts in TWD (a currency no source quotes, 1000.00 of the net worth) cannot "
+        "- Amounts in TWD (no conversion rate available, 1000.00 of the net worth) cannot "
         "be converted to EUR and are added as written, so the totals that hold them are "
         "not exact."
     ) in analyst.splitlines()

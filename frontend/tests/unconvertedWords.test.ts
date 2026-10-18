@@ -17,14 +17,14 @@ const twd = {
   shares: { net_worth: 2300, cash_total: 700 },
 };
 
-test("a currency no source quotes: its kind, its rows, then each figure's share", () => {
+test("an unavailable rate: its code, its rows, then each figure's share", () => {
   const [said] = unconvertedWords(
     [{ items: [twd], labels: { net_worth: "net worth", cash_total: "cash" } }],
     "EUR",
   );
   assert.deepEqual(said, {
     code: "TWD",
-    kind: "TWD is a currency no source quotes, so no rate converts it.",
+    kind: "No conversion rate is available for TWD.",
     rows: "Written on: cash balance Taipei cash (2026-09-16); real asset Taipei flat.",
     figures: "Counted here as written, as if in EUR: net worth 2,300.00 TWD; cash 700.00 TWD.",
   });
@@ -96,7 +96,7 @@ test("a code only earlier points count is said too", () => {
   const blocks = unconvertedWords([], "EUR", [{ unconverted: ["TWD"] }, { unconverted: [] }]);
   assert.deepEqual(blocks, [{
     code: "TWD",
-    kind: "TWD is a currency no source quotes, so no rate converts it.",
+    kind: "No conversion rate is available for TWD.",
     rows: null,
     figures: "Counted here as written, as if in EUR: the history, at 1 of its 2 points.",
   }]);

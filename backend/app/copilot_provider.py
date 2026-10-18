@@ -15,7 +15,9 @@ import queue
 import shutil
 import tempfile
 import threading
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -95,6 +97,7 @@ class CopilotError(RuntimeError):
 
 
 _DONE = object()
+_cancellation: ContextVar[threading.Event | None] = ContextVar("copilot_cancellation", default=None)
 _SESSION_ISOLATION = {
     "enable_session_telemetry": False,
     "enable_session_store": False,
@@ -365,6 +368,16 @@ async def _run(
         output.put(_DONE)
 
 
+@contextmanager
+def cancellation_scope() -> Iterator[threading.Event]:
+    cancelled = threading.Event()
+    token = _cancellation.set(cancelled)
+    try:
+        yield cancelled
+    finally:
+        _cancellation.reset(token)
+
+
 def stream(
     system_prompt: str,
     messages: list[dict],
@@ -378,6 +391,7 @@ def stream(
     """
     output: queue.Queue = queue.Queue()
     holder: dict[str, Any] = {"ready": threading.Event()}
+    cancelled = _cancellation.get()
 
     def work() -> None:
         asyncio.run(_run(output, holder, system_prompt, _conversation(messages), model, declarations))
@@ -386,7 +400,14 @@ def stream(
     worker.start()
     try:
         while True:
-            item = output.get()
+            if cancelled is not None and cancelled.is_set():
+                raise asyncio.CancelledError
+            try:
+                item = output.get(timeout=0.1 if cancelled is not None else None)
+            except queue.Empty:
+                continue
+            if cancelled is not None and cancelled.is_set():
+                raise asyncio.CancelledError
             if item is _DONE:
                 break
             if isinstance(item, BaseException):

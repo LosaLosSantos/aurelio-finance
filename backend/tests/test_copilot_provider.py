@@ -10,10 +10,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import anyio
 import pytest
 
-from app import advisor, copilot_provider, crud
+from app import advisor, chat, copilot_provider, crud, schemas
 from app.database import SessionLocal
+from app.routers.chat import _stream
 from copilot import CopilotClient
 from copilot.client import RuntimeConnection
 from copilot.session_fs_provider import create_session_fs_adapter
@@ -122,6 +124,82 @@ class _Client:
 
     async def list_models(self):
         return [SimpleNamespace(id="gpt-5.4", name="GPT")]
+
+
+@pytest.mark.parametrize("asgi_version", ["2.0", "2.4"])
+@pytest.mark.parametrize("partial", [False, True])
+def test_disconnect_aborts_a_provider_waiting_for_its_next_event(
+    client, monkeypatch, asgi_version, partial
+):
+    waiting = threading.Event()
+    captured = {
+        "wait_for_abort": True,
+        "events": [AssistantMessageDeltaData("Partial", "message-1")] if partial else [],
+    }
+
+    class WaitingSession(_Session):
+        async def send_and_wait(self, prompt, timeout):
+            waiting.set()
+            try:
+                return await asyncio.wait_for(super().send_and_wait(prompt, timeout), timeout=2)
+            except TimeoutError:
+                captured["timed_out"] = True
+                raise
+
+        async def __aexit__(self, *exc):
+            captured["closed"] = True
+            return False
+
+    class WaitingClient(_Client):
+        async def create_session(self, **options):
+            captured["session"] = options
+            return WaitingSession(captured)
+
+    monkeypatch.setattr(
+        copilot_provider, "CopilotClient", lambda **options: WaitingClient(captured, **options)
+    )
+    monkeypatch.setattr(copilot_provider, "stream", _REAL_STREAM)
+    monkeypatch.setattr(advisor, "stream_llm", _REAL_ADVISOR_STREAM)
+    store_answer = chat._store_answer
+
+    def store_after_cleanup(*args, **kwargs):
+        assert captured.get("closed"), "SDK cleanup must finish before persistence"
+        return store_answer(*args, **kwargs)
+
+    monkeypatch.setattr(chat, "_store_answer", store_after_cleanup)
+    with SessionLocal() as db:
+        turn = chat.prepare(db, schemas.ChatRequest(content="hi"))
+    sent = []
+
+    async def disconnect():
+        ready = anyio.Event()
+
+        async def receive():
+            await ready.wait()
+            assert await anyio.to_thread.run_sync(waiting.wait, 2)
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.body":
+                if not partial or b"Partial" in message["body"]:
+                    ready.set()
+
+        await _stream(chat.stream(turn))(
+            {"type": "http", "asgi": {"spec_version": asgi_version}}, receive, send
+        )
+
+    anyio.run(disconnect)
+    assert captured.get("aborted"), "Disconnect must abort without waiting for another SDK event"
+    assert not captured.get("timed_out")
+    assert not captured["worker"].is_alive()
+    with SessionLocal() as db:
+        answer = crud.get_chat_conversation(db, turn.conversation_id).messages[-1]
+        assert answer.status == "cut"
+        assert json.loads(answer.blocks) == (
+            [{"kind": "text", "text": "Partial"}] if partial else []
+        )
+    assert not any(b"event: done" in message.get("body", b"") for message in sent)
 
 
 def test_stream_maps_copilot_text_tools_and_usage(monkeypatch):

@@ -3,7 +3,7 @@
 
    One block per code, in the order the reader acts on it:
      1. what kind of code it is: not a currency code (a typo, corrected on its
-        row), or a currency no source quotes (nothing to correct; the figures
+        row), or a currency with no available rate (the figures
         that hold it are in two units);
      2. where it is written: the rows, by kind and name;
      3. how much of each figure on this page it is, as written: each figure's
@@ -61,7 +61,7 @@ function kindWords(code: string, notACode: boolean): string {
   if (code === "") return "A row states no currency: say which one on the row.";
   return notACode
     ? `'${code}' is not a currency code: correct it on the row it is written on.`
-    : `${code} is a currency no source quotes, so no rate converts it.`;
+    : `No conversion rate is available for ${code}.`;
 }
 
 function rowWords(row: UnconvertedRow): string {

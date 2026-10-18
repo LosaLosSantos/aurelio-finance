@@ -31,8 +31,10 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette._utils import collapse_excgroups
 from starlette.concurrency import run_in_threadpool
-from starlette.types import Send
+from starlette.requests import ClientDisconnect
+from starlette.types import Receive, Scope, Send
 
 from app import chat, copilot_provider, crud, models, schemas, tools
 from app.database import get_db
@@ -118,11 +120,33 @@ class _ChatResponse(StreamingResponse):
             },
         )
 
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        with copilot_provider.cancellation_scope() as cancelled:
+            try:
+                with collapse_excgroups():
+                    async with anyio.create_task_group() as group:
+                        async def disconnected() -> None:
+                            await self.listen_for_disconnect(receive)
+                            cancelled.set()
+                            group.cancel_scope.cancel()
+
+                        group.start_soon(disconnected)
+                        try:
+                            await self.stream_response(send)
+                        except anyio.get_cancelled_exc_class():
+                            if not cancelled.is_set():
+                                raise
+                        finally:
+                            group.cancel_scope.cancel()
+            except OSError as exc:
+                raise ClientDisconnect() from exc
+        if self.background is not None:
+            await self.background()
+
     async def stream_response(self, send: Send) -> None:
         try:
             await super().stream_response(send)
         finally:
-            # Starlette does not close synchronous iterators on disconnect.
             with anyio.CancelScope(shield=True):
                 await run_in_threadpool(self.events.close)
 

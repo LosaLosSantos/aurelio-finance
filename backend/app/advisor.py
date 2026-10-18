@@ -1462,7 +1462,7 @@ def resolve_model(model: str | None = None) -> str:
 
 def _unconverted_words(u: dict) -> str:
     """A code counted as written: its kind and net-worth share when material."""
-    kind = "not a currency code" if u["not_a_code"] else "a currency no source quotes"
+    kind = "not a currency code" if u["not_a_code"] else "no conversion rate available"
     share = u["shares"].get("net_worth")
     sized = f", {share:.2f} of the net worth" if share else ""
     return f"{u['currency'] or 'no stated currency'} ({kind}{sized})"
