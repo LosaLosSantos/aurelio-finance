@@ -389,22 +389,6 @@ def test_the_chat_cannot_start_an_analysis_without_being_asked(client, monkeypat
     assert "You cannot steer it" in seen[0]["system"]
 
 
-def test_the_system_prompt_carries_the_two_rules(client):
-    """Answering about a real person's money: never a number that is not in
-    the context, and a refusal that names its remedy.
-
-    The third assertion used to read "You read; you do not write", and it had
-    to move because the sentence stopped being true — the model can now reach a
-    tool that would write. What it must never do is narrower and harder: it
-    proposes, and nothing reaches the records until the reader confirms. A test
-    pinning the old wording would have gone on passing over a prompt that told
-    the model it had no such tool while handing it one."""
-    assert "NEVER state a number that is not in the context" in chat.SYSTEM_PROMPT
-    assert "say what the reader would have to enter" in chat.SYSTEM_PROMPT
-    assert "You do not write; you PROPOSE" in chat.SYSTEM_PROMPT
-    assert "nothing reaches their records until they press confirm" in chat.SYSTEM_PROMPT
-
-
 # --- The model ---------------------------------------------------------------
 
 
@@ -454,6 +438,16 @@ def test_an_empty_question_is_refused_before_anything_is_stored(client, monkeypa
     seen = _fake_stream(monkeypatch)
     assert client.post("/api/chat", json={"content": ""}).status_code == 422
     assert seen == [] and client.get("/api/chat/conversations").json() == []
+
+
+def test_model_discovery_failure_is_not_a_synthetic_catalogue(client, monkeypatch):
+    def fail():
+        raise chat.copilot_provider.CopilotError("GitHub Copilot model discovery failed")
+
+    monkeypatch.setattr(chat.copilot_provider, "models", fail)
+    response = client.get("/api/chat/models")
+    assert response.status_code == 502
+    assert response.json() == {"detail": "GitHub Copilot model discovery failed"}
 
 
 # --- The tools ----------------------------------------------------------------

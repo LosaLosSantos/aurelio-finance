@@ -439,13 +439,8 @@ def available_models() -> schemas.ChatModelsRead:
         if slug and slug not in notes:
             notes[slug] = note
 
-    try:
-        discovered = copilot_provider.models()
-    except copilot_provider.CopilotError:
-        discovered = ()
-    if discovered:
-        for model in discovered:
-            notes.setdefault(model.id, f"{model.name}; available to your GitHub Copilot account")
+    for model in copilot_provider.models():
+        notes.setdefault(model.id, f"{model.name}; available to your GitHub Copilot account")
 
     notes.setdefault(default, "the configured default")
     ordered = [default, *(slug for slug in notes if slug != default)]

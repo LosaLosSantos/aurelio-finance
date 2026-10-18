@@ -19,7 +19,6 @@ def test_search_keeps_valid_unique_sources_and_copilot_usage(monkeypatch):
             usage=copilot_provider.Usage(321, 45),
         )
 
-    monkeypatch.setenv("COPILOT_SEARCH_MODEL", "claude-haiku-5.5")
     monkeypatch.setattr(copilot_provider, "search_web", search)
 
     found = websearch.search("example annual report")

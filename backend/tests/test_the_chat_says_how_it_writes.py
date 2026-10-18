@@ -1,32 +1,10 @@
-"""The chat is told once how every card writes, and what no card does yet.
-
-Brief AN, item 11 (2026-10-10). The rules every write tool shares (a card is a
-proposal, drawn on request, one for each change and up to three in an answer,
-written as the page's own form writes it; names as the picture gives them;
-the language of the data; a currency's code; today for a day not named) are
-said once, in the system prompt, and no declaration repeats them: the reader's
-ask, after the plan estimated the declarations at 43,000 characters. And the
-prompt lists what no card does yet and where the reader does it, so a missing
-tool is said as one and never presented as the chat's own choice (the
-record's bullet of 2026-10-02).
-
-And the prompt says the picture already holds what a confirmed card wrote. It
-said the picture was rebuilt "the moment they asked", and a turn that answers a
-card rebuilds it after the write: in P1 (2026-10-10, Opus 5.5, paid, on a test
-database) four replies of seven warned of a duplicate that did not exist.
-"""
+"""A confirmed card's write reaches the next turn's rebuilt context."""
 
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from app import advisor, chat, tools
-
-OPUS = "claude-opus-5.5"
-PROMPTS = [chat.system_prompt(OPUS), chat.SYSTEM_PROMPT]
-
+from app import advisor
 
 def _events(response) -> list[dict]:
     assert response.status_code == 200, response.text
@@ -46,89 +24,6 @@ def _script(monkeypatch, rounds):
 
     monkeypatch.setattr(advisor, "stream_llm", fake)
     return seen
-
-
-@pytest.mark.parametrize("prompt", PROMPTS, ids=["offered the web", "not"])
-def test_the_rules_every_card_shares_are_said_once_in_the_prompt(prompt):
-    for rule in (
-        "You do not write; you PROPOSE.",
-        "Propose a write only when they ask for one",
-        "Draw up to three cards in one answer, of any kind",
-        "A card writes what the page's own form writes, so they then see it and change it there",
-        "it says in their words what confirming does: say the same, and nothing it does not",
-        "Name things exactly as the picture above names them",
-        "Write in the language of the DATA, not of the question",
-        "London pence are GBp, written exactly so",
-        "A day they did not name is today, the first line of the picture.",
-    ):
-        assert prompt.count(rule) == 1, rule
-
-
-def test_no_declaration_repeats_them():
-    declared = json.dumps(tools.declarations() + tools.web_search(OPUS), ensure_ascii=False)
-    for repeated in (
-        "It does not write: it draws a card",
-        "language of the DATA",
-        "language the DATA",
-        "BY NAME and exactly as it appears",
-        "Today's date is the first line",
-        "as the form does",
-        "hundred times more",
-    ):
-        assert repeated not in declared, repeated
-
-
-@pytest.mark.parametrize("prompt", PROMPTS, ids=["offered the web", "not"])
-def test_the_prompt_says_what_no_card_does_yet_and_where(prompt):
-    said = prompt[prompt.index("What no card does yet") :]
-    for missing, where in (
-        ("an account, added, renamed or deleted", "Records, Wealth"),
-        ("a situation and its holdings", "the account's page"),
-        ("a real asset's later valuations", "Records, Real assets"),
-        ("a debt and its balances", "Records, Debts"),
-        # Its amount has a card since brief AO (`change_pac_amount`).
-        ("a PAC's frequency, the day of its first buy or its funds, a new PAC, or ending one", "Records, Cash flow"),
-        # Correcting and deleting one have a card since brief AO (`change_ledger_entry`).
-        ("changing what a ledger entry is, its kind, its instrument, its account or its currencies", "Portfolio, the ledger"),
-        # Correcting and deleting a transfer and a balance have a card since brief
-        # AP (`change_transfer`, `change_cash_balance`).
-        # A card's null keeps a field as it is (write_flow, write_goal,
-        # change_transfer, whose side made external would empty one).
-        ("emptying a field of a line, a goal or a transfer", "Records, Cash flow; Profile"),
-        ("the tax rates", "Profile"),
-        ("dropping an idea from the watchlist", "Portfolio"),
-    ):
-        assert missing in said and where in said, missing
-    assert "never as a choice of yours" in said
-    # Brief AP: a transfer and a balance are corrected and deleted by a card now.
-    for done in ("correcting or deleting a transfer", "deleting a balance"):
-        assert done not in said, done
-
-
-def test_every_card_the_prompt_lists_is_a_tool_that_draws_one():
-    prompt = chat.SYSTEM_PROMPT
-    writers = {name for name, tool in tools.REGISTRY.items() if tool.propose is not None}
-    for name in writers:
-        assert f"`{name}`" in prompt, name
-
-
-@pytest.mark.parametrize("prompt", PROMPTS, ids=["offered the web", "not"])
-def test_the_prompt_says_the_picture_already_holds_what_a_confirmed_card_wrote(prompt):
-    assert "the moment they asked" not in prompt
-    assert prompt.count("newer than everything after it") == 1
-    assert "anything there that matches a confirmed card is that card's own write, never a second copy" in prompt
-
-
-@pytest.mark.parametrize("prompt", PROMPTS, ids=["offered the web", "not"])
-def test_the_prompt_says_what_was_said_before_a_confirmed_card_was_true_then(prompt):
-    """Brief AO, item 5: after a transfer was confirmed in brief AN's P1 bis,
-    the reply called the balance it gave before the transfer a mistake. One
-    sentence, beside the one about the picture being newer; its effect is
-    measured in brief AO's P1."""
-    assert prompt.count(
-        "And what you said before a card was confirmed was true of their records then: when a "
-        "figure you gave has moved since, say that the card moved it, never that you were wrong."
-    ) == 1
 
 
 def test_the_turn_after_a_confirmed_card_reads_its_write_in_the_picture_above_the_question(

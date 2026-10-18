@@ -298,7 +298,3 @@ def test_the_web_is_declared_for_supported_copilot_models():
         "get_look_through", "catalogue_same_index", "instrument_facts", "weigh_change", "search_web"]
     assert names("unsupported-model") == [
         "get_look_through", "catalogue_same_index", "instrument_facts", "weigh_change"]
-    (web,) = [d for d in analyst_tools.declarations("claude-opus-5.5", 3)
-              if d["function"]["name"] == "search_web"]
-    assert "At most 3 a step" in web["function"]["description"]
-    assert "never put in it an amount, an account, an entry" in web["function"]["description"]

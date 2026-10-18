@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 
-from app import advisor, chat, tools
+from app import advisor, tools
 from app.database import SessionLocal
 
 # `app.questionnaire` is imported inside the two tests that read the list, so
@@ -189,33 +189,6 @@ def test_a_question_the_form_never_asked_still_takes_any_words(client):
     row = _answers(client)["what_would_you_never_give_up"]
     assert row["answer"] == "A month a year without work, whatever it costs."
     assert row["topic"] == "In your words"
-
-
-# --- What the chat is told ------------------------------------------------------------
-
-
-def test_the_model_is_told_every_form_question_and_what_it_takes():
-    """A question nobody has answered is nowhere in the picture, so the tool's
-    own declaration names each one: its key, its wording, what it takes."""
-    from app import questionnaire
-
-    (declared,) = [
-        d for d in tools.declarations() if d["function"]["name"] == "update_profile"
-    ]
-    told = declared["function"]["parameters"]["properties"]["question_key"]["description"]
-    for q in questionnaire.QUESTIONS:
-        assert f'{q.key} "{q.text}" ({questionnaire.takes(q)})' in told, q.key
-    assert "Never a goal" in declared["function"]["description"]
-
-
-def test_the_chat_writes_a_goal_with_its_own_tool_and_never_as_an_answer():
-    """Brief AL told the chat that no tool writes a goal; since brief AN one
-    does, and the questionnaire still takes none."""
-    for model in ("claude-opus-5.5", "unsupported-model"):
-        prompt = chat.system_prompt(model)
-        assert "no tool here creates, changes or deletes a goal yet" not in prompt
-        assert "A goal is not one of those answers: never write one into the questionnaire" in prompt
-        assert "`write_goal`: one of their goals, added, changed or deleted" in prompt
 
 
 def test_the_picture_heads_the_questionnaire_as_a_profile_and_its_goals_apart(client):

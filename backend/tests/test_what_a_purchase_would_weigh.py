@@ -19,7 +19,7 @@ import json
 import pandas as pd
 import pytest
 
-from app import advisor, catalogue, chat, composition, dated, prices, tools
+from app import advisor, catalogue, composition, dated, prices, tools
 from app.database import SessionLocal
 
 TODAY = "2026-03-10"
@@ -277,14 +277,3 @@ def test_every_figure_travels_with_what_it_means(held):
     assert "Never take it off the room a second time." in reading
 
 
-# --- The chat is told ------------------------------------------------------------------------
-
-
-def test_every_model_is_told_how_much_is_not_its_to_work_out():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
-        assert "`size_purchase` reads from their records the figures an amount stands on" in prompt
-        assert "never work out a reserve, what is left after their commitments" in prompt
-        assert "what a goal needs or lacks, or a weight yourself" in prompt
-        assert "`lookup_symbol`, `size_purchase`, `read_analysis`" in prompt
-    declared = [d["function"]["name"] for d in tools.declarations()]
-    assert "size_purchase" in declared

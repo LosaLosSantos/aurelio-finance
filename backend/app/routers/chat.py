@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app import chat, crud, models, schemas, tools
+from app import chat, copilot_provider, crud, models, schemas, tools
 from app.database import get_db
 from app.routers.deps import get_or_404
 
@@ -48,7 +48,10 @@ def _sse(events: Iterator[schemas.ChatEvent]) -> Iterator[str]:
 @router.get("/models", response_model=schemas.ChatModelsRead)
 def get_models() -> schemas.ChatModelsRead:
     """The model dropdown, default first."""
-    return chat.available_models()
+    try:
+        return chat.available_models()
+    except copilot_provider.CopilotError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/conversations", response_model=list[schemas.ChatConversationRead])

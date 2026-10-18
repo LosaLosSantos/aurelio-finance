@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import urllib.parse
 from dataclasses import dataclass
 
@@ -48,9 +47,8 @@ def _page(found: dict[str, str]) -> WebPage | None:
 
 def search(query: str) -> Search:
     """Run one Copilot-backed web search. Failures are data, never exceptions."""
-    model = os.getenv("COPILOT_SEARCH_MODEL") or SEARCH_MODEL
     try:
-        result = copilot_provider.search_web(query, model)
+        result = copilot_provider.search_web(query, SEARCH_MODEL)
     except copilot_provider.CopilotError as exc:
         return Search(query=query, failure=str(exc).rstrip("."))
 

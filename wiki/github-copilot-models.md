@@ -21,12 +21,17 @@ without Copilot.
 
 Aurelio starts a short-lived Copilot SDK session for each model request. Authentication remains
 owned by the Copilot CLI. Do not put GitHub tokens or model-provider API keys in `backend/.env`.
+Sessions retain access to the CLI's saved login and system keychain, but do not load local
+instructions, skills or hooks. Application tools remain captured requests that Aurelio handles,
+not tools the SDK executes against your records.
 
 ## Which model answers?
 
 The default is `claude-opus-5.5`. The chat menu asks Copilot for every model available to the
 signed-in account, including supported Claude and GPT models. Availability and quota depend on
 the account's Copilot plan and may change in GitHub's service.
+If discovery fails or the account offers no models, the menu reports an error rather than
+substituting a configured list.
 
 Optional settings in `backend/.env` choose defaults:
 
@@ -51,6 +56,8 @@ the current financial picture needed to answer its question.
 
 Web retrieval runs in a separate Copilot request. It carries the bounded search query, not the
 conversation or financial records, and returns at most five pages to the requesting model.
+It uses the fixed `claude-haiku-5.5` retrieval model. Sources must match successfully fetched
+URLs, and excerpts must occur in the fetched text; a failed retrieval is not an empty search.
 
 ## Usage and cost
 
@@ -58,6 +65,9 @@ Copilot reports token and subscription usage, not a per-request USD charge. Aure
 and cached token counts when Copilot supplies them, but leaves its historical USD cost fields
 empty for Copilot-backed calls. Plan limits, premium-request multipliers and billing belong to
 the signed-in GitHub account; check GitHub Copilot's own usage page for the authoritative figures.
+Token counts include each distinct model call in a request and remain recorded when a chat
+turn fails after reporting usage. Aborted, filtered and length-limited answers are failures,
+not completed answers.
 
 ## Questions
 

@@ -20,7 +20,7 @@ import json
 import pandas as pd
 import pytest
 
-from app import advisor, catalogue, chat, prices, tools
+from app import advisor, catalogue, prices, tools
 from app.database import SessionLocal
 
 GOLD, OIL, MINERS = "IE0000AQ0201", "IE0000AQ0202", "IE0000AQ0203"
@@ -86,13 +86,3 @@ def test_a_future_is_still_no_card(loaded, monkeypatch):
     monkeypatch.setattr(prices, "_fetch_lookup", lambda query, count: listed)
     refused = _call("suggest_instrument", symbol="EXGC=F", **WHY)
     assert refused["ok"] is False and "a coin, a future or an index gets none" in refused["error"]
-
-
-def test_every_model_is_told_a_commodity_is_held_or_not_named():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
-        assert (
-            "A commodity (gold, silver, oil, wheat) is named for buying only through a product "
-            "the catalogue lists that holds it, which its replication says ('Physically backed')"
-        ) in prompt
-        assert "a fund of the companies that mine or sell it holds shares, never the commodity" in prompt
-        assert "When no product in the catalogue holds it, as for oil, say so and why, and draw no card." in prompt

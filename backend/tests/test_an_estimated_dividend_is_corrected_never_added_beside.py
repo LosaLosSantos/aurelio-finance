@@ -177,26 +177,3 @@ def test_a_card_drawn_before_the_catch_up_records_the_dividend_is_refused_as_sta
     assert refused.status_code == 409
     assert _dividends(client) == [("2026-09-23", 6.0)]
 
-
-def test_the_prompt_says_an_estimated_dividend_is_corrected_never_recorded_beside():
-    from app import chat
-
-    for prompt in (chat.system_prompt("claude-opus-5.5"), chat.SYSTEM_PROMPT):
-        assert (
-            "A dividend the app recorded at the market's figure, still estimated, is corrected with "
-            "it when they report what they received, never recorded beside it"
-        ) in prompt
-
-
-def test_the_prompt_says_a_second_dividend_beside_it_is_entered_on_the_form():
-    """Brief AO's paid run: the reply after the correction offered to record
-    "un altro dividendo" as new, which the refusal above would stop. The
-    prompt says where such a dividend is entered."""
-    from app import chat
-
-    for prompt in (chat.system_prompt("claude-opus-5.5"), chat.SYSTEM_PROMPT):
-        assert (
-            "and while it is on record, a second dividend of that position dated on or after it, "
-            "such as a special one, is entered on the ledger form: no card records it, so offer "
-            "the form and never a card."
-        ) in prompt

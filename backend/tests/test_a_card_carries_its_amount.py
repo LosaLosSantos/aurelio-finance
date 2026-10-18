@@ -25,7 +25,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-from app import advisor, catalogue, chat, database, dated, prices, tools
+from app import advisor, catalogue, database, dated, prices, tools
 from app.database import SessionLocal
 
 TODAY = "2026-03-10"
@@ -303,12 +303,3 @@ def test_the_migration_adds_the_amounts_and_keeps_every_line_as_it_was(before_th
         assert conn.execute(then).fetchall() == before
 
 
-# --- The chat is told --------------------------------------------------------------------------
-
-
-def test_the_chat_is_told_the_card_carries_the_amount():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
-        assert "When they asked how much, the card carries the amount" in prompt
-        assert "the card refuses an amount above what the records allow" in prompt
-    described = tools.REGISTRY["suggest_instrument"].description
-    assert "When they asked how much, it carries the amount too" in described

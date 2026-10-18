@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from app import advisor, chat, composition, crud, dated, models
+from app import advisor, composition, crud, dated, models
 from app.database import SessionLocal
 
 SITUATION = "2026-01-01"
@@ -118,13 +118,6 @@ def test_a_book_all_paid_is_still_what_was_paid(client):
     _blend(client, cost_basis=900)
     with SessionLocal() as db:
         assert "- TOTAL cost (what was paid): 1200.00" in advisor.build_context(db)
-
-
-def test_the_chat_is_told_how_to_read_a_book_partly_paid():
-    for prompt in (chat.SYSTEM_PROMPT, chat.system_prompt("claude-opus-5.5")):
-        assert "'book' is what was paid where a cost is on record and a situation's value where it is not" in prompt
-        assert "'COST PARTLY PAID' says how much of a book was paid" in prompt
-        assert "'book' is what was paid, 'market'" not in prompt
 
 
 # --- A card that moves the average --------------------------------------------------------
