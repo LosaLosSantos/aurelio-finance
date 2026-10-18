@@ -29,10 +29,22 @@ def required_annual_return(
     def fv(i: float) -> float:
         if i == 0:
             return current + monthly * n
-        return current * (1 + i) ** n + monthly * (((1 + i) ** n - 1) / i)
+        try:
+            growth = (1 + i) ** n
+        except OverflowError:
+            # Past the largest float, as (1 + 1.0) ** n is from 1024 months, a
+            # little over 85 years. With something invested or added (checked
+            # below), fv grows with i, so this is past any target.
+            return float("inf")
+        return current * growth + monthly * ((growth - 1) / i)
 
     if fv(0.0) >= target:
         return 0.0
+    if current <= 0 and monthly <= 0:
+        # Nothing grows from nothing at any rate. Past 85 years the first
+        # guess below overflows, and that overflow, read as reaching the
+        # target, would find a rate for it.
+        return None
     hi = 1.0  # 100% per month — an absurdly high upper bound
     if fv(hi) < target:
         return None
