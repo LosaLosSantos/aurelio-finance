@@ -16,6 +16,13 @@ def test_unreachable_returns_none():
     assert required_annual_return(0, 0, 1_000_000, 5) is None
 
 
+def test_nothing_invested_and_nothing_added_is_unreachable_at_any_horizon():
+    # Past 85 years the bisection's first guess overflows (issue #4); read as
+    # reaching the target, the overflow found a rate for a goal with nothing in it.
+    for years in (85, 86, 100, 1000):
+        assert required_annual_return(0, 0, 1_000_000, years) is None
+
+
 def test_invalid_horizon_returns_none():
     assert required_annual_return(1000, 100, 5000, 0) is None
     assert required_annual_return(1000, 100, 5000, -1) is None
@@ -37,16 +44,22 @@ def test_bisection_solution_actually_reaches_target():
     assert abs(fv - target) / target < 0.001  # within 0.1%
 
 
-def test_horizon_over_85_years_does_not_raise_overflow():
-    # Regression test for issue #4: (1 + i) ** n overflowed once n passed
-    # 1023 months (horizons over ~85 years), raising OverflowError out of
-    # required_annual_return and breaking every context reader. It must
-    # return a value now.
-    r = required_annual_return(1000, 100, 10_000_000, 100)
-    assert r is not None and r > 0
-    # sanity: a longer horizon needs a smaller return than 85 years
-    r85 = required_annual_return(1000, 100, 10_000_000, 85)
-    assert r85 is not None and r < r85
+def test_a_horizon_past_85_years_still_has_a_return():
+    # (1 + 1.0) ** n is past the largest float from n = 1024 months, a little
+    # over 85 years, and the bisection's first guess raised OverflowError (issue #4).
+    current, monthly, target = 1000, 100, 10_000_000
+    horizons = (85, 86, 90, 100, 1000)
+    rates = [required_annual_return(current, monthly, target, years) for years in horizons]
+    assert all(r is not None and r > 0 for r in rates)
+    assert all(a > b for a, b in zip(rates, rates[1:]))  # a longer horizon needs less
+    for years, r in zip(horizons, rates):
+        i = (1 + r) ** (1 / 12) - 1
+        n = years * 12
+        fv = current * (1 + i) ** n + monthly * (((1 + i) ** n - 1) / i)
+        assert abs(fv - target) / target < 0.001
+    # The furthest date a goal can carry.
+    furthest = compute_required_return(current, monthly, target, datetime.date.max)
+    assert furthest["required_annual_return"] > 0
 
 
 def test_assess_bands():
