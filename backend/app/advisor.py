@@ -92,10 +92,6 @@ class AdvisorError(Exception):
     """Raised when an analysis cannot be produced (config or call failure)."""
 
 
-class Unfinished(AdvisorError):
-    """The provider ended an answer before producing a normal completion."""
-
-
 @dataclass(frozen=True)
 class ToolCall:
     """One tool the model asked for, assembled from the fragments it arrived in.
@@ -1440,12 +1436,6 @@ def build_person_context(db: Session) -> str:
 def resolve_model(model: str | None = None) -> str:
     """The Copilot model a call uses: caller, configured default, then built-in."""
     return model or os.getenv("COPILOT_MODEL") or DEFAULT_MODEL
-
-
-# Retained as public bounds for the orchestration contracts. Copilot's hosted
-# model catalog owns the actual per-model output ceiling.
-CHAT_MAX_TOKENS = 8_192
-STEP_MAX_TOKENS = 16_384
 
 
 def call_llm(system_prompt: str, user_content: str, model: str | None = None) -> dict:

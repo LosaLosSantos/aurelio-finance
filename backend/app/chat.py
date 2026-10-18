@@ -1454,7 +1454,7 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
     tool runs the response body has already started.
 
     An answer the provider did not FINISH ends as an error too: `stream_llm`
-    raises `advisor.Unfinished` once its words have gone out, so they stay in
+    raises `advisor.AdvisorError` once its words have gone out, so they stay in
     the record and the sentence under them says why. Until brief Z an answer
     cut by a token cap was stored as `done`, and looked finished.
 

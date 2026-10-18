@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from app import advisor, copilot_provider, crud
 from app.database import SessionLocal
+from copilot import CopilotClient
+from copilot.client import RuntimeConnection
 from copilot.session_events import (
     AssistantMessageData,
     AssistantMessageDeltaData,
@@ -200,8 +204,23 @@ def test_clients_keep_logged_in_authentication_and_session_tool_isolation(monkey
     assert captured["client"].get("mode", "copilot-cli") == "copilot-cli"
     assert "base_directory" not in captured["client"]
     assert captured["client"]["use_logged_in_user"] is True
+    monkeypatch.delenv("COPILOT_DISABLE_KEYTAR", raising=False)
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    spawn = Mock(side_effect=RuntimeError("spawn captured"))
+    monkeypatch.setattr("copilot.client.subprocess.Popen", spawn)
+    sdk_client = CopilotClient(
+        connection=RuntimeConnection.for_stdio(path=sys.executable),
+        **captured["client"],
+    )
+    with pytest.raises(RuntimeError, match="spawn captured"):
+        asyncio.run(sdk_client._start_cli_server())
+    assert "COPILOT_DISABLE_KEYTAR" not in spawn.call_args.kwargs["env"]
+    assert "COPILOT_HOME" not in spawn.call_args.kwargs["env"]
+    assert "--no-auto-login" not in spawn.call_args.args[0]
+    assert "--auth-token-env" not in spawn.call_args.args[0]
     if operation != "models":
         options = captured["session"]
+        assert not options.get("interactive_user", False)
         assert options["enable_config_discovery"] is False
         assert options["enable_skills"] is False
         assert options["enable_file_hooks"] is False

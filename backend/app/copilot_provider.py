@@ -207,7 +207,6 @@ async def _run(
                     streaming=True,
                     **_SESSION_ISOLATION,
                     config_directory=storage,
-                    interactive_user=True,
                 ) as session:
                     holder["loop"] = asyncio.get_running_loop()
                     holder["session"] = session
