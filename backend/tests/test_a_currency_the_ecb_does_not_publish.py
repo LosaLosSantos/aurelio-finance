@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+import types
 from contextlib import closing
 
 import pytest
@@ -52,8 +53,8 @@ def feed(monkeypatch):
 
 class Yahoo:
     """Yahoo's dated window, answered from `closes` ({symbol: [(day, close)]}),
-    every ask recorded. A pair it does not have answers no rows, as Yahoo's
-    404 reaches the app."""
+    every ask recorded. A pair it does not have answers a successful empty
+    history."""
 
     def __init__(self):
         self.closes: dict[str, list[tuple[str, float | None]]] = {}
@@ -287,7 +288,9 @@ def test_a_code_neither_source_quotes_is_said_so_and_without_a_yet(client, feed,
 
 
 @pytest.mark.parametrize("cached", [False, True])
-@pytest.mark.parametrize("failure", [TimeoutError, ConnectionError])
+@pytest.mark.parametrize(
+    "failure", [TimeoutError, ConnectionError, "service", "malformed", "http", "missing-chart"]
+)
 def test_a_transport_failure_does_not_certify_a_cached_rate_or_suppress_retry(
     client, feed, monkeypatch, tmp_path, cached, failure
 ):
@@ -311,7 +314,20 @@ def test_a_transport_failure_does_not_certify_a_cached_rate_or_suppress_retry(
 
     def unavailable(url, params):
         if "period1" in params:
-            raise failure("Yahoo transport unavailable")
+            if isinstance(failure, type):
+                raise failure("Yahoo transport unavailable")
+            bodies = {
+                "service": {"chart": {"result": None, "error": {
+                    "code": "Internal Server Error", "description": "Yahoo unavailable",
+                }}},
+                "malformed": {"chart": {"result": [], "error": None}},
+                "http": {"status_code": 503},
+                "missing-chart": {},
+            }
+            return types.SimpleNamespace(
+                status_code=503 if failure == "http" else 200,
+                text="", json=lambda: bodies[failure],
+            )
         return answer(url, params)
 
     monkeypatch.setattr(chart, "answer", unavailable)
