@@ -29,7 +29,8 @@ import logging
 import math
 import re
 from dataclasses import dataclass
-from zoneinfo import ZoneInfo
+from functools import partial
+from types import SimpleNamespace
 
 from app import dated
 
@@ -139,48 +140,52 @@ def _fetch_close_window(
     """[(day_iso, close or None), ...] for every row Yahoo has in [start, end),
     ascending, including rows without prices as None. Network call.
 
-    Read Yahoo's chart through yfinance's authenticated transport, preserving
-    the response's success/error distinction before interpreting empty data.
-    Use raw closes, never dividend-adjusted closes, on the exchange's calendar.
-    The UTC query spans an extra day at each end so exchanges east or west of
-    UTC cannot lose a boundary session; filter by local dates afterwards.
-    Failed requests and malformed responses raise PriceError, never []."""
-    from yfinance.data import YfData
+    Keep unpriced rows and unadjusted closes, using yfinance's exchange-date
+    normalization. Only a successful empty chart is an empty window;
+    failed requests and malformed responses raise PriceError."""
+    import yfinance as yf
+    from yfinance.exceptions import YFPricesMissingError
 
-    try:
-        response = YfData().get(
-            url=f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
-            params={
-                "period1": int(datetime.datetime.combine(
-                    start - datetime.timedelta(days=1), datetime.time(), datetime.timezone.utc,
-                ).timestamp()),
-                "period2": int(datetime.datetime.combine(
-                    end + datetime.timedelta(days=1), datetime.time(), datetime.timezone.utc,
-                ).timestamp()),
-                "interval": "1d",
-            },
-            timeout=10,
-        )
+    empty = False
+
+    def checked_get(getter, **kwargs):
+        nonlocal empty
+        empty = False
+        response = getter(**kwargs)
         if response.status_code != 200:
             raise ValueError(f"Yahoo HTTP {response.status_code}")
         chart = response.json()["chart"]
         if chart["error"] is not None:
             raise ValueError(f"Yahoo chart error: {chart['error']}")
         (result,) = chart["result"]
-        timezone = ZoneInfo(result["meta"]["exchangeTimezoneName"])
-        (quote,) = result["indicators"]["quote"]
-        timestamps = result.get("timestamp", [])
-        closes = quote["close"] if quote else []
-        if not isinstance(timestamps, list) or not isinstance(closes, list):
-            raise ValueError("Invalid Yahoo close arrays")
+        empty = (
+            "period1" in kwargs.get("params", {})
+            and result.get("timestamp", []) == []
+            and result["indicators"]["quote"] == [{}]
+            and bool(result["meta"]["exchangeTimezoneName"])
+        )
+        return response
+
+    try:
+        ticker = yf.Ticker(symbol)
+        transport = ticker._data
+        ticker._data = SimpleNamespace(
+            get=partial(checked_get, transport.get),
+            cache_get=partial(checked_get, transport.cache_get),
+        )
+        try:
+            hist = ticker.history(
+                start=start.isoformat(), end=end.isoformat(), keepna=True,
+                auto_adjust=False, raise_errors=True,
+            )
+        except YFPricesMissingError:
+            if empty:
+                return []
+            raise
         out: list[tuple[str, float | None]] = []
-        for stamp, close in zip(timestamps, closes, strict=True):
-            day = datetime.datetime.fromtimestamp(stamp, timezone).date()
-            if start <= day < end:
-                value = float(close) if close is not None else None
-                if value is not None and math.isinf(value):
-                    raise ValueError("Invalid Yahoo close")
-                out.append((day.isoformat(), None if value != value else value))
+        for idx, close in hist["Close"].items():
+            value = float(close)
+            out.append((idx.date().isoformat(), None if value != value else value))
         return sorted(out)
     except Exception as exc:
         raise PriceError(f"Could not fetch closes for '{symbol}': {exc}") from exc

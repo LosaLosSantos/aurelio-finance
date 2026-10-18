@@ -91,3 +91,31 @@ def test_dated_closes_keep_the_exchanges_calendar_day(chart, monkeypatch, timezo
     monkeypatch.setattr(chart, "answer", local_midnight)
     quote = prices.get_price_on("XDAY", datetime.date(2026, 1, 9))
     assert (quote["price"], quote["as_of"]) == (100.0, "2026-01-09")
+
+
+@pytest.mark.parametrize("hour", [22, 23])
+def test_dated_closes_correct_yahoos_preceding_evening_timestamps(chart, monkeypatch, hour):
+    timezone = "America/Sao_Paulo"
+    chart.listings["XDST"] = Listing(
+        closes={"2026-01-08": 90.0, "2026-01-09": 100.0}, timezone=timezone,
+    )
+    answer = chart.answer
+
+    def preceding_evening(url, params):
+        response = answer(url, params)
+        body = response.json()
+        result = body["chart"]["result"][0]
+        if "timestamp" in result:
+            result["timestamp"] = [
+                int(datetime.datetime.combine(
+                    datetime.date(2026, 1, day - 1),
+                    datetime.time(hour=hour), ZoneInfo(timezone),
+                ).timestamp())
+                for day in (8, 9)
+            ]
+        return types.SimpleNamespace(status_code=200, text="", json=lambda: body)
+
+    monkeypatch.setattr(chart, "answer", preceding_evening)
+    for day, price in ((8, 90.0), (9, 100.0)):
+        quote = prices.get_price_on("XDST", datetime.date(2026, 1, day))
+        assert (quote["price"], quote["as_of"]) == (price, f"2026-01-{day:02}")

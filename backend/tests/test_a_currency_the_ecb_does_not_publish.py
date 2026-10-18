@@ -289,7 +289,10 @@ def test_a_code_neither_source_quotes_is_said_so_and_without_a_yet(client, feed,
 
 @pytest.mark.parametrize("cached", [False, True])
 @pytest.mark.parametrize(
-    "failure", [TimeoutError, ConnectionError, "service", "malformed", "http", "missing-chart"]
+    "failure", [
+        TimeoutError, ConnectionError, "service", "malformed", "http",
+        "http-with-data", "missing-chart",
+    ]
 )
 def test_a_transport_failure_does_not_certify_a_cached_rate_or_suppress_retry(
     client, feed, monkeypatch, tmp_path, cached, failure
@@ -322,10 +325,11 @@ def test_a_transport_failure_does_not_certify_a_cached_rate_or_suppress_retry(
                 }}},
                 "malformed": {"chart": {"result": [], "error": None}},
                 "http": {"status_code": 503},
+                "http-with-data": answer(url, params).json(),
                 "missing-chart": {},
             }
             return types.SimpleNamespace(
-                status_code=503 if failure == "http" else 200,
+                status_code=503 if failure in ("http", "http-with-data") else 200,
                 text="", json=lambda: bodies[failure],
             )
         return answer(url, params)
