@@ -36,6 +36,7 @@ import {
   type Pane,
 } from "./followStream";
 import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
+import { modelsHelp, optionLabel, pickToSend } from "./modelMenu";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
 import { STALE_LINE, heading, waiting, workHeading } from "./cardOutcome";
@@ -555,13 +556,18 @@ function Bubble({
   );
 }
 
-/* Small outline glyphs, drawn inline like the mark: no icon font, they inherit
-   the ink, and they stay hairline-thin like the rest of the chrome. */
-/** A model's name without its provider, as the select and the "?" say it. */
-function modelName(slug: string): string {
-  return slug.includes("/") ? slug.slice(slug.indexOf("/") + 1) : slug;
+/** Ask the backend for the menu of models and hand it to `set`. */
+function askMenu(set: (models: ChatModels) => void) {
+  getChatModels()
+    .then(set)
+    .catch(() => {
+      /* backend down: the dropdown shows nothing to pick, and the send will
+         say the backend did not answer */
+    });
 }
 
+/* Small outline glyphs, drawn inline like the mark: no icon font, they inherit
+   the ink, and they stay hairline-thin like the rest of the chrome. */
 function ClockIcon() {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false">
@@ -651,13 +657,23 @@ export default function ChatPanel({
     };
   }
 
+  // The menu, asked when the panel mounts, again each time it opens, and when
+  // the page comes back into view: the backend reads OpenRouter's list of
+  // models once a day in the background, so a date that came back after the
+  // last ask, or a new day's, reaches the menu before the next question rather
+  // than at the next reload (a tab left open overnight comes back into view).
+  const menuAskedRef = useRef(false);
   useEffect(() => {
-    getChatModels()
-      .then(setModels)
-      .catch(() => {
-        /* backend down: the dropdown shows nothing to pick, and the send will
-           say the backend did not answer */
-      });
+    if (!open && menuAskedRef.current) return;
+    menuAskedRef.current = true;
+    askMenu(setModels);
+  }, [open]);
+  useEffect(() => {
+    const again = () => {
+      if (document.visibilityState === "visible") askMenu(setModels);
+    };
+    document.addEventListener("visibilitychange", again);
+    return () => document.removeEventListener("visibilitychange", again);
   }, []);
 
   // A reload lands on the conversation that was open. If it is gone —
@@ -788,7 +804,7 @@ export default function ChatPanel({
     const controller = new AbortController();
     abortRef.current = controller;
     const end = await streamChat(
-      { conversation_id: conversationId, content: q, model, page },
+      { conversation_id: conversationId, content: q, model: pickToSend(model, models), page },
       {
         onStart: (cid, _question, pageLabel) => {
           setConversationId(cid);
@@ -852,7 +868,7 @@ export default function ChatPanel({
     let started = false;
     const end = await decideCard(
       cardId,
-      { decision, model },
+      { decision, model: pickToSend(model, models) },
       {
         onStart: (cid) => {
           started = true;
@@ -945,7 +961,8 @@ export default function ChatPanel({
     }
   }
 
-  const currentModel = model ?? models?.default ?? "";
+  // What the select shows is what a question goes with (`pickToSend`).
+  const currentModel = pickToSend(model, models) ?? models?.default ?? "";
   // What the panel's "?" says, read once: what a question is sent with, the
   // keys, and what is known of each model. The select's tooltip used to say it
   // of the current model alone, to a pointer only (brief AU).
@@ -953,9 +970,7 @@ export default function ChatPanel({
     question: "How does the chat work?",
     text:
       "Each question is sent with the page you were on, said under it as “asked on”: that is what “this” and “here” point at. Enter sends; Shift+Enter starts a new line." +
-      (models
-        ? " The models: " + models.models.map((m) => `${modelName(m.slug)}, ${m.note}`).join("; ") + "."
-        : ""),
+      (models ? " " + modelsHelp(models) : ""),
   };
 
   // The width is written once and applied to BOTH the animated outer shell and
@@ -1166,8 +1181,7 @@ export default function ChatPanel({
                 {models ? (
                   models.models.map((m) => (
                     <option key={m.slug} value={m.slug}>
-                      {modelName(m.slug)}
-                      {m.slug === models.default ? " · default" : ""}
+                      {optionLabel(m, m.slug === models.default)}
                     </option>
                   ))
                 ) : (

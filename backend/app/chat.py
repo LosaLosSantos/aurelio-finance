@@ -122,7 +122,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app import advisor, crud, dated, models, schemas, screen, tools, websearch
+from app import advisor, crud, dated, model_list, models, schemas, screen, tools, websearch
 from app.database import SessionLocal, unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -532,8 +532,15 @@ def default_model() -> str:
     return advisor.resolve_model(os.getenv("OPENROUTER_CHAT_MODEL") or None)
 
 
-def available_models() -> schemas.ChatModelsRead:
-    """The dropdown: the default first, then the rest, no slug twice."""
+def available_models(db: Session) -> schemas.ChatModelsRead:
+    """The dropdown: the default first, then the rest, no slug twice, each with
+    what today's read of OpenRouter's list says of it (`model_list`): the day
+    after which it may be removed, and whether the list has it at all.
+
+    Nothing leaves the menu on the list's say-so. A name OpenRouter no longer
+    lists may still answer (the reader's short name did, on 2026-09-24), so it
+    stays, marked, like one set in backend/.env or built in, which the chat
+    answers with when nothing is picked (brief BB, the reviewer's note)."""
     default = default_model()
     notes: dict[str, str] = {}
     for var, note in _ENV_MODELS:
@@ -544,10 +551,19 @@ def available_models() -> schemas.ChatModelsRead:
         notes.setdefault(slug, note)
     notes.setdefault(default, "the configured default")
 
+    listing = model_list.known(db)
     ordered = [default, *(s for s in notes if s != default)]
     return schemas.ChatModelsRead(
         default=default,
-        models=[schemas.ChatModel(slug=s, note=notes[s]) for s in ordered],
+        models=[
+            schemas.ChatModel(
+                slug=s,
+                note=notes[s],
+                retires=listing.retires(s) if listing else None,
+                listed=listing.has(s) if listing else None,
+            )
+            for s in ordered
+        ],
     )
 
 

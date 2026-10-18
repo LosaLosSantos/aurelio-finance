@@ -24,7 +24,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -1555,8 +1555,9 @@ MODEL_VARIABLES = (
     "OPENROUTER_CONFIDANT_MODEL",
 )
 
-# OpenRouter's public list of the models it serves. Asked only after it has
-# refused a call, with no key and nothing of the reader's in the request.
+# OpenRouter's public list of the models it serves. Asked once a day
+# (`model_list`) and after it has refused a call, with no key and nothing of the
+# reader's in the request.
 MODEL_LIST_URL = "https://openrouter.ai/api/v1/models"
 
 
@@ -1564,16 +1565,19 @@ class ModelGone(AdvisorError):
     """OpenRouter refused a model that its public list no longer has."""
 
 
-def _fetch_model_list() -> set[str]:
-    """The ids OpenRouter lists today. Network, so the tests fake it."""
+def _fetch_model_list() -> dict[str, str | None]:
+    """Every id OpenRouter lists today, each with its `expiration_date`, "the
+    date after which the model may be removed" (its API reference), None when
+    it gives none. The whole list in one request, with no key, no query and
+    nothing of the reader's in it. Network, so the tests fake it."""
     import httpx
 
     response = httpx.get(MODEL_LIST_URL, timeout=10)
     response.raise_for_status()
-    return {entry["id"] for entry in response.json()["data"]}
+    return {entry["id"]: entry.get("expiration_date") for entry in response.json()["data"]}
 
 
-def _dated(model: str, listed: set[str]) -> list[str]:
+def _dated(model: str, listed: Iterable[str]) -> list[str]:
     """The names OpenRouter lists as a dated version of `model`: the name, a
     hyphen and digits, which is how it dates one (qwen/qwen3.8-max-0902).
     Anything else after the hyphen is a different model, not a date:
@@ -1794,8 +1798,11 @@ def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
     )
     if status not in (400, 404):
         return AdvisorError(refused)
+    from app import model_list  # here: model_list imports this module
+
     try:
-        listed = _fetch_model_list()
+        # Asked now, as the list is after the refusal, and kept as the day's.
+        listed = model_list.read_now()
     except Exception as unreachable:
         return AdvisorError(
             f"{refused} Whether it still serves {model} could not be checked: its "

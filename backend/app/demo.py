@@ -259,6 +259,14 @@ def build(path: Path = DEMO_PATH, today: datetime.date | None = None) -> Path:
     from app import database
     from app.main import app
 
+    # The demo calls no model, so it reads no list of them: with a key the
+    # app's start reads OpenRouter's list (`model_list`), and a read begun in
+    # this process would claim the day in the demo's `settings` and could die
+    # with it, before keeping anything, leaving the server that opens the demo
+    # nothing to say that day. The key comes from the environment, or from
+    # backend/.env through the import above.
+    os.environ.pop("OPENROUTER_API_KEY", None)
+
     try:
         with TestClient(app) as client:
             populate(client, today or datetime.date.today())

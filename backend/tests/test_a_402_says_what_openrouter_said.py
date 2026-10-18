@@ -163,7 +163,7 @@ def openrouter(monkeypatch):
     monkeypatch.setattr(advisor, "stream_llm", REAL_STREAM_LLM)
     monkeypatch.setattr(advisor, "call_llm", REAL_CALL_LLM)
     monkeypatch.setattr(advisor, "call_round", REAL_CALL_ROUND)
-    monkeypatch.setattr(advisor, "_fetch_model_list", lambda: {OPUS})
+    monkeypatch.setattr(advisor, "_fetch_model_list", lambda: {OPUS: None})
     Fake.script, Fake.asked = [], []
     return Fake
 

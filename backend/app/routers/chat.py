@@ -46,9 +46,10 @@ def _sse(events: Iterator[schemas.ChatEvent]) -> Iterator[str]:
 
 
 @router.get("/models", response_model=schemas.ChatModelsRead)
-def get_models() -> schemas.ChatModelsRead:
-    """The model dropdown, default first."""
-    return chat.available_models()
+def get_models(db: Session = Depends(get_db)) -> schemas.ChatModelsRead:
+    """The model dropdown, default first, each with what OpenRouter's public
+    list says of it today."""
+    return chat.available_models(db)
 
 
 @router.get("/conversations", response_model=list[schemas.ChatConversationRead])

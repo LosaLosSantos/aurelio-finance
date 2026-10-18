@@ -3137,6 +3137,22 @@ class ChatModel(BaseModel):
     note: str | None = Field(
         default=None, description="What is known about it, with the date it was checked"
     )
+    retires: str | None = Field(
+        default=None,
+        description=(
+            "The day after which OpenRouter's public list says the model may be "
+            "removed (its `expiration_date`), as read today; null when the list "
+            "gives it none, or has not been read today"
+        ),
+    )
+    listed: bool | None = Field(
+        default=None,
+        description=(
+            "Whether today's read of OpenRouter's public list has the model; null "
+            "when the list has not been read today. One it lacks is still offered, "
+            "marked: a name that had left the list was seen still answering"
+        ),
+    )
 
 
 class ChatModelsRead(BaseModel):

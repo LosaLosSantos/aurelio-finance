@@ -76,11 +76,11 @@ def public_list(monkeypatch):
         asked = 0
         fails: Exception | None = None
 
-    def fetch() -> set[str]:
+    def fetch() -> dict[str, str | None]:
         Fake.asked += 1
         if Fake.fails is not None:
             raise Fake.fails
-        return set(Fake.ids)
+        return dict.fromkeys(Fake.ids)
 
     monkeypatch.setattr(advisor, "_fetch_model_list", fetch)
     return Fake

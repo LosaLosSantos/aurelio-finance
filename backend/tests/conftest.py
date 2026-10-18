@@ -38,7 +38,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, event  # noqa: E402
 from sqlalchemy.exc import OperationalError  # noqa: E402
 
-from app import advisor, catalogue, composition, database, fx, issuers, prices  # noqa: E402
+from app import advisor, catalogue, composition, database, fx, issuers, model_list, prices  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -171,8 +171,8 @@ _NETWORK_BOUNDARY = {
     # which look things up, through call_round (brief AR); the chat goes
     # through its streaming sibling, which is easier to reach by accident - a
     # test that only checks the first event has already paid for the whole
-    # answer. The public model list, asked after a refusal, carries no key but
-    # is a call all the same.
+    # answer. The public model list, asked once a day and after a refusal,
+    # carries no key but is a call all the same.
     advisor: ("call_llm", "call_round", "stream_llm", "_fetch_model_list"),
 }
 
@@ -241,6 +241,19 @@ def offline(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_key_from_backend_env(monkeypatch):
+    """Every test starts with no OpenRouter key, whatever backend/.env holds.
+
+    `database.py` loads backend/.env into the environment at import, so in the
+    reader's tree every test saw their key, and on CI, which has no .env, none
+    did. With a key the app reads OpenRouter's list of models at startup
+    (`model_list`), so what a test counted as asked depended on where it ran
+    (brief BB). A test that needs a key sets one: `invalid`, or a planted value
+    it then looks for in what was sent."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_catalogue_download_outlives_its_test(offline):
     """The fund catalogue downloads on a thread of its own (`catalogue.ensure`),
     so a test that starts one could end while it is still writing, into the
@@ -256,6 +269,25 @@ def _no_catalogue_download_outlives_its_test(offline):
     catalogue._forget()
     assert not any(t.is_alive() for t in started), (
         "a catalogue download outlived its test: release whatever holds it"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_model_list_read_outlives_its_test(offline):
+    """OpenRouter's list of models is read on a thread of its own (`model_list`),
+    started by the app's startup, by the first request of a day and after a
+    refusal, so a test could end while one still writes `settings`, into the
+    next test's database. Every test starts from a process that has read
+    nothing, and none may leave a read running. After `offline`, whose refusal
+    is what such a read meets unless the test fakes the list."""
+    model_list._forget()
+    yield
+    started = [t for t in threading.enumerate() if t.name == model_list.THREAD_NAME]
+    for thread in started:
+        thread.join(timeout=5)
+    model_list._forget()
+    assert not any(t.is_alive() for t in started), (
+        "a read of OpenRouter's list of models outlived its test: release whatever holds it"
     )
 
 

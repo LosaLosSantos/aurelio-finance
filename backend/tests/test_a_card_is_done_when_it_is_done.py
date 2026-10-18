@@ -360,7 +360,7 @@ def openrouter(monkeypatch):
     monkeypatch.setattr(advisor, "call_llm", REAL_CALL_LLM)
     monkeypatch.setattr(advisor, "call_round", REAL_CALL_ROUND)
     monkeypatch.setattr(advisor, "_client", client)
-    monkeypatch.setattr(advisor, "_fetch_model_list", lambda: {OPUS})
+    monkeypatch.setattr(advisor, "_fetch_model_list", lambda: {OPUS: None})
     monkeypatch.setenv("OPENROUTER_CHAT_MODEL", OPUS)
     return Fake
 

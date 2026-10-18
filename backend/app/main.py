@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app import __version__
+from app import __version__, model_list
 from app.database import StartRefused, init_db
 from app.routers import (
     accumulation_plans,
@@ -49,6 +49,10 @@ async def lifespan(app: FastAPI):
     except StartRefused as refused:
         say_why_not(refused)
         raise
+    # The day's read of OpenRouter's list of models, in the background: the
+    # start waits for nothing, and a page that asks before the read is back
+    # says no date until it asks again.
+    model_list.start_if_due()
     yield
     # (no shutdown cleanup needed for now)
 

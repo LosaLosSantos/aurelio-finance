@@ -339,7 +339,8 @@ export interface paths {
         };
         /**
          * Get Models
-         * @description The model dropdown, default first.
+         * @description The model dropdown, default first, each with what OpenRouter's public
+         *     list says of it today.
          */
         get: operations["get_models_api_chat_models_get"];
         put?: never;
@@ -2598,10 +2599,20 @@ export interface components {
          */
         ChatModel: {
             /**
+             * Listed
+             * @description Whether today's read of OpenRouter's public list has the model; null when the list has not been read today. One it lacks is still offered, marked: a name that had left the list was seen still answering
+             */
+            listed: boolean | null;
+            /**
              * Note
              * @description What is known about it, with the date it was checked
              */
             note: string | null;
+            /**
+             * Retires
+             * @description The day after which OpenRouter's public list says the model may be removed (its `expiration_date`), as read today; null when the list gives it none, or has not been read today
+             */
+            retires: string | null;
             /** Slug */
             slug: string;
         };
