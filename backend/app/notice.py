@@ -7,7 +7,7 @@ account is as wrong as one inflated (`fx.Converter.to_base_or_as_stored`).
 What a page says about it, in the order the reader acts on it:
 
 1. what kind of code it is: not a currency code (a typo, corrected on its
-   row), or a currency no source quotes (nothing to correct: the figure is in
+   row), or a currency with no available rate (the figure is in
    two units);
 2. where it is written: the rows, by kind and name, newest first;
 3. how much of each figure on the page is that code as written, signed.

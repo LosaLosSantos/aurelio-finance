@@ -74,8 +74,8 @@ scratch, delete `backend/demo.db` and start with the flag.
 
 Your records live in `backend/data.db`. If your money is not mostly in euros, set the base
 currency first, in Profile: it is the currency every total is shown in and the one each new
-record proposes. Anything recorded in another currency is converted at the European Central
-Bank's rate of the day.
+record proposes. See [One currency](how-to-calculate-net-worth.md#one-currency) for how amounts
+in other currencies enter totals and how unavailable conversion rates are reported.
 
 Then, under Records:
 

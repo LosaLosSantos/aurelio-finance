@@ -46,7 +46,7 @@ def _page(found: dict[str, str]) -> WebPage | None:
 
 
 def search(query: str) -> Search:
-    """Run one Copilot-backed web search. Failures are data, never exceptions."""
+    """Return provider failures as data while allowing cancellation to propagate."""
     try:
         result = copilot_provider.search_web(query, SEARCH_MODEL)
     except copilot_provider.CopilotError as exc:

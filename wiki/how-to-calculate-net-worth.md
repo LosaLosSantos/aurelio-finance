@@ -101,13 +101,29 @@ is recorded as a total, beside three positions the market prices every day.
 
 ## One currency
 
-Every amount is converted into one base currency before it is added to anything: the euro
-unless you choose another in Profile. The rates are the European Central Bank's
+Totals use one base currency: the euro unless you choose another in Profile. For currencies
+it publishes, Aurelio uses the European Central Bank's
 [daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html),
-and each reading uses the rates of its own day: today's totals at today's rates, each point of
-the net worth history at the rates of that point's day. For a position with a quantity, the
+and otherwise tries Yahoo Finance's daily dollar-pair close, crossed with the ECB's dollar
+rate for the same Yahoo day. The base-currency selector still offers only currencies the
+ECB publishes. Each reading uses the rates in force on its own day: today's totals at today's
+rates, each point of the net worth history at the rates of that point's day. The app identifies
+the source and date of the rates used. For a position with a quantity, the
 currency that counts is the one its listing trades in, not the currency of the fund's share
 class: a class denominated in dollars can trade in euros on another exchange.
+
+Yahoo rates must pass the history, freshness and outlier checks in
+[`yahoo_rates.py`](https://github.com/LosaLosSantos/aurelio-finance/blob/main/backend/app/yahoo_rates.py).
+If no usable conversion rate is available, the amount is counted as written, as if in the
+base currency, rather than dropped. The affected page warns which code could not be converted,
+where it is recorded and how much it contributes to each affected figure; the history marks
+the affected points instead of summing amounts across dates. Such figures mix units and
+should not be read as fully converted totals. Correct an invalid code on its record; a valid
+currency with no available rate is not necessarily a typo.
+
+An automatically calculated ledger amount or transfer arrival is different: it needs final
+rates for its date. If those are unavailable, Aurelio asks for the amount from your statement
+instead of fixing the amount at an unconfirmed rate.
 
 ## Net worth over time
 

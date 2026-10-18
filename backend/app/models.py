@@ -17,12 +17,6 @@ Liabilities (F1): debts (mortgage, loans, ...) live in their own branch with
 dated outstanding balances (mirroring real-asset valuations). Net worth =
 financial + real − liabilities. A liability can optionally point to the real
 asset it finances (mortgage -> house) to surface the user's equity.
-
-Tables: settings, institutions, snapshots, holdings, real_assets,
-real_asset_valuations, liabilities, liability_balances, income_sources,
-expenses, cash_anchors, transfers, survey_responses, goals,
-accumulation_plans, transactions, price_cache, composition_cache, fx_rates,
-chain_runs, chain_steps, chat_conversations, chat_messages, watchlist_items.
 """
 
 from __future__ import annotations

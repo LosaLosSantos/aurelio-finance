@@ -88,9 +88,8 @@ new balance as a card, and writes nothing until you confirm it.
 ## More than one currency
 
 Each balance, income, expense and transfer is recorded in its own currency, and one account
-can hold rows in several. Each is converted into your base currency at the European Central
-Bank's rate before it is added: an account with a balance of 1,250 dollars does not count as
-1,250 euros.
+can hold rows in several. For the conversion sources and what a missing-rate warning means,
+see [One currency](how-to-calculate-net-worth.md#one-currency).
 
 ## What it does not do
 
