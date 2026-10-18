@@ -10,19 +10,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
+import shutil
 import tempfile
 import threading
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
 from pydantic import BaseModel, ConfigDict
 
-from copilot import CopilotClient, ToolSet
+from copilot import CopilotClient, RuntimeConnection, ToolSet
+from copilot.rpc import SessionFSReaddirWithTypesEntry
 from copilot.session import PermissionHandler
+from copilot.session_fs_provider import SessionFsFileInfo, SessionFsProvider
 from copilot.session_events import (
     AssistantMessageData,
     AssistantMessageDeltaData,
@@ -90,9 +95,6 @@ class CopilotError(RuntimeError):
 
 
 _DONE = object()
-_MODEL_CACHE_SECONDS = 300.0
-_model_cache: tuple[float, tuple[Model, ...]] = (0.0, ())
-_model_lock = threading.Lock()
 _SESSION_ISOLATION = {
     "enable_session_telemetry": False,
     "enable_session_store": False,
@@ -103,6 +105,96 @@ _SESSION_ISOLATION = {
     "skip_custom_instructions": True,
     "enable_on_demand_instruction_discovery": False,
 }
+
+
+class _SessionFiles(SessionFsProvider):
+    def __init__(self, storage: str):
+        self.root = Path(storage).resolve()
+
+    def _path(self, path: str) -> Path:
+        resolved = (self.root / path).resolve()
+        if not resolved.is_relative_to(self.root):
+            raise PermissionError("Copilot session files must remain in temporary storage.")
+        return resolved
+
+    async def read_file(self, path: str) -> str:
+        return self._path(path).read_text(encoding="utf-8")
+
+    async def write_file(self, path: str, content: str, mode: int | None = None) -> None:
+        target = self._path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8") as stream:
+            if mode is not None:
+                target.chmod(mode)
+            stream.write(content)
+
+    async def append_file(self, path: str, content: str, mode: int | None = None) -> None:
+        target = self._path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as stream:
+            if mode is not None:
+                target.chmod(mode)
+            stream.write(content)
+
+    async def exists(self, path: str) -> bool:
+        return self._path(path).exists()
+
+    async def stat(self, path: str) -> SessionFsFileInfo:
+        target = self._path(path)
+        info = target.stat()
+        return SessionFsFileInfo(
+            is_file=target.is_file(),
+            is_directory=target.is_dir(),
+            size=info.st_size,
+            mtime=datetime.fromtimestamp(info.st_mtime, UTC),
+            birthtime=datetime.fromtimestamp(getattr(info, "st_birthtime", info.st_ctime), UTC),
+        )
+
+    async def mkdir(self, path: str, recursive: bool, mode: int | None = None) -> None:
+        self._path(path).mkdir(
+            mode=mode if mode is not None else 0o700,
+            parents=recursive, exist_ok=recursive,
+        )
+
+    async def readdir(self, path: str) -> list[str]:
+        return [entry.name for entry in self._path(path).iterdir()]
+
+    async def readdir_with_types(self, path: str) -> list[SessionFSReaddirWithTypesEntry]:
+        return [
+            SessionFSReaddirWithTypesEntry.from_dict({
+                "name": entry.name,
+                "type": "directory" if entry.is_dir() else "file",
+            })
+            for entry in self._path(path).iterdir()
+        ]
+
+    async def rm(self, path: str, recursive: bool, force: bool) -> None:
+        target = self._path(path)
+        if force and not target.exists():
+            return
+        if target.is_dir():
+            if recursive:
+                shutil.rmtree(target)
+            else:
+                target.rmdir()
+        else:
+            target.unlink()
+
+    async def rename(self, src: str, dest: str) -> None:
+        self._path(src).rename(self._path(dest))
+
+
+def _client(storage: str) -> CopilotClient:
+    return CopilotClient(
+        use_logged_in_user=True,
+        working_directory=storage,
+        connection=RuntimeConnection.for_stdio(args=["--log-dir", storage]),
+        session_fs={
+            "initial_working_directory": storage,
+            "session_state_path": str(Path(storage) / "session-state"),
+            "conventions": "windows" if os.name == "nt" else "posix",
+        },
+    )
 
 
 @dataclass
@@ -194,9 +286,7 @@ async def _run(
     wrote_text = False
     try:
         with tempfile.TemporaryDirectory(prefix="aurelio-copilot-") as storage:
-            async with CopilotClient(
-                use_logged_in_user=True, working_directory=storage,
-            ) as client:
+            async with _client(storage) as client:
                 sdk_tools, available = _tools(declarations)
                 async with await client.create_session(
                     model=model,
@@ -207,6 +297,7 @@ async def _run(
                     streaming=True,
                     **_SESSION_ISOLATION,
                     config_directory=storage,
+                    create_session_fs_handler=lambda session: _SessionFiles(storage),
                 ) as session:
                     holder["loop"] = asyncio.get_running_loop()
                     holder["session"] = session
@@ -328,32 +419,20 @@ def complete(system_prompt: str, user_content: str, model: str) -> Result:
 
 async def _list_models() -> tuple[Model, ...]:
     with tempfile.TemporaryDirectory(prefix="aurelio-copilot-models-") as storage:
-        async with CopilotClient(
-            use_logged_in_user=True, working_directory=storage,
-        ) as client:
+        async with _client(storage) as client:
             found = await client.list_models()
     return tuple(Model(item.id, item.name) for item in found)
 
 
 def models() -> tuple[Model, ...]:
-    """Models offered to the authenticated Copilot account, briefly cached."""
-    global _model_cache
-    now = time.monotonic()
-    cached_at, cached = _model_cache
-    if cached and now - cached_at < _MODEL_CACHE_SECONDS:
-        return cached
-    with _model_lock:
-        cached_at, cached = _model_cache
-        if cached and now - cached_at < _MODEL_CACHE_SECONDS:
-            return cached
-        try:
-            discovered = asyncio.run(_list_models())
-        except Exception as exc:
-            raise CopilotError(f"GitHub Copilot model discovery failed ({exc}).") from exc
-        if not discovered:
-            raise CopilotError("GitHub Copilot returned no available models.")
-        _model_cache = (time.monotonic(), discovered)
-        return discovered
+    """Models currently offered to the authenticated Copilot account."""
+    try:
+        discovered = asyncio.run(_list_models())
+    except Exception as exc:
+        raise CopilotError(f"GitHub Copilot model discovery failed ({exc}).") from exc
+    if not discovered:
+        raise CopilotError("GitHub Copilot returned no available models.")
+    return discovered
 
 
 async def _search_web(query: str, model: str) -> WebResult:
@@ -361,9 +440,7 @@ async def _search_web(query: str, model: str) -> WebResult:
     fetching: dict[str, str] = {}
     fetched: dict[str, str] = {}
     with tempfile.TemporaryDirectory(prefix="aurelio-copilot-search-") as storage:
-        async with CopilotClient(
-            use_logged_in_user=True, working_directory=storage,
-        ) as client:
+        async with _client(storage) as client:
             available = ToolSet().add_builtin("web_fetch")
             async with await client.create_session(
                 model=model,
@@ -382,6 +459,7 @@ async def _search_web(query: str, model: str) -> WebResult:
                 },
                 **_SESSION_ISOLATION,
                 config_directory=storage,
+                create_session_fs_handler=lambda session: _SessionFiles(storage),
             ) as session:
 
                 def receive(event) -> None:

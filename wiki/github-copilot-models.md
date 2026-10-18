@@ -24,6 +24,9 @@ owned by the Copilot CLI. Do not put GitHub tokens or model-provider API keys in
 Sessions retain access to the CLI's saved login and system keychain, but do not load local
 instructions, skills or hooks. Application tools remain captured requests that Aurelio handles,
 not tools the SDK executes against your records.
+SDK transcripts, session files and runtime logs are kept in request-scoped temporary
+storage and removed after success or failure, rather than saved in Copilot's normal
+resumable history. This does not redirect or remove the CLI's saved authentication.
 
 ## Which model answers?
 
@@ -32,6 +35,8 @@ signed-in account, including supported Claude and GPT models. Availability and q
 the account's Copilot plan and may change in GitHub's service.
 If discovery fails or the account offers no models, the menu reports an error rather than
 substituting a configured list.
+The backend queries Copilot for each catalogue request without an application-level cache.
+If loading fails, the chat shows the error and offers a retry.
 
 Optional settings in `backend/.env` choose defaults:
 

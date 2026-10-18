@@ -626,6 +626,8 @@ export default function ChatPanel({
   const [messages, setMessages] = useState<Message[]>([]);
   const [model, setModel] = useState<string | null>(initial.model);
   const [models, setModels] = useState<ChatModels | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsRequest, setModelsRequest] = useState(0);
   const [draft, setDraft] = useState("");
   const [view, setView] = useState<"chat" | "history">("chat");
   const [history, setHistory] = useState<ChatConversation[] | null>(null);
@@ -652,13 +654,16 @@ export default function ChatPanel({
   }
 
   useEffect(() => {
+    let active = true;
     getChatModels()
-      .then(setModels)
-      .catch(() => {
-        /* backend down: the dropdown shows nothing to pick, and the send will
-           say the backend did not answer */
+      .then((found) => {
+        if (active) setModels(found);
+      })
+      .catch((e) => {
+        if (active) setModelsError(apiError(e, "Copilot models could not be loaded."));
       });
-  }, []);
+    return () => { active = false; };
+  }, [modelsRequest]);
 
   // A reload lands on the conversation that was open. If it is gone —
   // deleted from another tab, a fresh database — start blank rather than
@@ -1171,7 +1176,7 @@ export default function ChatPanel({
                     </option>
                   ))
                 ) : (
-                  <option value="">model…</option>
+                  <option value="">{modelsError ? "Models unavailable" : "model…"}</option>
                 )}
               </select>
               {streaming ? (
@@ -1194,6 +1199,21 @@ export default function ChatPanel({
                 </button>
               )}
             </div>
+            {modelsError && (
+              <div role="alert" className="px-3 pb-2 text-xs text-down">
+                <p>{modelsError}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModelsError(null);
+                    setModelsRequest((request) => request + 1);
+                  }}
+                  className="mt-1 underline"
+                >
+                  Retry loading models
+                </button>
+              </div>
+            )}
           </div>
           <p className="mt-2 text-center text-[0.65rem] leading-snug text-ink-faint">
             Educational information, not regulated financial advice.

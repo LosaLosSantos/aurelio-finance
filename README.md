@@ -92,6 +92,8 @@ Those prompts leave this machine and are processed by GitHub Copilot and its
 model providers under the terms of the signed-in account. Copilot subscription
 usage is not a dollar price, so Aurelio records token usage but leaves its
 historical USD cost fields empty for Copilot-backed calls.
+SDK transcripts and runtime logs use request-scoped temporary storage that is
+removed when the request ends; the CLI's saved login and keychain remain available.
 
 ## Development
 

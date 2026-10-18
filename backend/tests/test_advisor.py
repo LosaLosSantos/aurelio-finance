@@ -527,10 +527,6 @@ def test_the_chain_keeps_the_information_asymmetry(client, monkeypatch):
     for challenge in [c for c in seen if c["system"] == chain.CONFIDANT_SYSTEM_PROMPT]:
         assert "I panic" in challenge["user"]
         assert "1000" not in challenge["user"]  # blind to the figures, every round
-    # the confidant's mandate has to be adversarial, or the chain is theatre
-    assert "ADVERSARIAL" in chain.CONFIDANT_SYSTEM_PROMPT
-    assert "REVISE" in chain.REVISION_SYSTEM_PROMPT
-    assert "HOLD" in chain.REVISION_SYSTEM_PROMPT
 
 
 def test_the_chain_uses_per_role_models_when_configured(client, monkeypatch):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -14,6 +15,7 @@ from app import advisor, copilot_provider, crud
 from app.database import SessionLocal
 from copilot import CopilotClient
 from copilot.client import RuntimeConnection
+from copilot.session_fs_provider import create_session_fs_adapter
 from copilot.session_events import (
     AssistantMessageData,
     AssistantMessageDeltaData,
@@ -29,6 +31,7 @@ from copilot.session_events import (
 _REAL_STREAM = copilot_provider.stream
 _REAL_ADVISOR_STREAM = advisor.stream_llm
 _REAL_MODELS = copilot_provider.models
+_REAL_SEARCH_WEB = copilot_provider.search_web
 
 
 class _Session:
@@ -100,6 +103,13 @@ class _Client:
 
     async def create_session(self, **options):
         self.captured["session"] = options
+        if self.captured.get("persist_transcript"):
+            filesystem = options["create_session_fs_handler"](None)
+            path = str(Path(self.captured["client"]["session_fs"]["session_state_path"]) / "events.jsonl")
+            await filesystem.write_file(path, '{"prompt":"My balance is 1000"}\n')
+            assert await filesystem.read_file(path) == '{"prompt":"My balance is 1000"}\n'
+            assert Path(path).is_file()
+            self.captured["transcript"] = Path(path)
         return _Session(self.captured, self.failure)
 
     async def list_models(self):
@@ -208,16 +218,18 @@ def test_clients_keep_logged_in_authentication_and_session_tool_isolation(monkey
     monkeypatch.delenv("COPILOT_HOME", raising=False)
     spawn = Mock(side_effect=RuntimeError("spawn captured"))
     monkeypatch.setattr("copilot.client.subprocess.Popen", spawn)
-    sdk_client = CopilotClient(
-        connection=RuntimeConnection.for_stdio(path=sys.executable),
-        **captured["client"],
+    options = dict(captured["client"])
+    options["connection"] = RuntimeConnection.for_stdio(
+        path=sys.executable, args=options["connection"].args,
     )
+    sdk_client = CopilotClient(**options)
     with pytest.raises(RuntimeError, match="spawn captured"):
         asyncio.run(sdk_client._start_cli_server())
     assert "COPILOT_DISABLE_KEYTAR" not in spawn.call_args.kwargs["env"]
     assert "COPILOT_HOME" not in spawn.call_args.kwargs["env"]
     assert "--no-auto-login" not in spawn.call_args.args[0]
     assert "--auth-token-env" not in spawn.call_args.args[0]
+    assert "--log-dir" in spawn.call_args.args[0]
     if operation != "models":
         options = captured["session"]
         assert not options.get("interactive_user", False)
@@ -312,11 +324,88 @@ def test_failed_sdk_turn_persists_reported_tokens_without_executing_a_card(clien
     assert client.get("/api/goals").json() == []
 
 
+@pytest.mark.parametrize("operation", ["chat", "search"])
+@pytest.mark.parametrize("failed", [False, True])
+def test_sdk_transcripts_are_removed_after_success_or_failure(monkeypatch, operation, failed):
+    captured = {
+        "persist_transcript": True,
+        "events": [*_fetch_events(), SessionIdleData()],
+    }
+    monkeypatch.setattr(
+        copilot_provider, "CopilotClient",
+        lambda **options: _Client(
+            captured, RuntimeError("unavailable") if failed else None, **options,
+        ),
+    )
+
+    def run():
+        if operation == "chat":
+            return list(_REAL_STREAM("system", [], "gpt-5.4"))
+        return _REAL_SEARCH_WEB("rates", "gpt-5.4")
+
+    if failed:
+        with pytest.raises(copilot_provider.CopilotError, match="unavailable"):
+            run()
+    else:
+        run()
+    assert not captured["transcript"].exists()
+    assert not Path(captured["client"]["working_directory"]).exists()
+
+
+def test_session_files_support_runtime_operations_without_accessing_other_storage(tmp_path):
+    filesystem = copilot_provider._SessionFiles(str(tmp_path))
+
+    async def exercise():
+        await filesystem.mkdir("state", recursive=False, mode=0o700)
+        await filesystem.write_file("state/events.jsonl", "first\n", mode=0o600)
+        await filesystem.append_file("state/events.jsonl", "second\n", mode=0o600)
+        assert await filesystem.read_file("state/events.jsonl") == "first\nsecond\n"
+        info = await filesystem.stat("state/events.jsonl")
+        assert info.is_file and not info.is_directory and info.size == 13
+        assert (await filesystem.stat("state")).is_directory
+        assert await filesystem.readdir("state") == ["events.jsonl"]
+        entries = await filesystem.readdir_with_types(".")
+        assert [(entry.name, entry.type.value) for entry in entries] == [("state", "directory")]
+        entries = await filesystem.readdir_with_types("state")
+        assert [(entry.name, entry.type.value) for entry in entries] == [("events.jsonl", "file")]
+        await filesystem.rename("state/events.jsonl", "state/moved.jsonl")
+        assert not await filesystem.exists("state/events.jsonl")
+        assert await filesystem.exists("state/moved.jsonl")
+        await filesystem.rm("state/moved.jsonl", recursive=False, force=False)
+        await filesystem.rm("state/missing.jsonl", recursive=False, force=True)
+        await filesystem.rm("state", recursive=False, force=False)
+        await filesystem.write_file("nested/state/events.jsonl", "temporary")
+        await filesystem.rm("nested", recursive=True, force=False)
+        assert await filesystem.readdir(".") == []
+        with pytest.raises(PermissionError):
+            await filesystem.write_file("../outside.jsonl", "not allowed")
+        with pytest.raises(PermissionError):
+            await filesystem.read_file(str(tmp_path.parent / "outside.jsonl"))
+        adapter = create_session_fs_adapter(filesystem)
+        missing = await adapter.read_file(SimpleNamespace(path="missing.jsonl"))
+        assert missing.error.code.value == "ENOENT"
+
+    asyncio.run(exercise())
+
+
+def test_model_discovery_reflects_account_changes_on_every_request(monkeypatch):
+    inventories = iter([
+        (copilot_provider.Model("gpt-5.4", "GPT"),),
+        (copilot_provider.Model("claude-opus-5.5", "Claude"),),
+    ])
+
+    async def discover():
+        return next(inventories)
+
+    monkeypatch.setattr(copilot_provider, "_list_models", discover)
+    assert _REAL_MODELS()[0].id == "gpt-5.4"
+    assert _REAL_MODELS()[0].id == "claude-opus-5.5"
+
+
 def test_an_empty_account_catalogue_is_an_error(monkeypatch):
     async def empty():
         return ()
 
-    monkeypatch.setattr(copilot_provider, "_model_cache", (0.0, ()))
     monkeypatch.setattr(copilot_provider, "_list_models", empty)
     with pytest.raises(copilot_provider.CopilotError, match="no available models"):
         _REAL_MODELS()
