@@ -37,6 +37,18 @@ def test_bisection_solution_actually_reaches_target():
     assert abs(fv - target) / target < 0.001  # within 0.1%
 
 
+def test_horizon_over_85_years_does_not_raise_overflow():
+    # Regression test for issue #4: (1 + i) ** n overflowed once n passed
+    # 1023 months (horizons over ~85 years), raising OverflowError out of
+    # required_annual_return and breaking every context reader. It must
+    # return a value now.
+    r = required_annual_return(1000, 100, 10_000_000, 100)
+    assert r is not None and r > 0
+    # sanity: a longer horizon needs a smaller return than 85 years
+    r85 = required_annual_return(1000, 100, 10_000_000, 85)
+    assert r85 is not None and r < r85
+
+
 def test_assess_bands():
     assert "unreachable" in assess(None).lower()
     assert "on track" in assess(0.0).lower()

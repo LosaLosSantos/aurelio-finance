@@ -29,7 +29,11 @@ def required_annual_return(
     def fv(i: float) -> float:
         if i == 0:
             return current + monthly * n
-        return current * (1 + i) ** n + monthly * (((1 + i) ** n - 1) / i)
+        try:
+            growth = (1 + i) ** n
+        except OverflowError:
+            return float("inf")
+        return current * growth + monthly * ((growth - 1) / i)
 
     if fv(0.0) >= target:
         return 0.0
