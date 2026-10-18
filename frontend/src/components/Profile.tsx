@@ -302,8 +302,9 @@ function OtherAnswers({
 
    What the reader has to know before changing it is what moves and what does
    not. Every total moves — the net worth, the history, every converted figure —
-   because it is the same wealth measured in another unit, at the ECB rate of
-   each figure's own day. Nothing recorded moves: an amount keeps the currency
+   because it is the same wealth measured in another unit, at the rate of
+   each figure's own day (the ECB's, or Yahoo's for a currency the ECB does
+   not publish). Nothing recorded moves: an amount keeps the currency
    it was typed in, and a sum fixed on its day stays what it was. The choices
    are the currencies the ECB publishes, because a total can only be converted
    into one somebody publishes a rate for. */
@@ -324,8 +325,9 @@ function BaseCurrencySection({
       <p className="text-sm text-ink-soft">
         Every total is shown in this currency: your net worth, its history, every
         converted figure. Changing it moves all of them, the history included:
-        it is the same wealth in another unit, converted at the ECB rate of each
-        figure's own day. Nothing you recorded is rewritten: every amount keeps
+        it is the same wealth in another unit, converted at the rate of each
+        figure's own day: the ECB's, or Yahoo's for a currency the ECB does not
+        publish. Nothing you recorded is rewritten: every amount keeps
         the currency you typed it in, and a debit or a transfer fixed on its day
         stays what it was.
       </p>

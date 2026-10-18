@@ -9,8 +9,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   acrossCurrencies,
+  arrivalWasStated,
   debitOnEdit,
   derivedAmount,
+  sameSum,
   wasStated,
   type Entry,
 } from "../src/components/statedAmount.ts";
@@ -115,4 +117,45 @@ test("an auto-recorded gross dividend opens empty, and can be corrected", () => 
   // Once corrected with the net credit, an edit about anything else keeps it.
   const corrected = entry({ kind: "dividend", quantity: 100, unit_price: 0.5, amount: 43.75 });
   assert.equal(debitOnEdit(corrected), "43.75");
+});
+
+test("two codes are one currency as the backend reads them: case and pence (brief BA)", () => {
+  // Measured at 279acf8: EUR with a price in "eur" was two currencies here,
+  // one there, so a figure the backend worked out read as a statement's.
+  assert.equal(acrossCurrencies("EUR", "eur"), false);
+  assert.equal(acrossCurrencies("GBP", "GBp"), false);
+  assert.equal(acrossCurrencies("GBP", "gbp"), false);
+  assert.equal(acrossCurrencies("GBP", "USD"), true);
+  assert.equal(wasStated(entry({ price_currency: "eur" })), false);
+  assert.equal(wasStated(entry({ price_currency: "eur", amount: 307.42 })), true);
+  // 10 at 500 pence into a GBP account: 50.00, worked out with no rate day.
+  const pence = entry({ currency: "GBP", price_currency: "GBp", unit_price: 500, amount: 50 });
+  assert.equal(derivedAmount(pence), 50);
+  assert.equal(wasStated(pence), false);
+  assert.equal(debitOnEdit(pence), "");
+  assert.equal(wasStated({ ...pence, amount: 51 }), true);
+  // Without the currencies, the figures alone, as before.
+  assert.equal(derivedAmount({ kind: "buy", quantity: 10, unit_price: 500, fees: 0 }), 5000);
+});
+
+test("a transfer in one currency spelt two ways is one sum, as the chat's card reads it", () => {
+  // The cases of `tools._same_sum`'s test, case for case.
+  const t = (currency: string, to_currency: string, amount: number, to_amount: number) => ({
+    currency,
+    to_currency,
+    amount,
+    to_amount,
+    fx_as_of: null,
+  });
+  assert.equal(sameSum(t("EUR", "EUR", 200, 200)), true);
+  assert.equal(sameSum(t("EUR", "EUR", 200, 199)), false);
+  assert.equal(sameSum(t("EUR", "eur", 200, 200)), true);
+  assert.equal(sameSum(t("GBP", "GBp", 12.34, 1234)), true);
+  assert.equal(sameSum(t("GBp", "GBP", 1234, 12.34)), true);
+  assert.equal(sameSum(t("EUR", "USD", 200, 200)), false);
+  // So the form's box opens empty for an arrival the app worked out, and
+  // with the figure for one typed from a statement.
+  assert.equal(arrivalWasStated(t("EUR", "eur", 200, 200)), false);
+  assert.equal(arrivalWasStated(t("EUR", "EUR", 200, 199)), true);
+  assert.equal(arrivalWasStated({ ...t("EUR", "USD", 200, 160), fx_as_of: "2026-09-11" }), false);
 });

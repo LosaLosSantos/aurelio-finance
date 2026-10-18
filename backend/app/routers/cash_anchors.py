@@ -80,7 +80,7 @@ def get_cash_position(
     """Projected cash for the institution at `as_of` (default today), with its
     breakdown (anchor, income, expenses, transfers)."""
     get_or_404(db, models.Institution, institution_id)
-    return analytics.compute_cash_position(db, institution_id, as_of)
+    return analytics.cash_positions_said(db, as_of, institution_id)[0]
 
 
 @router.get("/cash/positions", response_model=list[schemas.CashPosition])
@@ -89,7 +89,7 @@ def list_cash_positions(
     db: Session = Depends(get_db),
 ) -> list[schemas.CashPosition]:
     """Projected cash for every institution at `as_of` (default today)."""
-    return analytics.compute_all_cash_positions(db, as_of)
+    return analytics.cash_positions_said(db, as_of)
 
 
 @router.get("/cash-anchors/{anchor_id}", response_model=schemas.CashAnchorRead)

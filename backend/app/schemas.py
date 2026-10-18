@@ -123,6 +123,15 @@ def _must_be_a_currency_code(code: str) -> str:
     return code
 
 
+def is_currency_code(code: str | None) -> bool:
+    """Whether a STORED value has a currency code's shape, three ASCII
+    letters: `_must_be_a_currency_code`'s test, as a question rather than a
+    refusal. For the values already on disk that no write door checks again:
+    a situation started from the last one copies them, and the catch-up builds
+    its entries from them (brief BA)."""
+    return bool(code) and bool(_CURRENCY_CODE.match(code.strip()))
+
+
 # The currency an amount is written in: required, not blank, and a CODE.
 #
 # Every amount the app stores says its currency, and nothing fills one in for
@@ -220,6 +229,56 @@ class InstitutionRead(InstitutionBase):
     latest_snapshot: str | None = None
 
 
+class UnconvertedRow(BaseModel):
+    """A row an unconverted code is written on, as the page names it."""
+
+    model_config = API_OUT
+
+    kind: str = Field(..., description="What the row is: a position, a real asset, a debt, ...")
+    name: str = Field(..., description="Its name, or its account's")
+    where: str | None = Field(
+        default=None, description="Its account and day, when it has them"
+    )
+
+
+class UnconvertedCode(BaseModel):
+    """A code that reached this page's figures as written, because no rate
+    converts it (brief BA, D2 (c)).
+
+    The fallback itself is deliberate: an amount no source has priced is kept
+    rather than dropped, since a total quietly short by a whole account is as
+    wrong as one quietly inflated (`fx.Converter.to_base_or_as_stored`). What
+    the page says, in the order the reader acts on it: what kind of code it is,
+    where it is written, and how much of each figure it is (`notice`)."""
+
+    model_config = API_OUT
+
+    currency: str = Field(
+        ..., description='The code as the rows state it ("" for a row that states none)'
+    )
+    not_a_code: bool = Field(
+        ...,
+        description=(
+            "True when it is not a currency code at all, a typo corrected on its "
+            "row; false when it is a currency no source quotes"
+        ),
+    )
+    rows: list[UnconvertedRow] = Field(
+        default_factory=list, description="The rows it is written on, newest first"
+    )
+    more_rows: int = Field(0, description="How many more rows than those listed")
+    shares: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "How much of each figure of this payload the code is, as written and "
+            "signed, by the figure's field name: the figure computed again with "
+            "the code at 0, and the difference. A debt's share is in the debts "
+            "and leaves the net worth; a monthly flow's is a month's; a figure the "
+            "code does not move is left out."
+        ),
+    )
+
+
 class SnapshotBase(BaseModel):
     """Fields shared by a snapshot (a dated 'situation' of an institution)."""
 
@@ -253,12 +312,20 @@ class SnapshotRead(SnapshotBase):
         ...,
         description=(
             "What this situation was worth, in `base_currency`: its holdings "
-            "converted at the ECB rate, by the listing currency where the ticker "
-            "has one. Computed by the router, never by the model."
+            "converted at the ECB rate (Yahoo's for a currency the ECB does not "
+            "publish), by the listing currency where the ticker has one. Computed "
+            "by the router, never by the model."
         ),
     )
     base_currency: BaseCurrency
     created_at: str
+    unconverted: list[UnconvertedCode] = Field(
+        default_factory=list,
+        description=(
+            "The codes `value_base` holds as written, because no rate converts "
+            'them, with their share of it under "value_base" (brief BA).'
+        ),
+    )
 
 
 class PaidNotKept(BaseModel):
@@ -269,6 +336,16 @@ class PaidNotKept(BaseModel):
 
     asset_name: str
     units_paid: float = Field(..., description="The units that paid part had bought")
+
+
+class NotACode(BaseModel):
+    """A row a new situation copied with a currency that is not a currency
+    code: written before the shape rule, and copied as written (brief BA)."""
+
+    model_config = API_OUT
+
+    asset_name: str
+    currency: str = Field(..., description="The currency as it is written on the row")
 
 
 class PrefilledSnapshotRead(SnapshotRead):
@@ -294,6 +371,14 @@ class PrefilledSnapshotRead(SnapshotRead):
             "Of those rows, the ones partly bought since the situation it started "
             "from whose paid part the new one could not keep, with the units it "
             "had paid for: nothing priced them on that day (brief AV)."
+        ),
+    )
+    not_a_code: list[NotACode] = Field(
+        default_factory=list,
+        description=(
+            "Copied rows whose currency is not a currency code. It is copied as "
+            "written, since only the reader knows what it meant, and said, so the "
+            "new situation does not carry it forward in silence (brief BA)."
         ),
     )
 
@@ -378,9 +463,10 @@ class HoldingRead(HoldingBase):
     value_base: float = Field(
         ...,
         description=(
-            "`value` in `base_currency`, at the ECB rate — by the ticker's "
-            "listing currency where it has one, by `currency` otherwise. The "
-            "figure to display and to total; `value` is the one to edit."
+            "`value` in `base_currency`, at the ECB rate (Yahoo's for a currency "
+            "the ECB does not publish), by the ticker's listing currency where it "
+            "has one, by `currency` otherwise. The figure to display and to total; "
+            "`value` is the one to edit."
         ),
     )
     base_currency: BaseCurrency
@@ -391,6 +477,14 @@ class HoldingRead(HoldingBase):
             "dividend answers the catch-up keeps; null when it was never asked "
             "about or lists none. What the line says when no policy is stated "
             "and the ticker's own history decides its dividends."
+        ),
+    )
+    unconverted: str | None = Field(
+        default=None,
+        description=(
+            "The code `value_base` is in as written, when no rate converts it, "
+            "so the row says it is not in `base_currency` (brief BA); null "
+            "when it was converted."
         ),
     )
 
@@ -662,44 +756,6 @@ class PaidAcceptAll(BaseModel):
     rows: list[PaidAcceptRow] = Field(..., min_length=1)
 
 
-class UnconvertedAmount(BaseModel):
-    """Value that reached a total in the currency it was written in, because the
-    app has no rate to convert it with.
-
-    The fallback itself is deliberate: an amount the feed has never priced is
-    kept rather than dropped, since a total quietly short by a whole account is
-    as wrong as one quietly inflated (`fx.Converter.to_base_or_as_stored`). What
-    was missing is this — the saying so. Two cases reach it and the reader tells
-    them apart at a glance, which is why the code is printed as typed: a code
-    that is a typo (`Doll`) is corrected on the row, and a real currency the ECB
-    does not quote (`TWD`) cannot be converted by anybody and the figure simply
-    is in another unit."""
-
-    model_config = API_OUT
-
-    currency: str | None = Field(
-        ..., description="The code as the row states it, or null for a row with none"
-    )
-    amount: float = Field(
-        ...,
-        description=(
-            "What those amounts come to in THEIR OWN unit, as they were "
-            "written. A sum over rows, and not the amount any figure above is "
-            "wrong by — nor a bound on it, in either direction. One converter "
-            "serves several totals, so the same currency can arrive as a value "
-            "and again as its cost, and a debt's balance adds here while it "
-            "subtracts there; and a recurring flow is converted ONCE and "
-            "multiplied afterwards. Measured: a holding worth 1,000 TWD that "
-            "cost 900 reports 1,900.00 against an investments total of "
-            "1,000.00; an asset and a debt of 1,000 TWD each add 2,000.00 here "
-            "while the net worth does not move; and 100 TWD a month against a "
-            "year-old anchor puts 1,200.00 into the net worth and reports "
-            "100.00."
-        ),
-    )
-    count: int = Field(..., description="How many amounts were passed through")
-
-
 class DashboardSummary(BaseModel):
     """Net worth = financial + real − liabilities, plus the splits and counts.
 
@@ -740,14 +796,12 @@ class DashboardSummary(BaseModel):
             "naming only the first half cannot tell the reader which it is."
         ),
     )
-    unconverted: list[UnconvertedAmount] = Field(
+    unconverted: list[UnconvertedCode] = Field(
         default_factory=list,
         description=(
-            "Amounts that entered these totals without being converted, because "
-            "no rate is known for the currency they are written in — said here "
-            "instead of passing in silence. Each entry is a sum over ROWS and "
-            "not the amount any figure above is wrong by; `UnconvertedAmount` "
-            "says why, with the measured cases in both directions."
+            "The codes that entered these totals as written, because no rate "
+            "converts them, said instead of passing in silence: what kind of "
+            "code, where it is written, and how much of each total it is."
         ),
     )
     cash_total: float
@@ -788,6 +842,13 @@ class DashboardAllocation(BaseModel):
     by_asset_class: list[AssetClassSlice]
     by_real_category: list[RealCategorySlice]
     base_currency: BaseCurrency
+    unconverted: list[UnconvertedCode] = Field(
+        default_factory=list,
+        description=(
+            "The codes counted here as written (`UnconvertedCode`); a slice's "
+            'share is under "class:<asset class>" or "category:<category>".'
+        ),
+    )
 
 
 class NetWorthPoint(BaseModel):
@@ -804,8 +865,25 @@ class NetWorthPoint(BaseModel):
     fx_as_of: str | None = Field(
         ...,
         description=(
-            "The ECB day whose rates converted this point — the latest published "
-            "on or before `date`. Null when nothing in the point needed converting."
+            "The ECB day whose rates converted this point, the latest published "
+            "on or before `date`: for a currency the ECB publishes, or for the "
+            "dollar a Yahoo close was crossed at. Null when no ECB rate was used."
+        ),
+    )
+    fx_yahoo_as_of: str | None = Field(
+        default=None,
+        description=(
+            "Yahoo's day whose close converted a currency the ECB does not "
+            "publish at this point (brief BA); null when none was."
+        ),
+    )
+    unconverted: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The codes this point counts as written, because no rate converts "
+            "them. Codes only: what a code is of the net worth is the summary's "
+            "share at the last point, and a sum over points would count one row "
+            "once per point (brief BA)."
         ),
     )
 
@@ -1173,7 +1251,11 @@ class PortfolioRow(BaseModel):
     )
     as_of: str | None = Field(..., description="Market close date the price refers to")
     market_value: float | None = Field(
-        ..., description="In the base currency (converted at the ECB reference rate)"
+        ...,
+        description=(
+            "In the base currency (converted at the ECB reference rate, or Yahoo's "
+            "for a currency the ECB does not publish)"
+        ),
     )
     delta: float | None = Field(
         ...,
@@ -1300,18 +1382,28 @@ class Portfolio(BaseModel):
             "disagreed with the ledger's there"
         ),
     )
-    unconverted: list[UnconvertedAmount] = Field(
+    unconverted: list[UnconvertedCode] = Field(
         default_factory=list,
         description=(
-            "Amounts that entered these totals without being converted, because "
-            "no rate is known for the currency they are written in. The pair to "
-            "`fx_as_of`: that says which rate was applied, this says what no "
-            "rate could be applied to."
+            "The codes that entered these totals as written, because no rate "
+            "converts them, the earlier stretches' dividends and gains included. "
+            "The pair to `fx_as_of`: that says which rate was applied, this says "
+            "what no rate could be applied to."
         ),
     )
     fx_as_of: str | None = Field(
         ...,
-        description="ECB reference-rate date, present when any FX conversion was applied",
+        description=(
+            "ECB reference-rate date, present when an ECB rate was applied: to a "
+            "currency the ECB publishes, or to the dollar a Yahoo close was crossed at"
+        ),
+    )
+    fx_yahoo_as_of: str | None = Field(
+        default=None,
+        description=(
+            "Yahoo's close date, present when a currency the ECB does not publish "
+            "was converted at Yahoo's rate (brief BA)"
+        ),
     )
 
 
@@ -1650,6 +1742,13 @@ class CashFlowSummary(BaseModel):
     )
     ended: list[FlowNotCounted] = Field(..., description="Ended before today: no longer counted")
     base_currency: BaseCurrency
+    unconverted: list[UnconvertedCode] = Field(
+        default_factory=list,
+        description=(
+            "The codes these monthly figures hold as written, because no rate "
+            "converts them, with a month's share of each (brief BA)."
+        ),
+    )
 
 
 # --- Cash register: anchors, transfers, projected positions ---------------
@@ -1699,7 +1798,8 @@ class TransferBase(BaseModel):
         description=(
             "Amount that reached the destination, in `to_currency`, from its "
             "statement. Left out, it is `amount` when the two currencies are the "
-            "same, and otherwise worked out at the ECB rate final for `date`."
+            "same, and otherwise worked out at the rate final for `date`: the "
+            "ECB's, or Yahoo's for a currency the ECB does not publish."
         ),
     )
     to_currency: str = Field(..., description="Currency of the destination side, e.g. EUR")
@@ -1726,8 +1826,15 @@ class TransferRead(TransferBase):
     fx_as_of: str | None = Field(
         default=None,
         description=(
-            "The ECB day whose rate `to_amount` was worked out at; null when it "
-            "was stated, or when both sides share a currency"
+            "The day whose rate `to_amount` was worked out at (`fx_source` says "
+            "whose); null when it was stated, or when both sides share a currency"
+        ),
+    )
+    fx_source: Literal["ECB", "Yahoo"] | None = Field(
+        default=None,
+        description=(
+            "Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB "
+            "does not publish (brief BA). Null when no rate was used."
         ),
     )
 
@@ -1764,6 +1871,13 @@ class CashPosition(BaseModel):
     )
     projected: float
     base_currency: BaseCurrency
+    unconverted: list[UnconvertedCode] = Field(
+        default_factory=list,
+        description=(
+            "The codes this account's cash holds as written, because no rate "
+            'converts them, with their share of it under "projected" (brief BA).'
+        ),
+    )
 
 
 # --- Market prices --------------------------------------------------------
@@ -2221,9 +2335,17 @@ class TransactionRead(TransactionBase):
     fx_as_of: str | None = Field(
         ...,
         description=(
-            "The ECB day whose rate turned quantity x unit_price into `amount`, "
-            "when the app derived it across two currencies. Null when there was "
-            "nothing to convert, or when the amount is the reader's own figure."
+            "The day whose rate turned quantity x unit_price into `amount` "
+            "(`fx_source` says whose), when the app derived it across two "
+            "currencies. Null when there was nothing to convert, or when the "
+            "amount is the reader's own figure."
+        ),
+    )
+    fx_source: Literal["ECB", "Yahoo"] | None = Field(
+        default=None,
+        description=(
+            "Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB "
+            "does not publish (brief BA). Null when no rate was used."
         ),
     )
     plan_id: int | None
@@ -2516,6 +2638,14 @@ class PortfolioComposition(BaseModel):
         description=(
             "Why an axis is missing, when it is — so an empty chart never passes "
             "for 'you own nothing there'."
+        ),
+    )
+    unconverted: list[UnconvertedCode] = Field(
+        default_factory=list,
+        description=(
+            "The codes the weighed investments hold as written, because no rate "
+            'converts them, with their share under "total_value": every weight '
+            "is a share of a total that holds them (brief BA)."
         ),
     )
 

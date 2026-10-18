@@ -30,6 +30,8 @@ import { EmptyState } from "./Emblem";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { PaidRecoveryNotice } from "./PaidRecoveryNotice";
 import { acrossCurrencies as isAcross, debitOnEdit, derivedAmount } from "./statedAmount";
+import { sameCurrency, withinCurrency } from "./money";
+import { fxProvenance, rateLine } from "./rateSource";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import { getListingCurrencies, getQuote } from "../api/prices";
 import { accountCurrencyOn, listingCurrencyOf } from "./proposedCurrency";
@@ -448,7 +450,7 @@ export default function Portfolio({
             Recorded total <span className="font-semibold text-ink">{money(data.base_currency).format(data.total_book)}</span>
           </span>
         )}
-        {(data.prices_as_of || data.fx_as_of) && (
+        {(data.prices_as_of || data.fx_as_of || data.fx_yahoo_as_of) && (
           // Where these numbers came from, said once and outside the priced
           // branch. The FX date used to be nested inside the price date, so a
           // portfolio that was converted but not priced — an opaque position
@@ -464,8 +466,10 @@ export default function Portfolio({
                 prices as of {fmtDate(data.prices_as_of)} ({ageWords(data.prices_as_of)})
               </>
             )}
-            {data.prices_as_of && data.fx_as_of && " · "}
-            {data.fx_as_of && <>FX ECB {fmtDate(data.fx_as_of)}</>}
+            {data.prices_as_of && (data.fx_as_of || data.fx_yahoo_as_of) && " · "}
+            {/* Whose rate beside its day (brief BA): Yahoo's for a currency
+                the ECB does not publish. */}
+            {fxProvenance(data.fx_as_of, data.fx_yahoo_as_of, fmtDate)}
           </span>
         )}
         {(data.total_realized !== 0 ||
@@ -508,8 +512,18 @@ export default function Portfolio({
       />
 
       {/* What no rate could be applied to at all — the pair to `fx_as_of` under
-          the totals, which says which rate WAS applied. */}
-      <UnconvertedNotice items={data.unconverted ?? []} baseCurrency={data.base_currency} />
+          the totals, which says which rate WAS applied. The accounts' cash
+          too, which the buys form offers as "available" (brief BA). */}
+      <UnconvertedNotice
+        baseCurrency={data.base_currency}
+        parts={[
+          { items: data.unconverted ?? [], labels: PORTFOLIO_FIGURES },
+          ...cash.map((p) => ({
+            items: p.unconverted ?? [],
+            labels: { projected: `${p.institution_name}'s cash` },
+          })),
+        ]}
+      />
 
       {/* What the ledger paid before each account's latest situation that its
           rows do not say, proposed row by row, written only on a press
@@ -897,6 +911,19 @@ function LookThroughSection() {
           </span>
         )}
       </div>
+      {/* Every weight below is a share of what the look-through weighs, so a
+          code counted there as written moves them all (brief BA). */}
+      {data && (
+        <UnconvertedNotice
+          baseCurrency={data.base_currency}
+          parts={[
+            {
+              items: data.unconverted ?? [],
+              labels: { total_value: "the investments the look-through weighs" },
+            },
+          ]}
+        />
+      )}
       {error && <p className="text-down">{error}</p>}
       {loading && !data && <p className="text-ink-soft">Loading composition…</p>}
 
@@ -1090,8 +1117,21 @@ const ADD_INSTITUTION = "__add__";
    answer they came for. */
 function cashNote(p: CashPosition | undefined): string {
   if (!p || p.anchor_date == null) return "no cash on record";
-  return `${money(p.base_currency, "cents").format(p.projected)} available`;
+  // A code counted in it as written is said where the figure is read (brief
+  // BA): measured at 279acf8, a balance of 700 TWD read "€700.00 available".
+  const asWritten = (p.unconverted ?? []).map((u) => u.currency || "no stated currency");
+  const counting = asWritten.length > 0 ? `, counting ${asWritten.join(" and ")} as written` : "";
+  return `${money(p.base_currency, "cents").format(p.projected)} available${counting}`;
 }
+
+/* The names the notice gives the Portfolio's totals (brief BA). */
+const PORTFOLIO_FIGURES = {
+  total_book: "book total",
+  total_market: "market total",
+  total_realized: "realized P/L",
+  total_realized_movement: "realized movement",
+  total_dividends: "dividends collected",
+};
 
 function BuysSection({
   items,
@@ -1143,7 +1183,8 @@ function BuysSection({
      reader's choice once they made one (null until then) and otherwise the
      proposal worked out below. `debit` is that money when the two differ and
      the reader has the figure from their statement; left blank, the backend
-     works it out at the ECB rate of the entry's date and says which day. */
+     works it out at the rate of the entry's date (the ECB's, or Yahoo's for a
+     currency the ECB does not publish) and says which day and whose. */
   const [priceCurrencyChoice, setPriceCurrencyChoice] = useState<string | null>(null);
   const [currencyChoice, setCurrencyChoice] = useState<string | null>(null);
   // Listing currencies a dated quote taught this form after the page loaded.
@@ -1398,6 +1439,8 @@ function BuysSection({
     quantity: Number(quantity) || 0,
     unit_price: Number(unitPrice) || 0,
     fees: Number(fees) || 0,
+    currency,
+    price_currency: priceCurrency,
   });
 
   /* What this entry will take out of the picked institution's cash, against
@@ -1419,12 +1462,13 @@ function BuysSection({
           : derived;
   const purse = cashFor(institutionId ? Number(institutionId) : null);
   // The register's projection is in the base its payload declares; a spend in
-  // another currency is not comparable with it here, and is not compared.
+  // another currency is not comparable with it here, and is not compared. One
+  // currency spelt another way is, after the minor-unit step (brief BA).
   const overspend =
     purse &&
     purse.anchor_date != null &&
-    currency.trim().toUpperCase() === purse.base_currency.toUpperCase() &&
-    spend > purse.projected
+    sameCurrency(currency, purse.base_currency) &&
+    withinCurrency(spend, currency, purse.base_currency) > purse.projected
       ? purse
       : null;
 
@@ -1542,7 +1586,7 @@ function BuysSection({
       note="Without a buy here, the P/L above measures movement since the last situation rather than gain. Rows marked ‘estimated’ came from market closes or gross dividends. Correct them with the real broker amounts."
       explain={{
         question: "How are an entry's figures read and counted?",
-        text: "A sell removes units at average cost and books the difference; a dividend credits cash. A price is in its listing's currency: USD for a New York share, GBp (pence) for most London listings. The amount the account moved is the one on your statement; left blank, it is worked out from the quantity, the price and the fees, and across two currencies at the ECB rate of the entry's date, from which your broker's will differ a little. A close needs what came back: zero is allowed, but it has to be said, since that is the difference between selling something and forgetting it.",
+        text: "A sell removes units at average cost and books the difference; a dividend credits cash. A price is in its listing's currency: USD for a New York share, GBp (pence) for most London listings. The amount the account moved is the one on your statement; left blank, it is worked out from the quantity, the price and the fees, and across two currencies at the rate of the entry's date (the ECB's, or Yahoo's for a currency the ECB does not publish), from which your broker's will differ a little. A close needs what came back: zero is allowed, but it has to be said, since that is the difference between selling something and forgetting it.",
       }}
     >
       <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
@@ -1820,7 +1864,7 @@ function BuysSection({
               t.fees ? `fees ${money(t.currency).format(t.fees)}` : null,
               // A sum fixed at one day's rate says which day, so it can be held
               // against the statement.
-              t.fx_as_of ? `at the ECB rate of ${fmtDate(t.fx_as_of)}` : null,
+              t.fx_as_of ? rateLine(fmtDate(t.fx_as_of), t.fx_source) : null,
               instName(t.institution_id),
               t.symbol,
             ]

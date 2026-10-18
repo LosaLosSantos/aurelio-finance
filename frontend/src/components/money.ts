@@ -45,9 +45,50 @@ export type Precision = "whole" | "cents";
    3361 pence printed as £3,361, the hundredfold error the backend already
    guards against. A minor unit is printed as a number and its code instead,
    exactly as typed: "3,361 GBp". 'GBp' is matched on its exact case, because
-   'GBP' and 'gbp' are pounds. */
-const MINOR_EXACT = new Set(["GBp"]);
-const MINOR_ANY_CASE = new Set(["GBX", "ZAC", "ILA"]);
+   'GBP' and 'gbp' are pounds. Each maps to the major code it is a hundredth
+   of, as the backend's pairs do. */
+const MINOR_EXACT = new Map([["GBp", "GBP"]]);
+const MINOR_ANY_CASE = new Map([
+  ["GBX", "GBP"],
+  ["ZAC", "ZAR"],
+  ["ILA", "ILS"],
+]);
+const MINOR_PER_MAJOR = 100;
+
+/** A code read in its major unit, as the backend reads it
+    (`fx._in_major_units`): the major code, and how many units of the code as
+    written make one of it (100 for pence, 1 for a major code). Any other code
+    is upper-cased, so "eur" is EUR, which is what the backend converts it as.
+
+    The browser used to compare codes as written, so a row stored as EUR with
+    a price in "eur" was two currencies here and one there (brief BA). */
+export function majorUnit(currency: string): { code: string; per: number } {
+  const raw = currency.trim();
+  const minor = MINOR_EXACT.get(raw) ?? MINOR_ANY_CASE.get(raw.toUpperCase());
+  if (minor !== undefined) return { code: minor, per: MINOR_PER_MAJOR };
+  return { code: raw.toUpperCase(), per: 1 };
+}
+
+/** Whether two codes are one currency once read in major units: no rate is
+    needed between them, only the minor-unit step (`fx.same_currency`). */
+export function sameCurrency(a: string, b: string): boolean {
+  return majorUnit(a).code === majorUnit(b).code;
+}
+
+/** Whether two codes are one UNIT: one currency, and the same step of it.
+    "eur" is EUR's unit; GBp is not GBP's, since a figure in pence beside one
+    in pounds is a hundredth of it. */
+export function sameUnit(a: string, b: string): boolean {
+  const x = majorUnit(a);
+  const y = majorUnit(b);
+  return x.code === y.code && x.per === y.per;
+}
+
+/** `amount` in `from` restated in `to`, two spellings of one currency: the
+    minor-unit step alone, 5,000 GBp to 50 GBP (`fx.within_currency`). */
+export function withinCurrency(amount: number, from: string, to: string): number {
+  return (amount / majorUnit(from).per) * majorUnit(to).per;
+}
 
 const built = new Map<string, Money>();
 

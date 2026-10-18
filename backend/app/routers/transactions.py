@@ -12,6 +12,12 @@ from app.database import get_db
 from app.routers.deps import get_or_404, transaction_reads
 
 
+def _with_sources(db: Session, result: dict) -> dict:
+    """A catch-up's answer with every entry it created read as the ledger
+    reads it (`transaction_reads`), whose rate included (brief BA)."""
+    return {**result, "created": transaction_reads(db, result["created"])}
+
+
 def _refused_without_a_rate(exc: crud.LedgerRateUnknown) -> HTTPException:
     """422: the entry is well-formed, and the one figure it needs — what the
     account moved by — cannot be worked out without a rate for its day."""
@@ -90,7 +96,7 @@ def catch_up(db: Session = Depends(get_db)) -> schemas.CatchUpResult:
     decides. Items that cannot be priced are skipped and retried on the next
     run. A dividend the reader entered themselves is recognised rather than
     recorded beside it, and what only the reader can say is asked."""
-    return pac.catch_up(db)
+    return _with_sources(db, pac.catch_up(db))
 
 
 @router.post("/transactions/dividend-answer", response_model=schemas.CatchUpResult)
@@ -100,6 +106,6 @@ def answer_dividend(data: schemas.DividendAnswer, db: Session = Depends(get_db))
     dividend catch-up then runs again and returns what it recorded and what it
     still asks. 409 with a sentence when the question no longer stands."""
     try:
-        return pac.answer_dividend(db, data)
+        return _with_sources(db, pac.answer_dividend(db, data))
     except pac.AnswerRefused as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))

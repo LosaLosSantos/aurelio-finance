@@ -26,6 +26,7 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { CancelButton } from "./ui";
+import { sameCurrency, withinCurrency } from "./money";
 import { getBaseCurrency } from "../api/baseCurrency";
 import { DatedAmountEditor } from "./DatedAmountEditor";
 import { useReopened } from "./reopen";
@@ -209,12 +210,14 @@ function ValuationsLevel({ asset }: { asset: RealAsset }) {
   // valuation here would be a conversion written in the browser, beside the
   // one the backend runs for every total. The net worth converts both.
   const latestValue = items.length ? items[items.length - 1].value : null;
-  const sameCurrency = (l: Liability) =>
-    l.currency.toUpperCase() === asset.currency.toUpperCase();
-  const otherCurrency = linkedDebts.filter((l) => !sameCurrency(l));
+  // One currency as the backend reads it, and a balance in another unit of it
+  // restated in the asset's (brief BA): a debt in pence beside a value in
+  // pounds was subtracted as pounds, a hundredfold.
+  const inAssetCurrency = (l: Liability) => sameCurrency(l.currency, asset.currency);
+  const otherCurrency = linkedDebts.filter((l) => !inAssetCurrency(l));
   const debtTotal = linkedDebts
-    .filter(sameCurrency)
-    .reduce((acc, l) => acc + (l.latest_balance ?? 0), 0);
+    .filter(inAssetCurrency)
+    .reduce((acc, l) => acc + withinCurrency(l.latest_balance ?? 0, l.currency, asset.currency), 0);
   const equity =
     latestValue != null && otherCurrency.length === 0 ? latestValue - debtTotal : null;
   // All three figures are in the asset's currency, which the guard above is

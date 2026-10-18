@@ -204,9 +204,14 @@ def test_audit_ts_four_assets_now_total_what_can_be_converted(client):
     assert summary["unconverted"] == []
 
 
-def test_an_amount_nobody_can_convert_is_kept_and_named(client):
-    """Kept, because dropping it is the other way to be wrong — and named, so
-    the figure above it is not read as if it were all in one unit."""
+def _codes(payload: dict) -> dict:
+    """{code: (not a code?, shares)} from a payload's `unconverted`."""
+    return {u["currency"]: (u["not_a_code"], u["shares"]) for u in payload["unconverted"]}
+
+
+def test_an_amount_nobody_can_convert_is_kept_and_said_with_its_share(client):
+    """Kept, because dropping it is the other way to be wrong, and said: what
+    kind of code, where it is written, and how much of each total it is."""
     _asset_worth(client, "Milan flat", "EUR", 1000.0)
     _asset_worth(client, "Yuanta Taiwan 50", "TWD", 9000.0)
 
@@ -214,14 +219,35 @@ def test_an_amount_nobody_can_convert_is_kept_and_named(client):
     # The fallback stands: 9,000 TWD is in there as 9,000, which is why it has
     # to be said out loud.
     assert summary["real_total"] == 10000.0
-    assert summary["unconverted"] == [
-        {"currency": "TWD", "amount": 9000.0, "count": 1}
-    ]
+    (said,) = summary["unconverted"]
+    assert said == {
+        "currency": "TWD",
+        "not_a_code": False,
+        "rows": [{"kind": "real asset", "name": "Yuanta Taiwan 50", "where": None}],
+        "more_rows": 0,
+        "shares": {"net_worth": 9000.0, "real_total": 9000.0},
+    }
     assert summary["base_currency"] == "EUR"
 
 
-def test_the_portfolio_says_it_of_its_own_total(client):
-    """Same converter, same sentence, on the page that prints the holdings."""
+def test_a_typo_is_said_as_not_a_code_on_its_row(client):
+    """A real asset in `Doll`, written before the shape rule (the reader's own
+    database held one): not a currency code, and the row it is written on."""
+    _asset_worth(client, "Old car", "USD", 2000.0)
+    _write_past_the_schema(models.RealAsset, currency="Doll")
+
+    (said,) = client.get("/api/dashboard/summary").json()["unconverted"]
+    assert said == {
+        "currency": "Doll",
+        "not_a_code": True,
+        "rows": [{"kind": "real asset", "name": "Old car", "where": None}],
+        "more_rows": 0,
+        "shares": {"net_worth": 2000.0, "real_total": 2000.0},
+    }
+
+
+def test_the_portfolio_says_its_share_of_its_own_totals(client):
+    """Same rule, on the page that prints the holdings."""
     iid = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
     sid = client.post(
         f"/api/institutions/{iid}/snapshots", json={"date": EARLIER}
@@ -235,19 +261,15 @@ def test_the_portfolio_says_it_of_its_own_total(client):
 
     portfolio = client.get("/api/dashboard/portfolio").json()
     assert portfolio["total_book"] == 9500.0
-    assert portfolio["unconverted"] == [{"currency": "TWD", "amount": 9000.0, "count": 1}]
+    assert _codes(portfolio) == {"TWD": (False, {"total_book": 9000.0})}
 
 
-def test_one_holding_over_three_photographs_is_counted_once(client):
-    """The figure is a sum, so it has to be a sum of each amount ONCE.
-
-    `_unaccounted` replays every photograph an institution has — that is how it
-    finds what a newer one stopped accounting for — and it runs on the same
-    converter. Measured with the guard off: three photographs each naming one
-    holding of 1,000 in an unquoted currency reported 3,000.00 over 3 amounts,
-    against an investments total of 1,000.00. A warning that overstates by the
-    length of the history teaches the reader to stop reading warnings.
-    """
+def test_one_holding_over_three_photographs_is_said_once(client):
+    """The walk replays every photograph an institution has, so one holding's
+    value passes through the converter once per photograph. Brief V's volume
+    reported 3,000.00 over 3 with the walk recording, against an investments
+    total of 1,000.00. The share is measured on the totals, which the replay
+    does not move, and each photograph's row is named, newest first."""
     iid = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
     for day in ("2026-06-01", "2026-07-01", "2026-08-01"):
         sid = client.post(
@@ -260,27 +282,23 @@ def test_one_holding_over_three_photographs_is_counted_once(client):
 
     summary = client.get("/api/dashboard/summary").json()
     assert summary["investments_total"] == 1000.0
-    assert summary["unconverted"] == [{"currency": "TWD", "amount": 1000.0, "count": 1}]
+    assert _codes(summary) == {
+        "TWD": (False, {"net_worth": 1000.0, "investments_total": 1000.0})
+    }
+    (said,) = summary["unconverted"]
+    assert [r["where"] for r in said["rows"]] == [
+        f"Taipei broker, situation of {day}" for day in ("2026-08-01", "2026-07-01", "2026-06-01")
+    ]
 
 
-def test_the_figure_is_a_sum_over_rows_and_says_so(client):
-    """What the number IS, pinned — because it reads like something it is not.
-
-    One converter serves several totals, so an amount can reach them in roles
-    that do not add up, and the figure is a volume of rows rather than the error
-    in any total. Both cases are measured here rather than argued:
-
-    * a holding worth 1,000 TWD that COST 900 reports 1,900.00 over 2, against
-      an investments total of 1,000.00 — a cost basis converts too, and it feeds
-      the book value;
-    * an asset and a debt of 1,000 TWD each add 2,000.00 more, and the net worth
-      does not move by a cent: the debt subtracts exactly what the asset adds.
-
-    An earlier draft of the notice read "3,900.00 TWD is counted above as if
-    already in EUR" under a net worth that figure had no such effect on. If this
-    test ever fails because the number changed meaning, the sentence beside it
-    (`UnconvertedNotice.tsx`) has to change in the same commit.
-    """
+def test_each_figure_says_its_own_share_in_every_role(client):
+    """What the number IS, pinned: each figure's own, measured by computing it
+    again with the code at 0. Brief V's volume, measured at 279acf8 on these
+    rows: 1,900.00 over 2 for a holding worth 1,000 that cost 900, then
+    3,900.00 over 4 with an asset and a debt of 1,000 each. A cost moves the
+    book and not the net worth; a debt moves the debts and takes off of the
+    net worth what the asset adds. If this test ever fails because the number
+    changed meaning, `unconvertedWords.ts` changes in the same commit."""
     iid = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
     sid = client.post(
         f"/api/institutions/{iid}/snapshots", json={"date": EARLIER}
@@ -293,7 +311,12 @@ def test_the_figure_is_a_sum_over_rows_and_says_so(client):
 
     summary = client.get("/api/dashboard/summary").json()
     assert summary["investments_total"] == 1000.0 and summary["net_worth"] == 1000.0
-    assert summary["unconverted"] == [{"currency": "TWD", "amount": 1900.0, "count": 2}]
+    assert _codes(summary) == {
+        "TWD": (False, {"net_worth": 1000.0, "investments_total": 1000.0})
+    }
+    assert _codes(client.get("/api/dashboard/portfolio").json()) == {
+        "TWD": (False, {"total_book": 900.0})
+    }
 
     _asset_worth(client, "Taipei flat", "TWD", 1000.0)
     lid = client.post(
@@ -306,18 +329,19 @@ def test_the_figure_is_a_sum_over_rows_and_says_so(client):
     after = client.get("/api/dashboard/summary").json()
     assert (after["real_total"], after["liabilities_total"]) == (1000.0, 1000.0)
     assert after["net_worth"] == 1000.0  # unmoved: the debt cancels the asset
-    assert after["unconverted"] == [{"currency": "TWD", "amount": 3900.0, "count": 4}]
+    assert _codes(after) == {
+        "TWD": (False, {
+            "net_worth": 1000.0, "investments_total": 1000.0,
+            "real_total": 1000.0, "liabilities_total": 1000.0,
+        })
+    }
 
 
-def test_the_figure_understates_a_recurring_flow_by_its_whole_multiplier(client):
-    """And it is not a bound in the other direction either.
-
-    A flow is converted ONCE — one row, one amount — and then multiplied by the
-    occurrences between the anchor and today. So the figure can be short of
-    what actually reached the totals by any factor the calendar likes, which is
-    what killed the one purpose a mere volume still seemed to serve: saying
-    whether to expect five or five thousand. It does not.
-    """
+def test_a_recurring_flow_is_said_by_what_reached_the_figures(client):
+    """Brief V's volume said 100.00 over 1 while 1,200.00 had reached the
+    cash: a flow is converted once and multiplied after. Measured on the
+    figures, a year of a monthly 100 is 1,200 of the cash and of the net worth,
+    and a month's 100 on Cash flow."""
     a_year_ago = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
     iid = client.post("/api/institutions", json={"name": "Taipei"}).json()["id"]
     client.post(
@@ -332,7 +356,130 @@ def test_the_figure_understates_a_recurring_flow_by_its_whole_multiplier(client)
 
     summary = client.get("/api/dashboard/summary").json()
     assert summary["cash_total"] == 1200.0 and summary["net_worth"] == 1200.0
-    assert summary["unconverted"] == [{"currency": "TWD", "amount": 100.0, "count": 1}]
+    assert _codes(summary) == {"TWD": (False, {"net_worth": 1200.0, "cash_total": 1200.0})}
+    assert _codes(client.get("/api/dashboard/cashflow").json()) == {
+        "TWD": (False, {"monthly_income": 100.0, "monthly_net": 100.0})
+    }
+    (register,) = client.get("/api/cash/positions").json()
+    assert _codes(register) == {"TWD": (False, {"projected": 1200.0})}
+
+
+def test_the_history_says_codes_and_never_a_sum_over_its_points(client):
+    """Measured at 279acf8: the old volume wired to the history's converters
+    would have reported 18,600.00 over 21 for eight points, against the
+    summary's 2,700.00 over 3. Each point now carries the codes it counts and
+    no amount; the amount at the last point is the summary's net worth share."""
+    today = datetime.date.today()
+
+    def day(n: int) -> str:
+        return (today - datetime.timedelta(days=n)).isoformat()
+
+    cash = client.post("/api/institutions", json={"name": "Taipei cash"}).json()["id"]
+    client.post(f"/api/institutions/{cash}/cash-anchors",
+                json={"date": day(90), "amount": 700.0, "currency": "TWD"}).raise_for_status()
+    broker = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
+    sid = client.post(f"/api/institutions/{broker}/snapshots", json={"date": day(80)}).json()["id"]
+    client.post(f"/api/snapshots/{sid}/holdings", json={
+        "asset_name": "Fund in TWD", "value": 1000.0, "currency": "TWD"}).raise_for_status()
+    flat = client.post("/api/real-assets", json={"name": "Taipei flat", "currency": "TWD"}).json()["id"]
+    client.post(f"/api/real-assets/{flat}/valuations",
+                json={"date": day(70), "value": 1000.0}).raise_for_status()
+    euro = client.post("/api/institutions", json={"name": "Euro bank"}).json()["id"]
+    for n in (60, 45, 30, 15):
+        client.post(f"/api/institutions/{euro}/cash-anchors",
+                    json={"date": day(n), "amount": 100.0 * n, "currency": "EUR"}).raise_for_status()
+
+    series = client.get("/api/dashboard/net-worth-series").json()
+    assert len(series) == 8
+    assert [p["unconverted"] for p in series] == [["TWD"]] * 8
+    summary = client.get("/api/dashboard/summary").json()
+    assert _codes(summary)["TWD"][1]["net_worth"] == 2700.0
+
+
+def test_an_earlier_stretchs_dividend_is_said_on_the_portfolio(client):
+    """Measured at 279acf8: brief AW's walk read every stretch between two
+    situations without recording what it could not convert, so a TWD dividend
+    dated before the latest situation reached `total_dividends` as written and
+    the notice said only the holding."""
+    today = datetime.date.today()
+
+    def day(n: int) -> str:
+        return (today - datetime.timedelta(days=n)).isoformat()
+
+    broker = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
+    holding = {"asset_name": "Invented Taipei share", "symbol": "ZZTW.TW", "quantity": 10.0,
+               "unit_price": 1000.0, "currency": "TWD"}
+    first = client.post(f"/api/institutions/{broker}/snapshots", json={"date": day(60)}).json()["id"]
+    client.post(f"/api/snapshots/{first}/holdings", json=holding).raise_for_status()
+    client.post("/api/transactions", json={
+        "kind": "dividend", "date": day(45), "institution_id": broker,
+        "asset_name": "Invented Taipei share", "symbol": "ZZTW.TW", "quantity": 10.0,
+        "unit_price": 5.0, "currency": "TWD", "price_currency": "TWD"}).raise_for_status()
+    latest = client.post(f"/api/institutions/{broker}/snapshots", json={"date": day(30)}).json()["id"]
+    client.post(f"/api/snapshots/{latest}/holdings", json=holding).raise_for_status()
+
+    portfolio = client.get("/api/dashboard/portfolio").json()
+    assert portfolio["total_dividends"] == 50.0
+    assert _codes(portfolio) == {
+        "TWD": (False, {"total_book": 10000.0, "total_dividends": 50.0})
+    }
+
+
+def test_every_page_that_counts_it_says_it(client):
+    """Measured at 279acf8 on this household, 2 of the 10 payloads the pages
+    read their converted figures from said anything. Each says its own share."""
+    today = datetime.date.today()
+
+    def day(n: int) -> str:
+        return (today - datetime.timedelta(days=n)).isoformat()
+
+    cash = client.post("/api/institutions", json={"name": "Taipei cash"}).json()["id"]
+    client.post(f"/api/institutions/{cash}/cash-anchors",
+                json={"date": day(30), "amount": 700.0, "currency": "TWD"}).raise_for_status()
+    payroll = client.post("/api/institutions", json={"name": "Taipei payroll"}).json()["id"]
+    client.post("/api/income-sources", json={
+        "name": "Taipei salary", "amount": 9000.0, "currency": "TWD", "frequency": "monthly",
+        "institution_id": payroll, "start_date": day(10)}).raise_for_status()
+    broker = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
+    sid = client.post(f"/api/institutions/{broker}/snapshots", json={"date": day(30)}).json()["id"]
+    client.post(f"/api/snapshots/{sid}/holdings", json={
+        "asset_name": "Fund in TWD", "value": 1000.0, "currency": "TWD"}).raise_for_status()
+    _asset_worth(client, "Taipei flat", "TWD", 1000.0)
+    lid = client.post("/api/liabilities", json={"name": "Taipei loan", "currency": "TWD"}).json()["id"]
+    client.post(f"/api/liabilities/{lid}/balances",
+                json={"date": EARLIER, "balance": 400.0}).raise_for_status()
+
+    assert _codes(client.get("/api/dashboard/summary").json()) == {"TWD": (False, {
+        "net_worth": 2300.0, "investments_total": 1000.0, "cash_total": 700.0,
+        "real_total": 1000.0, "liabilities_total": 400.0,
+    })}
+    assert _codes(client.get("/api/dashboard/allocation").json()) == {"TWD": (False, {
+        "financial_total": 1700.0, "real_total": 1000.0, "class:cash": 700.0,
+        "class:unclassified": 1000.0, "category:unclassified": 1000.0,
+    })}
+    assert client.get("/api/dashboard/net-worth-series").json()[-1]["unconverted"] == ["TWD"]
+    assert _codes(client.get("/api/dashboard/cashflow").json()) == {
+        "TWD": (False, {"monthly_income": 9000.0, "monthly_net": 9000.0})
+    }
+    assert _codes(client.get("/api/dashboard/portfolio").json()) == {
+        "TWD": (False, {"total_book": 1000.0})
+    }
+    assert _codes(client.get("/api/dashboard/portfolio/composition").json()) == {
+        "TWD": (False, {"total_value": 1000.0})
+    }
+    registers = {p["institution_name"]: _codes(p) for p in client.get("/api/cash/positions").json()}
+    assert registers == {
+        "Taipei cash": {"TWD": (False, {"projected": 700.0})},
+        "Taipei payroll": {},
+        "Taipei broker": {},
+    }
+    assert _codes(client.get(f"/api/institutions/{cash}/cash").json()) == {
+        "TWD": (False, {"projected": 700.0})
+    }
+    (situation,) = client.get(f"/api/institutions/{broker}/snapshots").json()
+    assert _codes(situation) == {"TWD": (False, {"value_base": 1000.0})}
+    (row,) = client.get(f"/api/snapshots/{sid}/holdings").json()
+    assert (row["value_base"], row["unconverted"]) == (1000.0, "TWD")
 
 
 def test_an_amount_of_zero_is_not_a_warning(client):
@@ -457,3 +604,71 @@ def test_a_legacy_code_on_the_plan_path_skips_the_whole_occurrence(client, monke
     assert "'Doll' is not a currency code" in body["skipped"][0]["reason"]
     # Nothing written, so the next run tries again once the code is corrected.
     assert client.get("/api/transactions").json() == []
+
+
+def test_a_plan_in_a_code_that_is_not_one_says_so_before_any_rate(client, monkeypatch):
+    """Brief BA: the listing's currency known, the plan's `Doll`. Measured at
+    279acf8, the rate step spoke first and never said what was wrong: "ZZAW.MI:
+    no exchange rate from EUR to Doll is known for 2026-09-16"."""
+    from app import prices
+
+    monkeypatch.setattr(
+        prices, "get_price_on",
+        lambda symbol, on: {"symbol": symbol, "price": 100.0, "as_of": on.isoformat()},
+    )
+    monkeypatch.setattr(prices, "_fetch_currency", lambda symbol: "EUR")
+    iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]
+    client.post(
+        f"/api/institutions/{iid}/cash-anchors",
+        json={"date": EARLIER, "amount": 1000.0, "currency": "EUR"},
+    ).raise_for_status()
+    client.post(
+        "/api/accumulation-plans",
+        json={
+            "name": "PAC All-World", "amount": 250.0, "currency": "EUR",
+            "frequency": "annual", "start_date": EARLIER,
+            "source_institution_id": iid,
+            "targets": [{"symbol": "VWCE.MI", "asset_name": "All-World",
+                         "institution_id": iid}],
+        },
+    ).raise_for_status()
+    _write_past_the_schema(models.AccumulationPlan, currency="Doll")
+
+    answer = client.post("/api/transactions/catch-up")
+    assert answer.status_code == 200, answer.text
+    (skipped,) = answer.json()["skipped"]
+    assert skipped["reason"].startswith("'Doll' is not a currency code: it is recorded on the plan")
+    assert "exchange rate" not in skipped["reason"]
+    assert client.get("/api/transactions").json() == []
+
+
+def test_a_new_situation_says_the_code_it_copied_is_not_one(client):
+    """Brief BA: measured at 279acf8, a row in `Doll` was copied into the new
+    situation and the page said only that it "still needs you". It is still
+    copied as written, since only the reader knows what it meant; a real code
+    no rate converts (TWD) is not named, since nothing is wrong with it."""
+    iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]
+    sid = client.post(
+        f"/api/institutions/{iid}/snapshots", json={"date": EARLIER}
+    ).json()["id"]
+    for name, currency in (("Lump", "EUR"), ("Taipei lump", "TWD")):
+        client.post(
+            f"/api/snapshots/{sid}/holdings",
+            json={"asset_name": name, "value": 1000.0, "currency": currency},
+        ).raise_for_status()
+    with SessionLocal() as db:
+        db.execute(
+            models.Holding.__table__.update()
+            .where(models.Holding.asset_name == "Lump")
+            .values(currency="Doll")
+        )
+        db.commit()
+
+    made = client.post(f"/api/institutions/{iid}/snapshots/prefilled", json={"date": TODAY})
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert body["not_a_code"] == [{"asset_name": "Lump", "currency": "Doll"}]
+    rows = client.get(f"/api/snapshots/{body['id']}/holdings").json()
+    assert sorted((h["asset_name"], h["currency"]) for h in rows) == [
+        ("Lump", "Doll"), ("Taipei lump", "TWD"),
+    ]

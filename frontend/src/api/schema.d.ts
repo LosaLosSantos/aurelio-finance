@@ -2050,6 +2050,11 @@ export interface components {
              */
             scheduled: components["schemas"]["FlowNotCounted"][];
             /**
+             * Unconverted
+             * @description The codes these monthly figures hold as written, because no rate converts them, with a month's share of each (brief BA).
+             */
+            unconverted: components["schemas"]["UnconvertedCode"][];
+            /**
              * Undated
              * @description Flows with no start date, counted as in force: nothing says they have not started
              */
@@ -2100,6 +2105,11 @@ export interface components {
             transfers_in: number;
             /** Transfers Out */
             transfers_out: number;
+            /**
+             * Unconverted
+             * @description The codes this account's cash holds as written, because no rate converts them, with their share of it under "projected" (brief BA).
+             */
+            unconverted: components["schemas"]["UnconvertedCode"][];
         };
         /**
          * CatalogueStatus
@@ -3062,6 +3072,11 @@ export interface components {
             financial_total: number;
             /** Real Total */
             real_total: number;
+            /**
+             * Unconverted
+             * @description The codes counted here as written (`UnconvertedCode`); a slice's share is under "class:<asset class>" or "category:<category>".
+             */
+            unconverted: components["schemas"]["UnconvertedCode"][];
         };
         /**
          * DashboardSummary
@@ -3116,9 +3131,9 @@ export interface components {
             real_total: number;
             /**
              * Unconverted
-             * @description Amounts that entered these totals without being converted, because no rate is known for the currency they are written in — said here instead of passing in silence. Each entry is a sum over ROWS and not the amount any figure above is wrong by; `UnconvertedAmount` says why, with the measured cases in both directions.
+             * @description The codes that entered these totals as written, because no rate converts them, said instead of passing in silence: what kind of code, where it is written, and how much of each total it is.
              */
-            unconverted: components["schemas"]["UnconvertedAmount"][];
+            unconverted: components["schemas"]["UnconvertedCode"][];
             /**
              * Unresolved Omissions
              * @description Value that left the totals because a newer photograph did not mention it. Selling is an assertion with a date and proceeds; forgetting is the absence of one, and the app must not let the difference pass in silence.
@@ -3610,6 +3625,11 @@ export interface components {
              * @description Yahoo ticker used for prices (e.g. VWCE.MI)
              */
             symbol: string | null;
+            /**
+             * Unconverted
+             * @description The code `value_base` is in as written, when no rate converts it, so the row says it is not in `base_currency` (brief BA); null when it was converted.
+             */
+            unconverted: string | null;
             /** Unit Price */
             unit_price: number | null;
             /**
@@ -3619,7 +3639,7 @@ export interface components {
             value: number | null;
             /**
              * Value Base
-             * @description `value` in `base_currency`, at the ECB rate — by the ticker's listing currency where it has one, by `currency` otherwise. The figure to display and to total; `value` is the one to edit.
+             * @description `value` in `base_currency`, at the ECB rate (Yahoo's for a currency the ECB does not publish), by the ticker's listing currency where it has one, by `currency` otherwise. The figure to display and to total; `value` is the one to edit.
              */
             value_base: number;
         };
@@ -4068,15 +4088,39 @@ export interface components {
             financial: number;
             /**
              * Fx As Of
-             * @description The ECB day whose rates converted this point — the latest published on or before `date`. Null when nothing in the point needed converting.
+             * @description The ECB day whose rates converted this point, the latest published on or before `date`: for a currency the ECB publishes, or for the dollar a Yahoo close was crossed at. Null when no ECB rate was used.
              */
             fx_as_of: string | null;
+            /**
+             * Fx Yahoo As Of
+             * @description Yahoo's day whose close converted a currency the ECB does not publish at this point (brief BA); null when none was.
+             */
+            fx_yahoo_as_of: string | null;
             /** Liabilities */
             liabilities: number;
             /** Net Worth */
             net_worth: number;
             /** Real */
             real: number;
+            /**
+             * Unconverted
+             * @description The codes this point counts as written, because no rate converts them. Codes only: what a code is of the net worth is the summary's share at the last point, and a sum over points would count one row once per point (brief BA).
+             */
+            unconverted: string[];
+        };
+        /**
+         * NotACode
+         * @description A row a new situation copied with a currency that is not a currency
+         *     code: written before the shape rule, and copied as written (brief BA).
+         */
+        NotACode: {
+            /** Asset Name */
+            asset_name: string;
+            /**
+             * Currency
+             * @description The currency as it is written on the row
+             */
+            currency: string;
         };
         /**
          * OmittedPosition
@@ -4348,9 +4392,14 @@ export interface components {
             declared_instead: components["schemas"]["ArrivedPosition"][];
             /**
              * Fx As Of
-             * @description ECB reference-rate date, present when any FX conversion was applied
+             * @description ECB reference-rate date, present when an ECB rate was applied: to a currency the ECB publishes, or to the dollar a Yahoo close was crossed at
              */
             fx_as_of: string | null;
+            /**
+             * Fx Yahoo As Of
+             * @description Yahoo's close date, present when a currency the ECB does not publish was converted at Yahoo's rate (brief BA)
+             */
+            fx_yahoo_as_of: string | null;
             /**
              * Paid Recovery
              * @description What the ledger paid before each account's latest situation that its rows do not say, proposed: written only when the reader accepts it, never proposed again once declined
@@ -4405,9 +4454,9 @@ export interface components {
             total_realized_movement: number;
             /**
              * Unconverted
-             * @description Amounts that entered these totals without being converted, because no rate is known for the currency they are written in. The pair to `fx_as_of`: that says which rate was applied, this says what no rate could be applied to.
+             * @description The codes that entered these totals as written, because no rate converts them, the earlier stretches' dividends and gains included. The pair to `fx_as_of`: that says which rate was applied, this says what no rate could be applied to.
              */
-            unconverted: components["schemas"]["UnconvertedAmount"][];
+            unconverted: components["schemas"]["UnconvertedCode"][];
             /**
              * Unresolved Omissions
              * @description Positions a newer photograph stopped mentioning: their value left these totals without a line saying where it went.
@@ -4465,6 +4514,11 @@ export interface components {
              * @description What the looked-through portfolio is worth — the denominator the weights are shares of. Market where the market can price a position, its last observed value where it cannot.
              */
             total_value: number;
+            /**
+             * Unconverted
+             * @description The codes the weighed investments hold as written, because no rate converts them, with their share under "total_value": every weight is a share of a total that holds them (brief BA).
+             */
+            unconverted: components["schemas"]["UnconvertedCode"][];
             /**
              * Undecomposed Pct
              * @description The share no source could decompose. Kept explicit so a chart can show it as its own slice instead of quietly normalising it away.
@@ -4584,7 +4638,7 @@ export interface components {
             live_price: number | null;
             /**
              * Market Value
-             * @description In the base currency (converted at the ECB reference rate)
+             * @description In the base currency (converted at the ECB reference rate, or Yahoo's for a currency the ECB does not publish)
              */
             market_value: number | null;
             /**
@@ -4656,6 +4710,11 @@ export interface components {
              */
             needs_attention: string[];
             /**
+             * Not A Code
+             * @description Copied rows whose currency is not a currency code. It is copied as written, since only the reader knows what it meant, and said, so the new situation does not carry it forward in silence (brief BA).
+             */
+            not_a_code: components["schemas"]["NotACode"][];
+            /**
              * Note
              * @description Free-form notes
              */
@@ -4671,8 +4730,13 @@ export interface components {
              */
             repriced: string[];
             /**
+             * Unconverted
+             * @description The codes `value_base` holds as written, because no rate converts them, with their share of it under "value_base" (brief BA).
+             */
+            unconverted: components["schemas"]["UnconvertedCode"][];
+            /**
              * Value Base
-             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate, by the listing currency where the ticker has one. Computed by the router, never by the model.
+             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate (Yahoo's for a currency the ECB does not publish), by the listing currency where the ticker has one. Computed by the router, never by the model.
              */
             value_base: number;
         };
@@ -4949,8 +5013,13 @@ export interface components {
              */
             note: string | null;
             /**
+             * Unconverted
+             * @description The codes `value_base` holds as written, because no rate converts them, with their share of it under "value_base" (brief BA).
+             */
+            unconverted: components["schemas"]["UnconvertedCode"][];
+            /**
              * Value Base
-             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate, by the listing currency where the ticker has one. Computed by the router, never by the model.
+             * @description What this situation was worth, in `base_currency`: its holdings converted at the ECB rate (Yahoo's for a currency the ECB does not publish), by the listing currency where the ticker has one. Computed by the router, never by the model.
              */
             value_base: number;
         };
@@ -5265,9 +5334,14 @@ export interface components {
             fees: number;
             /**
              * Fx As Of
-             * @description The ECB day whose rate turned quantity x unit_price into `amount`, when the app derived it across two currencies. Null when there was nothing to convert, or when the amount is the reader's own figure.
+             * @description The day whose rate turned quantity x unit_price into `amount` (`fx_source` says whose), when the app derived it across two currencies. Null when there was nothing to convert, or when the amount is the reader's own figure.
              */
             fx_as_of: string | null;
+            /**
+             * Fx Source
+             * @description Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB does not publish (brief BA). Null when no rate was used.
+             */
+            fx_source: ("ECB" | "Yahoo") | null;
             /** Id */
             id: number;
             /**
@@ -5459,7 +5533,7 @@ export interface components {
             note?: string | null;
             /**
              * To Amount
-             * @description Amount that reached the destination, in `to_currency`, from its statement. Left out, it is `amount` when the two currencies are the same, and otherwise worked out at the ECB rate final for `date`.
+             * @description Amount that reached the destination, in `to_currency`, from its statement. Left out, it is `amount` when the two currencies are the same, and otherwise worked out at the rate final for `date`: the ECB's, or Yahoo's for a currency the ECB does not publish.
              */
             to_amount?: number | null;
             /**
@@ -5503,9 +5577,14 @@ export interface components {
             from_institution_id: number | null;
             /**
              * Fx As Of
-             * @description The ECB day whose rate `to_amount` was worked out at; null when it was stated, or when both sides share a currency
+             * @description The day whose rate `to_amount` was worked out at (`fx_source` says whose); null when it was stated, or when both sides share a currency
              */
             fx_as_of: string | null;
+            /**
+             * Fx Source
+             * @description Whose rate `fx_as_of` is: the ECB's, or Yahoo's for a currency the ECB does not publish (brief BA). Null when no rate was used.
+             */
+            fx_source: ("ECB" | "Yahoo") | null;
             /** Id */
             id: number;
             /**
@@ -5527,35 +5606,66 @@ export interface components {
             to_institution_id: number | null;
         };
         /**
-         * UnconvertedAmount
-         * @description Value that reached a total in the currency it was written in, because the
-         *     app has no rate to convert it with.
+         * UnconvertedCode
+         * @description A code that reached this page's figures as written, because no rate
+         *     converts it (brief BA, D2 (c)).
          *
-         *     The fallback itself is deliberate: an amount the feed has never priced is
-         *     kept rather than dropped, since a total quietly short by a whole account is
-         *     as wrong as one quietly inflated (`fx.Converter.to_base_or_as_stored`). What
-         *     was missing is this — the saying so. Two cases reach it and the reader tells
-         *     them apart at a glance, which is why the code is printed as typed: a code
-         *     that is a typo (`Doll`) is corrected on the row, and a real currency the ECB
-         *     does not quote (`TWD`) cannot be converted by anybody and the figure simply
-         *     is in another unit.
+         *     The fallback itself is deliberate: an amount no source has priced is kept
+         *     rather than dropped, since a total quietly short by a whole account is as
+         *     wrong as one quietly inflated (`fx.Converter.to_base_or_as_stored`). What
+         *     the page says, in the order the reader acts on it: what kind of code it is,
+         *     where it is written, and how much of each figure it is (`notice`).
          */
-        UnconvertedAmount: {
-            /**
-             * Amount
-             * @description What those amounts come to in THEIR OWN unit, as they were written. A sum over rows, and not the amount any figure above is wrong by — nor a bound on it, in either direction. One converter serves several totals, so the same currency can arrive as a value and again as its cost, and a debt's balance adds here while it subtracts there; and a recurring flow is converted ONCE and multiplied afterwards. Measured: a holding worth 1,000 TWD that cost 900 reports 1,900.00 against an investments total of 1,000.00; an asset and a debt of 1,000 TWD each add 2,000.00 here while the net worth does not move; and 100 TWD a month against a year-old anchor puts 1,200.00 into the net worth and reports 100.00.
-             */
-            amount: number;
-            /**
-             * Count
-             * @description How many amounts were passed through
-             */
-            count: number;
+        UnconvertedCode: {
             /**
              * Currency
-             * @description The code as the row states it, or null for a row with none
+             * @description The code as the rows state it ("" for a row that states none)
              */
-            currency: string | null;
+            currency: string;
+            /**
+             * More Rows
+             * @description How many more rows than those listed
+             * @default 0
+             */
+            more_rows: number;
+            /**
+             * Not A Code
+             * @description True when it is not a currency code at all, a typo corrected on its row; false when it is a currency no source quotes
+             */
+            not_a_code: boolean;
+            /**
+             * Rows
+             * @description The rows it is written on, newest first
+             */
+            rows: components["schemas"]["UnconvertedRow"][];
+            /**
+             * Shares
+             * @description How much of each figure of this payload the code is, as written and signed, by the figure's field name: the figure computed again with the code at 0, and the difference. A debt's share is in the debts and leaves the net worth; a monthly flow's is a month's; a figure the code does not move is left out.
+             */
+            shares: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * UnconvertedRow
+         * @description A row an unconverted code is written on, as the page names it.
+         */
+        UnconvertedRow: {
+            /**
+             * Kind
+             * @description What the row is: a position, a real asset, a debt, ...
+             */
+            kind: string;
+            /**
+             * Name
+             * @description Its name, or its account's
+             */
+            name: string;
+            /**
+             * Where
+             * @description Its account and day, when it has them
+             */
+            where: string | null;
         };
         /**
          * UnreadPurchases

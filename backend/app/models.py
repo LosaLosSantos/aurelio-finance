@@ -449,9 +449,10 @@ class Transfer(Base):
     )
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     currency: Mapped[str] = mapped_column(String, nullable=False)
-    # What reached the destination, fixed on the day. Worked out at the ECB
-    # rate final for `date` when it was not copied from a statement, and then
-    # `fx_as_of` is that rate's day; a figure the reader typed leaves it empty.
+    # What reached the destination, fixed on the day. Worked out at the rate
+    # final for `date` (the ECB's, or Yahoo's for a currency the ECB does not
+    # publish) when it was not copied from a statement, and then `fx_as_of` is
+    # that rate's day; a figure the reader typed leaves it empty.
     to_amount: Mapped[float] = mapped_column(Float, nullable=False)
     to_currency: Mapped[str] = mapped_column(String, nullable=False)
     fx_as_of: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -565,7 +566,8 @@ class Transaction(Base):
     currency: Mapped[str] = mapped_column(String, nullable=False)
     # What `unit_price` is in. Empty only for a close, which has no price.
     price_currency: Mapped[str | None] = mapped_column(String, nullable=True)
-    # The ECB day whose rate turned quantity * unit_price into `amount`, when
+    # The day of the rate (the ECB's, or Yahoo's for a currency the ECB does
+    # not publish) that turned quantity * unit_price into `amount`, when
     # the app derived it across two currencies. Empty when there was nothing to
     # convert, or when the figure is the reader's own — which is how a debit
     # copied from a statement is told apart from one worked out here.
@@ -731,6 +733,26 @@ class FxRate(Base):
     base: Mapped[str] = mapped_column(String, primary_key=True)
     currency: Mapped[str] = mapped_column(String, primary_key=True)
     as_of: Mapped[str] = mapped_column(String, primary_key=True)  # the ECB day
+    rate: Mapped[float] = mapped_column(Float, nullable=False)
+    fetched_at: Mapped[str] = mapped_column(String, default=_utcnow_iso, nullable=False)
+
+
+class FxRateYahoo(Base):
+    """One of Yahoo's daily closes for a currency the ECB does not publish:
+    units of `currency` per 1 US dollar (`USD{currency}=X`), as it closed on
+    `as_of` (brief BA, the reader's decision D1).
+
+    Kept like `FxRate`: a row per day, the history kept, and a day written
+    only once it is over. A table of its own and not a column on `fx_rates`,
+    so the ECB's rows are read exactly as before: its whole-day rule would
+    otherwise take a day only Yahoo has a close for (25 December 2024) as the
+    ECB's day in force. Read by `yahoo_rates`, which crosses it at the ECB's
+    dollar of the same day into any base."""
+
+    __tablename__ = "fx_rates_yahoo"
+
+    currency: Mapped[str] = mapped_column(String, primary_key=True)
+    as_of: Mapped[str] = mapped_column(String, primary_key=True)  # Yahoo's day
     rate: Mapped[float] = mapped_column(Float, nullable=False)
     fetched_at: Mapped[str] = mapped_column(String, default=_utcnow_iso, nullable=False)
 

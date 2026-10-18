@@ -51,6 +51,10 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { useListEditor, type Draft } from "./listEditor";
+import { arrivalWasStated, sameSum } from "./statedAmount";
+import { rateLine } from "./rateSource";
+import { sameCurrency } from "./money";
+import { UnconvertedNotice } from "./UnconvertedNotice";
 import { IN_FORCE, leftOutLine, notCounted, undatedLine } from "./inForce";
 import { EXPENSE as EXPENSE_NEEDS, INCOME as INCOME_NEEDS, PLAN, TRANSFER, marks, refusal, type Need } from "./required";
 import {
@@ -64,6 +68,13 @@ import {
   startsLine,
 } from "./firstDate";
 import type { Focus } from "../nav";
+
+/* The names the notice gives the monthly figures (brief BA). */
+const MONTHLY_FIGURES = {
+  monthly_income: "monthly income",
+  monthly_expenses: "monthly expenses",
+  monthly_net: "monthly net",
+};
 
 const KINDS = ["", "active", "passive"];
 const NATURES = ["", "essential", "discretionary"];
@@ -211,6 +222,15 @@ export default function CashFlow({
               {[leftOut && `Not counted: ${leftOut} (marked below).`, undated].filter(Boolean).join(" ")}
             </p>
           )}
+          {/* A flow in a code no rate converts, counted in these monthly
+              figures as written (brief BA, measured at 279acf8: a salary of
+              9,000 TWD read as 9,000.00 EUR a month, and nothing said so). */}
+          <div className="mt-3">
+            <UnconvertedNotice
+              baseCurrency={summary.base_currency}
+              parts={[{ items: summary.unconverted ?? [], labels: MONTHLY_FIGURES }]}
+            />
+          </div>
         </div>
       )}
 
@@ -527,11 +547,6 @@ const EXPENSE: CashFlowSpec<Expense, ExpenseCreate> = {
   destroy: deleteExpense,
 };
 
-/** One sum on both sides: the same currency, and nothing lost on the way. */
-function sameSum(t: Transfer): boolean {
-  return t.to_currency === t.currency && t.to_amount === t.amount;
-}
-
 function TransferSection({
   items,
   institutions,
@@ -559,8 +574,9 @@ function TransferSection({
      destination was credited in. Each is the reader's choice when they made
      one (null until then) and otherwise the proposal below. `arrived` is the
      credit itself when the reader has it from the destination's statement;
-     left blank across two currencies, the backend works it out at the ECB
-     rate of the date and says which day. */
+     left blank across two currencies, the backend works it out at the rate
+     of the date (the ECB's, or Yahoo's for a currency the ECB does not
+     publish) and says which day and whose. */
   const [currencyChoice, setCurrencyChoice] = useState<string | null>(null);
   const [toCurrencyChoice, setToCurrencyChoice] = useState<string | null>(null);
   const [arrived, setArrived] = useState("");
@@ -590,7 +606,7 @@ function TransferSection({
     setToCurrencyChoice(t.to_currency);
     // A credit the reader typed comes back into the box; one worked out from a
     // rate does not, so that changing the date works it out again.
-    setArrived(t.fx_as_of == null && !sameSum(t) ? String(t.to_amount) : "");
+    setArrived(arrivalWasStated(t) ? String(t.to_amount) : "");
   }
 
   /* Each side proposes its account's currency on the date: the anchor in force
@@ -607,8 +623,9 @@ function TransferSection({
   const toCurrency = toSide ?? fromSide ?? base;
 
   // Two currencies, or a credit that differs from what left: the second sum
-  // cannot be read off the first, so its box is shown.
-  const acrossCurrencies = currency.trim() !== toCurrency.trim();
+  // cannot be read off the first, so its box is shown. Two currencies as the
+  // backend reads them: "eur" is EUR, and pence are pounds (brief BA).
+  const acrossCurrencies = !sameCurrency(currency, toCurrency);
   const showArrived = acrossCurrencies || arrived !== "";
 
   async function submit(e: FormEvent) {
@@ -665,7 +682,7 @@ function TransferSection({
   return (
     <Section
       title="Transfers"
-      hint="Move cash between two of your institutions on a date. It lowers the source's cash and raises the destination's. Between two currencies, what arrived is worked out at the ECB rate of that date unless you type it from the statement."
+      hint="Move cash between two of your institutions on a date. It lowers the source's cash and raises the destination's. Between two currencies, what arrived is worked out at the rate of that date (the ECB's, or Yahoo's for a currency the ECB does not publish) unless you type it from the statement."
     >
       <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
         <DateField label="on" value={date} onChange={setDate} mark={marks(TRANSFER, "date")} />
@@ -721,9 +738,9 @@ function TransferSection({
             title={`${instName(t.from_institution_id) ?? "External"} → ${instName(t.to_institution_id) ?? "External"}`}
             subtitle={[
               t.date,
-              // A credit fixed at one day's rate says which day, so it can be
-              // held against the statement.
-              t.fx_as_of ? `at the ECB rate of ${t.fx_as_of}` : null,
+              // A credit fixed at one day's rate says which day, and whose
+              // (brief BA), so it can be held against the statement.
+              t.fx_as_of ? rateLine(t.fx_as_of, t.fx_source) : null,
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -1086,7 +1103,7 @@ function PlanSection({
       note={PLAN_NOTE}
       explain={{
         question: "How does a PAC work?",
-        text: "A plan names both ends (the account each contribution leaves, and where each investment is held), because money moves from one to the other and a plan that says neither is describing a purchase nobody made. Where each investment is held starts as the account funding the plan: change it if you buy that one somewhere else. With several targets the budget is spent as one pot, so a whole-unit broker leaves one small remainder instead of one per fund, and it carries to the next contribution. Whole units: the broker buys only whole units and the remainder stays in cash; fractional: it spends the contribution to the cent. Check which one yours does: it changes what a contribution buys. The budget's currency is proposed from the funding account's cash on the first buy's date; what you type stays. A ticker takes its exchange's suffix (VWCE.MI), and a listing in another currency is bought at its close converted into the plan's currency, at the ECB rate of that day.",
+        text: "A plan names both ends (the account each contribution leaves, and where each investment is held), because money moves from one to the other and a plan that says neither is describing a purchase nobody made. Where each investment is held starts as the account funding the plan: change it if you buy that one somewhere else. With several targets the budget is spent as one pot, so a whole-unit broker leaves one small remainder instead of one per fund, and it carries to the next contribution. Whole units: the broker buys only whole units and the remainder stays in cash; fractional: it spends the contribution to the cent. Check which one yours does: it changes what a contribution buys. The budget's currency is proposed from the funding account's cash on the first buy's date; what you type stays. A ticker takes its exchange's suffix (VWCE.MI), and a listing in another currency is bought at its close converted into the plan's currency, at the rate of that day: the ECB's, or Yahoo's for a currency the ECB does not publish.",
       }}
     >
       <form onSubmit={submit} className="flex flex-col gap-3">

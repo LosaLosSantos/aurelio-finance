@@ -148,4 +148,4 @@ export const PLAN_DATE_LABEL = "first buy";
 
 /** The line in view under the PAC title: where a buy's figures come from. */
 export const PLAN_NOTE =
-  "Each date's buy is written the first time the app opens after that day, at its market close (converted at that day's ECB rate when the fund trades in another currency), and marked estimated.";
+  "Each date's buy is written the first time the app opens after that day, at its market close (converted at that day's rate when the fund trades in another currency: the ECB's, or Yahoo's for a currency the ECB does not publish), and marked estimated.";

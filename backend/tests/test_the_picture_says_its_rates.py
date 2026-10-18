@@ -92,7 +92,12 @@ def test_a_currency_the_ecb_does_not_publish_is_named_as_such(client, ecb):
 
     line = _rates_line(_picture())
 
-    assert line.endswith("1 EUR = 1.1403 USD. The ECB publishes no rate for Dlr.")
+    # Yahoo is asked about a well-formed code the ECB lacks (brief BA), and the
+    # suite refuses every outside call: no rate the app could use.
+    assert line.endswith(
+        "1 EUR = 1.1403 USD. The ECB publishes no rate for Dlr, and Yahoo gave none the "
+        "app could use."
+    )
 
 
 def test_the_rates_are_read_like_any_conversion_of_today(client, ecb, monkeypatch):

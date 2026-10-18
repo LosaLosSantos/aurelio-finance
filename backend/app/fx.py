@@ -2,10 +2,12 @@
 
 Every total is in ONE currency, the base, which the reader's database names in
 `settings` (`base_currency`, read by `base_currency`); anything in another
-currency is converted at the ECB daily reference rate. Rates are stored in the
-DB (fx_rates) one row per published DAY, and kept: the table is the history of
-the rates, and today's rate is simply the one in force today. `rates_on` is the
-one reading of it. If the feed cannot be reached, what is stored keeps serving
+currency is converted at the ECB daily reference rate, or, for a currency the
+ECB does not publish, at Yahoo's close crossed at the ECB's dollar
+(`yahoo_rates`, brief BA). The ECB's rates are stored in the DB (fx_rates) one
+row per published DAY, and kept: the table is the history of the rates, and
+today's rate is simply the one in force today. `rates_on` is the one reading
+of it. If the feed cannot be reached, what is stored keeps serving
 (stale beats nothing — same policy as the composition cache), with its day
 attached.
 
@@ -34,9 +36,8 @@ from __future__ import annotations
 import bisect
 import datetime
 from collections.abc import Iterable
-from contextlib import contextmanager
 
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -401,6 +402,31 @@ def rates_for(
     return published, {code: entry["rate"] for code, entry in known.items()}, missing
 
 
+def market_rates_for(
+    db: Session, currencies: Iterable[str]
+) -> tuple[str | None, dict[str, float], list[str]]:
+    """For codes the ECB publishes no rate for (`rates_for`'s third answer):
+    Yahoo's rate in force today against the base, crossed at the ECB's dollar
+    (`yahoo_rates`, brief BA). The latest Yahoo day used, {code: units of it
+    per one unit of the base}, and the spellings no rate was found for."""
+    from app import yahoo_rates
+
+    base = base_currency(db)
+    today = _today()
+    rates: dict[str, float] = {}
+    days: list[str] = []
+    left: list[str] = []
+    for written in currencies:
+        _, code = _in_major_units(1.0, written)
+        entry = yahoo_rates.rates_on_days(db, base, [today], code)[today]
+        if entry is None:
+            left.append(written)
+            continue
+        rates[code] = entry["rate"]
+        days.append(entry["as_of"])
+    return (max(days) if days else None), rates, left
+
+
 def choose_base(db: Session, new_base: str, since: str | None) -> None:
     """Make `new_base` the base — but only once its rates are in the store.
 
@@ -449,6 +475,68 @@ def _in_major_units(amount: float, currency: str) -> tuple[float, str]:
     return amount, raw.upper()
 
 
+def source_of(
+    db: Session, codes: Iterable[str | None], day: str, cache: dict | None = None
+) -> str:
+    """Whose rate a sum fixed on `day` between `codes` was worked out at:
+    "Yahoo" when one of them, in major units, had no ECB rate in force on that
+    day and so took Yahoo's (`Converter._rate`, brief BA); "ECB" otherwise.
+
+    Read from what is stored, asking nothing: the ECB day in force on `day`
+    and the codes it listed, against any base kept (a base is never among its
+    own rates, and the euro is the ECB's own). So no column says it on the
+    ledger or on a transfer: the rule that chose the rate decides it again.
+    `cache` keeps one reading per day across a list of rows."""
+    if cache is not None and day in cache:
+        listed = cache[day]
+    else:
+        ecb_day = db.scalar(select(func.max(models.FxRate.as_of)).where(models.FxRate.as_of <= day))
+        listed = {"EUR"}
+        if ecb_day is not None:
+            for base, code in db.execute(
+                select(models.FxRate.base, models.FxRate.currency).where(
+                    models.FxRate.as_of == ecb_day
+                )
+            ):
+                listed.update((base, code))
+        if cache is not None:
+            cache[day] = listed
+    majors = {_in_major_units(1.0, c)[1] for c in codes if c}
+    return "Yahoo" if majors - listed else "ECB"
+
+
+def rate_words(
+    db: Session, codes: Iterable[str | None], day: str, cache: dict | None = None
+) -> str:
+    """'the ECB rate of <day>' or 'the Yahoo rate of <day>': how every line
+    that says the rate of a fixed sum says whose it was (`source_of`)."""
+    return f"the {source_of(db, codes, day, cache)} rate of {day}"
+
+
+def same_currency(a: str, b: str) -> bool:
+    """Whether two codes are one currency once read in major units: "eur" and
+    EUR, GBp and GBP. Between them no rate is used, only the minor-unit step
+    (`within_currency`).
+
+    The one comparison of two codes. The ledger form's rule and its twin here
+    (`crud.amount_was_stated`), the transfer form's and the chat's
+    (`tools._same_sum`), used to compare them as written, so a row this module
+    had worked out in one currency read there as two, with no rate day, hence
+    as a figure typed from a statement (brief BA)."""
+    return _in_major_units(1.0, a)[1] == _in_major_units(1.0, b)[1]
+
+
+def within_currency(amount: float, from_currency: str, to_currency: str) -> float | None:
+    """`amount` in `from_currency` restated in `to_currency` when the two are
+    one currency (`same_currency`): the minor-unit step alone, 5,000 GBp to
+    50 GBP. None when they are two currencies, which takes a rate."""
+    per_from, from_major = _in_major_units(1.0, from_currency)
+    per_to, to_major = _in_major_units(1.0, to_currency)
+    if from_major != to_major:
+        return None
+    return amount * per_from / per_to
+
+
 class Converter:
     """Lazy converter into the database's base currency: rates are loaded
     (cache-first) only when the first amount in another currency shows up, so
@@ -462,27 +550,58 @@ class Converter:
     `on` is the day whose rates it converts at — today when left out. A
     reading of a past day converts at that day's rates, for the reason the net
     worth history does not price its past with today's quotes: a rate is a
-    price. `used_as_of` then reports the ECB day that was actually in force."""
+    price. `used_as_of` then reports the ECB day that was actually in force.
+
+    A code the ECB day in force does not list is converted at Yahoo's rate
+    (`yahoo_rates`, brief BA): `used_yahoo_as_of` reports Yahoo's day, and
+    `yahoo_used` which codes took it, on which day.
+
+    `zero` is a code whose unconvertible amounts this converter passes through
+    as 0 instead of as written: the second pass that measures how much of each
+    figure that code is (`notice`, brief BA)."""
 
     def __init__(
-        self, db: Session, on: str | None = None, _load=None, base: str | None = None
+        self,
+        db: Session,
+        on: str | None = None,
+        _load=None,
+        base: str | None = None,
+        zero: str | None = None,
+        _load_yahoo=None,
     ):
         self._db = db
         self._on = on
         self._load = _load
+        self._load_yahoo = _load_yahoo
         self._base = base
+        self._zero = zero
         self._rates: dict[str, dict] | None = None
+        self._yahoo: dict[str, dict | None] = {}
         self.used_as_of: str | None = None  # date of the rates actually used
-        # What this converter could NOT convert and passed through anyway, by
-        # the currency it was written in: {'Doll': {'amount': 2324.0, 'count': 1}}.
-        # Read by whatever builds the payload, the way `used_as_of` is — so the
-        # callers of `to_base_or_as_stored` keep making one decision between
-        # them instead of a copy of it each. Nine of them call it by name and
-        # two bind it to a local `in_base` called thirteen times more, counted
-        # 2026-09-22; the point is that none of the counts is a number this
-        # file has to keep in step with.
-        self.unconverted: dict[str | None, dict] = {}
-        self._recording = True
+        self.used_yahoo_as_of: str | None = None  # Yahoo's day, when one was used
+        self.yahoo_used: dict[str, str] = {}  # code -> Yahoo's day it took
+        # The codes this converter could NOT convert and passed through anyway,
+        # as written ("" for an amount with no currency at all): {'Doll',
+        # 'TWD'}. Read by whatever builds the payload, the way `used_as_of` is,
+        # and turned by `notice` into what the page says: what kind of code,
+        # where it is written, and how much of each figure it is. A set of
+        # codes and not a sum of amounts (brief BA): the sum was a volume of
+        # rows that matched no figure, and a code passed through twice, by a
+        # walk that replays every situation or by the history's points, is
+        # still one code.
+        self.unconverted: set[str] = set()
+
+    def fork(self, zero: str | None = None) -> Converter:
+        """A converter at the same day and base, sharing what is loaded, with
+        a record of its own: one account's figures read apart from the
+        others', or the second pass with `zero`."""
+        other = Converter(
+            self._db, on=self._on, _load=self._load, base=self._base, zero=zero,
+            _load_yahoo=self._load_yahoo,
+        )
+        other._rates = self._rates
+        other._yahoo = self._yahoo
+        return other
 
     @property
     def base(self) -> str:
@@ -498,6 +617,30 @@ class Converter:
                 self._load(day) if self._load is not None else rates_on(self._db, self.base, day)
             )
         return self._rates
+
+    def _rate(self, code: str) -> dict | None:
+        """The rate in force for a major code: the ECB's when its day lists
+        it, and Yahoo's otherwise (brief BA), each recorded as used."""
+        entry = self._rates_now().get(code)
+        if entry is not None and entry["rate"]:
+            self.used_as_of = max(self.used_as_of or "", entry["as_of"])
+            return entry
+        if code not in self._yahoo:
+            day = self._on or _today()
+            if self._load_yahoo is not None:
+                self._yahoo[code] = self._load_yahoo(day, code)
+            else:
+                from app import yahoo_rates
+
+                self._yahoo[code] = yahoo_rates.rates_on_days(self._db, self.base, [day], code)[day]
+        market = self._yahoo[code]
+        if market is None or not market["rate"]:
+            return None
+        self.used_yahoo_as_of = max(self.used_yahoo_as_of or "", market["as_of"])
+        self.yahoo_used[code] = market["as_of"]
+        if market["ecb_as_of"]:
+            self.used_as_of = max(self.used_as_of or "", market["ecb_as_of"])
+        return market
 
     def to_base(self, amount: float | None, currency: str | None) -> float | None:
         """Convert into the base. Returns None when the amount exists but
@@ -516,10 +659,9 @@ class Converter:
         amount, cur = _in_major_units(amount, currency)
         if cur == self.base:
             return amount
-        entry = self._rates_now().get(cur)
-        if entry is None or not entry["rate"]:
+        entry = self._rate(cur)
+        if entry is None:
             return None
-        self.used_as_of = max(self.used_as_of or "", entry["as_of"])
         return amount / entry["rate"]
 
     def to_base_or_as_stored(self, amount: float, currency: str) -> float:
@@ -541,97 +683,23 @@ class Converter:
         hid it — measured on the reader's own database, a real asset written in
         `Doll` puts 2,324.00 into the net worth as if it were euro, with nothing
         anywhere saying so. So the fallback stays (a total that quietly DROPS a
-        holding is as wrong as one that inflates) and it is recorded in
+        holding is as wrong as one that inflates) and its code is recorded in
         `unconverted`, for the payload to carry to the reader.
 
         Zero and None are not recorded: there is nothing for a reader to act on
-        in an amount that changes no total."""
+        in an amount that changes no total.
+
+        The code that is `zero` passes through as 0 instead: the second pass
+        `notice` measures each figure by (brief BA)."""
         converted = self.to_base(amount, currency)
         if converted is not None:
             return converted
-        if self._recording and amount:
-            seen = self.unconverted.setdefault(currency, {"amount": 0.0, "count": 0})
-            seen["amount"] += amount
-            seen["count"] += 1
+        code = currency if currency is not None else ""
+        if amount:
+            self.unconverted.add(code)
+        if self._zero is not None and code == self._zero:
+            return 0.0
         return amount
-
-    def unconverted_amounts(self) -> list[dict]:
-        """What this converter had to pass through unconverted, largest first.
-
-        One entry per currency: how many AMOUNTS were passed through, and what
-        those amounts come to as they were written.
-
-        That sum is a volume of rows, and it is NOT the amount any figure is
-        wrong by — the difference matters enough to be said twice, because one
-        converter serves several totals and an amount can reach them in roles
-        that do not add up. It goes wrong in BOTH directions, measured:
-
-        * a holding worth 1,000 TWD that COST 900 TWD reports 1,900.00 over 2,
-          against an investments total of 1,000.00: the cost basis converts
-          too, and it feeds the book value rather than the net worth;
-        * adding a real asset of 1,000 TWD and a debt of 1,000 TWD reports
-          3,900.00 over 4, and the net worth does not move at all — the debt
-          subtracts exactly what the asset adds;
-        * and it UNDERSTATES, by any multiple you like: an income of 100 TWD a
-          month against an anchor dated a year earlier puts 1,200.00 into
-          `cash_total` and into the net worth, and reports 100.00 over 1 — a
-          recurring amount is converted once and multiplied afterwards.
-
-        So it is not a bound in either direction, and nothing may present it as
-        one.
-
-        THE ALTERNATIVE, AND WHY IT IS NOT TAKEN — a choice with a price, not
-        an impossibility. Making the figure mean "the error in the net worth"
-        takes knowing each amount's ROLE where it is converted, and that CAN be
-        done with the shape already in this class: a `recording_as(role)` beside
-        `not_recording()`, a four-line wrapper over the two cost-basis sites and
-        one `with` around the liabilities sum. Built as a prototype in about
-        thirty lines and measured: {'TWD/value': 1000.0, 'TWD/cost': 900.0} with
-        a signed net-worth error of {'TWD': 1000.0}, and again at value 2000 /
-        cost 900 / debt 1000 for the same 1,000.00. Three sites to tag, not
-        thirteen.
-
-        What it costs is the reason it waits: a site added later and left
-        untagged would understate the error silently, which is exactly the
-        failure `crud._columns` was written to refuse — so it needs a discovery
-        test that finds every conversion and insists each declares a role,
-        which is the real work. Until that exists the number stays what it
-        honestly is, and everything that prints it says so:
-        `schemas.UnconvertedAmount`, `UnconvertedNotice.tsx`.
-
-        Largest first for the same reason the omissions are sorted by value —
-        the one worth acting on is the one at the front."""
-        return [
-            {"currency": code, "amount": seen["amount"], "count": seen["count"]}
-            for code, seen in sorted(
-                self.unconverted.items(), key=lambda kv: -kv[1]["amount"]
-            )
-        ]
-
-    @contextmanager
-    def not_recording(self):
-        """Convert without adding to `unconverted`, for a reading that is not
-        part of a total.
-
-        One caller: `analytics._unaccounted`, which REPLAYS every photograph an
-        institution has, so one holding's value passes through here once per
-        photograph. Counted, a single unconvertible row would report a multiple
-        of itself — and what that function reports is what a position was worth
-        when it went MISSING, a past figure that enters no total this converter
-        is building. Measured with this guard off: three photographs each naming
-        one holding of 1,000 in a currency with no rate reported 3,000.00 over 3
-        amounts, against an investments total of 1,000.00. With it, 1,000.00
-        over 1.
-
-        The cost of the guard is that `_unaccounted`'s own figures can be
-        unconvertible without saying so. They are values that already LEFT the
-        totals, reported in a notice of their own, so that is a smaller silence
-        than the one this closes — but it is one."""
-        was, self._recording = self._recording, False
-        try:
-            yield self
-        finally:
-            self._recording = was
 
     def from_base(self, amount: float | None, currency: str | None) -> float | None:
         """The same conversion backwards: an amount in the base restated in
@@ -654,10 +722,9 @@ class Converter:
         minor_per_major, major = _in_major_units(1.0, currency)
         if major == self.base:
             return amount / minor_per_major
-        entry = self._rates_now().get(major)
-        if entry is None or not entry["rate"]:
+        entry = self._rate(major)
+        if entry is None:
             return None
-        self.used_as_of = max(self.used_as_of or "", entry["as_of"])
         return amount * entry["rate"] / minor_per_major
 
 
@@ -665,8 +732,9 @@ def convert_on(
     db: Session, amount: float, from_currency: str, to_currency: str, day: str
 ) -> tuple[float | None, str | None]:
     """`amount` in `from_currency` restated in `to_currency` at the rates in
-    force on `day`, and the ECB day those rates were published — or
-    (None, None) when a rate that day is unknown.
+    force on `day`, and the day of those rates: Yahoo's when a code the ECB
+    does not publish took Yahoo's rate (brief BA), the ECB's otherwise. Or
+    (None, None) when a rate that day is unknown, or not yet final.
 
     For a figure that is FIXED on its day rather than restated whenever it is
     read: what a purchase paid in one currency and listed in another took out
@@ -675,27 +743,40 @@ def convert_on(
     that every total uses; there is no second rule here. Two spellings of one
     currency ("GBp" pence into "GBP" pounds) are only the minor-unit step, and
     report no rate day, because no rate was used."""
-    per_from, from_major = _in_major_units(1.0, from_currency)
-    per_to, to_major = _in_major_units(1.0, to_currency)
-    if from_major == to_major:
-        return amount * per_from / per_to, None
+    within = within_currency(amount, from_currency, to_currency)
+    if within is not None:
+        return within, None
 
     base = base_currency(db)
 
-    def convert() -> tuple[float | None, str | None]:
+    from app import yahoo_rates
+
+    def convert() -> tuple[float | None, str | None, Converter]:
         conv = Converter(db, on=day, base=base)
         converted = conv.from_base(conv.to_base(amount, from_currency), to_currency)
-        if converted is None or not _final(db, base, day, conv.used_as_of):
-            return None, None
-        return converted, conv.used_as_of
+        if converted is None:
+            return None, None, conv
+        # Every rate it took must be the one `day` ended with: the ECB's (a
+        # Yahoo rate's dollar leg among them), and each of Yahoo's closes.
+        if conv.used_as_of is None and not conv.yahoo_used:
+            return None, None, conv
+        if conv.used_as_of is not None and not _final(db, base, day, conv.used_as_of):
+            return None, None, conv
+        if not all(yahoo_rates.final(db, code, day, used) for code, used in conv.yahoo_used.items()):
+            return None, None, conv
+        return converted, conv.used_yahoo_as_of or conv.used_as_of, conv
 
-    converted, rate_day = convert()
+    converted, rate_day, tried = convert()
     if converted is None:
         # A sum that is never restated is worth one more question: the day's
         # rate may have come out since the store last asked, which a reading
-        # would pick up tomorrow and this cannot.
+        # would pick up tomorrow and this cannot. Of Yahoo too: a close that
+        # moved waits for the next one, which only a question for newer days
+        # brings (brief BA).
         rates_on(db, base, day, refresh=True)
-        converted, rate_day = convert()
+        for code in tried.yahoo_used:
+            yahoo_rates.ensure(db, code, [_today()], refresh=True)
+        converted, rate_day, _ = convert()
     return converted, rate_day
 
 
@@ -736,4 +817,18 @@ def converters_on(db: Session, days: list[str]) -> dict[str, Converter]:
             loaded.update(rates_on_days(db, base, list(days)))
         return loaded[day]  # every day asked is a key, with {} when none was in force
 
-    return {day: Converter(db, on=day, _load=load, base=base) for day in days}
+    # Yahoo's rates for a code the ECB does not publish, every day at once
+    # the first time any day meets the code (brief BA).
+    yahoo: dict[str, dict[str, dict | None]] = {}
+
+    def load_yahoo(day: str, code: str) -> dict | None:
+        if code not in yahoo:
+            from app import yahoo_rates
+
+            yahoo[code] = yahoo_rates.rates_on_days(db, base, list(days), code)
+        return yahoo[code].get(day)
+
+    return {
+        day: Converter(db, on=day, _load=load, base=base, _load_yahoo=load_yahoo)
+        for day in days
+    }

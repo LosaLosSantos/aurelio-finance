@@ -33,11 +33,12 @@ import datetime
 import json
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app import crud, fx, geo, issuers, models, positions, prices
+from app import crud, fx, geo, issuers, models, notice, positions, prices
 
 logger = logging.getLogger(__name__)
 
@@ -768,7 +769,21 @@ def compute_portfolio_composition(db: Session, refresh: bool = False) -> dict:
     # base they were converted to, not a second reading of it.
     conv = fx.Converter(db)
     fetched = [(p, *_composition_of(db, p, refresh)) for p in _held(db, conv)]
-    return _aggregate(db, conv, fetched)
+    result = _aggregate(db, conv, fetched)
+    # Every weight is a share of what the look-through weighs, so a code
+    # counted there as written moves them all: said with its share of the
+    # investments weighed (brief BA). The second pass values the positions
+    # alone; their compositions do not move with a rate.
+    result["unconverted"] = notice.notice(
+        db, conv, {"total_value": _weighed(p for p, _, _ in fetched)},
+        lambda code: {"total_value": _weighed(_held(db, conv.fork(zero=code)))},
+    )
+    return result
+
+
+def _weighed(held: Iterable) -> float:
+    """What the look-through weighs: every held position at its current value."""
+    return sum(p.current_value for p in held)
 
 
 def _aggregate(

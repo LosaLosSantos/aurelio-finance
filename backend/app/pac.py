@@ -63,7 +63,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app import crud, dividend_pairs, fx, models, prices, schemas
+from app import crud, dividend_pairs, fx, models, prices, schemas, yahoo_rates
 from app.analytics import STEP_MONTHS, add_months, recurrence
 from app.database import commit, sole_writer
 from app import dated
@@ -299,6 +299,25 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
                 }
             )
             continue
+        # A plan whose own currency is not a currency code says so before
+        # anything is priced. The rate step below would only say that no rate
+        # is known for it, and a typo would read as a rate nobody published
+        # (brief BA, measured at 279acf8: "no exchange rate from EUR to Doll is
+        # known for 2026-09-16"). Nothing is recorded, so the plan runs in full
+        # once the code is corrected.
+        if not schemas.is_currency_code(plan.currency):
+            skipped.append(
+                {
+                    "label": plan.name,
+                    "occurrence": None,
+                    "reason": (
+                        f"'{plan.currency}' is not a currency code: it is recorded on the "
+                        "plan, so correcting it there is what lets its buys through on "
+                        "the next run"
+                    ),
+                }
+            )
+            continue
         done = _settled_months(db, plan.id)
         pending = [occ for occ in occurrences if occ.isoformat()[:7] not in done]
         # An occurrence whose day is not over is not priced yet, for two
@@ -307,8 +326,9 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
         # history for VWCE.MI ended in a row dated that day at 165.70 — the last
         # minute's trade — and the one for VTI, before New York opened, ended at
         # the 15th, so the occurrence would have been bought at the day before's
-        # close and dated then. And the ECB may not have published the day's
-        # rate, and a debit written at yesterday's keeps it for good. Nothing is
+        # close and dated then. And the day's rate may not be out yet (the
+        # ECB's, or Yahoo's close for a currency the ECB does not publish), and
+        # a debit written at yesterday's keeps it for good. Nothing is
         # written; the next run after the day ends buys it.
         today = dated.today()
         for occ in pending:
@@ -319,7 +339,7 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
                         "occurrence": occ,
                         "reason": (
                             f"{occ.isoformat()} is not over: the market has no close "
-                            "for it yet, nor the ECB perhaps a rate; bought on the "
+                            "for it yet, nor perhaps the day's rate; bought on the "
                             "first run after it"
                         ),
                     }
@@ -390,8 +410,19 @@ def execute_due(db: Session, as_of: datetime.date | None = None) -> dict:
                     db, quote["price"], listing[t.symbol], plan.currency, quote["as_of"]
                 )
                 if converted is None:
+                    # A code neither source quotes is said as that: no rate
+                    # for it will come, which "not known for that day" does
+                    # not say (brief BA).
+                    unquoted = [
+                        code for code in (listing[t.symbol], plan.currency)
+                        if yahoo_rates.no_source(db, code)
+                    ]
                     failure = (
-                        f"{t.symbol}: no exchange rate from {listing[t.symbol]} to "
+                        f"{t.symbol}: no source quotes a rate for {unquoted[0]}, neither "
+                        "the ECB nor Yahoo, so its price cannot be set against the "
+                        "plan's budget"
+                        if unquoted
+                        else f"{t.symbol}: no exchange rate from {listing[t.symbol]} to "
                         f"{plan.currency} is known for {quote['as_of']}"
                     )
                     break

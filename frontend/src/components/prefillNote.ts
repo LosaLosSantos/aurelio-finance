@@ -14,7 +14,8 @@
 import type { PrefilledSnapshot } from "../api/snapshots";
 import { locale } from "./money.ts";
 
-type Answer = Pick<PrefilledSnapshot, "copied_from" | "repriced" | "needs_attention" | "paid_not_kept">;
+type Answer = Pick<PrefilledSnapshot, "copied_from" | "repriced" | "needs_attention" | "paid_not_kept"> &
+  Partial<Pick<PrefilledSnapshot, "not_a_code">>;
 
 function units(n: number): string {
   return `${n.toLocaleString(locale, { maximumFractionDigits: 4 })} ${n === 1 ? "unit" : "units"}`;
@@ -29,5 +30,11 @@ export function prefillWords(s: Answer): string {
     (r) =>
       ` On ${r.asset_name}, what was paid (${units(r.units_paid)}) is not kept, because nothing could price it on that day: delete this situation and start again from the last one when a price is available.`,
   );
-  return head + lost.join("");
+  // A currency that is not a code, copied as written (brief BA): the new
+  // situation would otherwise carry it forward with nothing said.
+  const codes = (s.not_a_code ?? []).map(
+    (r) =>
+      ` On ${r.asset_name}, the currency '${r.currency}' is not a currency code and was copied as written: correct it on that row.`,
+  );
+  return head + codes.join("") + lost.join("");
 }
