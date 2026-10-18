@@ -1014,6 +1014,7 @@ def _store_answer(
     prompt_tokens: int | None = None,
     cached_tokens: int | None = None,
     cost: float | None = None,
+    model: str | None = None,
 ) -> int:
     """Write the answer as it ended, in a session of this function's own: the
     request's session is closed by the time the stream finishes, and this runs
@@ -1036,7 +1037,7 @@ def _store_answer(
             blocks,
             status=status,
             detail=detail,
-            model=turn.model,
+            model=model or turn.model,
             prompt_tokens=prompt_tokens,
             cached_tokens=cached_tokens,
             cost=cost,
@@ -1477,6 +1478,7 @@ def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
     )
     blocks: list[dict] = []
     messages = list(turn.messages)
+    resolved_model = turn.model
     ending: tuple[str, str | None] | None = None
     # What the provider said each round read and cost, one entry per round
     # asked, None for a round it said nothing about; and the same for every
@@ -1536,6 +1538,8 @@ def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
                         # the turn, not part of the answer, and the reader did not
                         # ask what their question weighed.
                         rounds[-1] = piece
+                    elif kind == "model":
+                        resolved_model = piece
                     else:
                         calls.append(piece)
             # Counted before `messages` grows, since `asked` is that same list
@@ -1630,6 +1634,8 @@ def stream(turn: PreparedTurn) -> Generator[schemas.ChatEvent, None, None]:
         yield schemas.ChatError(detail=ending[1])
     finally:
         status, detail = ending or ("cut", None)
-        message_id = _store_answer(turn, blocks, status, detail, **_spent(rounds, searches))
+        message_id = _store_answer(
+            turn, blocks, status, detail, model=resolved_model, **_spent(rounds, searches)
+        )
     if ending[0] == "done":
-        yield schemas.ChatDone(model=turn.model, message_id=message_id)
+        yield schemas.ChatDone(model=resolved_model, message_id=message_id)

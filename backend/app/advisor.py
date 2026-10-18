@@ -1479,6 +1479,7 @@ def call_round(
     content: list[str] = []
     calls: list[ToolCall] = []
     usage = Usage(None, None, None)
+    resolved = selected
     try:
         for kind, piece in copilot_provider.stream(
             system_prompt, messages, selected, tools
@@ -1489,13 +1490,15 @@ def call_round(
                 calls.append(ToolCall(piece.id, piece.name, piece.arguments))
             elif kind == "usage":
                 usage = Usage(piece.input_tokens, piece.cached_tokens, None)
+            elif kind == "model":
+                resolved = piece
     except copilot_provider.CopilotError as exc:
         raise AdvisorError(str(exc)) from exc
     return Round(
         content="".join(content),
         calls=tuple(calls),
         usage=usage,
-        model=selected,
+        model=resolved,
     )
 
 

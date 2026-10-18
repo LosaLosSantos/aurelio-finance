@@ -209,7 +209,7 @@ class _TurnState:
         if isinstance(data, AssistantUsageData):
             key = data.api_call_id or data.provider_call_id or event.id
             self.usage_by_call[key] = Usage(data.input_tokens, data.cache_read_tokens)
-            if data.model != self.model:
+            if self.model != "auto" and data.model != self.model:
                 self.failure = (
                     f"GitHub Copilot used model {data.model!r} instead of "
                     f"the requested model {self.model!r}."
@@ -315,7 +315,9 @@ async def _run(
                         if event.agent_id is not None:
                             return
                         state.receive(event)
-                        if isinstance(data, AssistantReasoningDeltaData):
+                        if isinstance(data, AssistantUsageData) and model == "auto":
+                            output.put(("model", data.model))
+                        elif isinstance(data, AssistantReasoningDeltaData):
                             output.put(("thought", data.delta_content))
                         elif isinstance(data, AssistantMessageDeltaData):
                             wrote_text = True
@@ -369,8 +371,9 @@ def stream(
     model: str,
     declarations: list[dict] | None = None,
 ) -> Generator[tuple[str, str | ToolRequest | Usage], None, None]:
-    """Stream one Copilot turn; reject SDK model substitution before completion.
+    """Stream one Copilot turn; reject substitution of explicit model IDs.
 
+    Auto selection emits the resolved model reported by the SDK.
     Closing the iterator aborts the SDK turn and waits for session cleanup.
     """
     output: queue.Queue = queue.Queue()
@@ -420,6 +423,8 @@ def complete(system_prompt: str, user_content: str, model: str) -> Result:
             calls.append(piece)
         elif kind == "usage":
             usage = piece
+        elif kind == "model":
+            model = piece
     answer = "".join(content)
     if not answer.strip() and not calls:
         raise CopilotError("GitHub Copilot returned an empty response.")

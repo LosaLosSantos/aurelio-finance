@@ -37,6 +37,8 @@ If discovery fails or the account offers no models, the menu reports an error ra
 substituting a configured list.
 The backend queries Copilot for each catalogue request without an application-level cache.
 If loading fails, the chat shows the error and offers a retry.
+When the account offers `auto`, Copilot chooses the model for each request; Aurelio records
+the resolved model reported by Copilot. Explicit model selections still reject substitution.
 
 Optional settings in `backend/.env` choose defaults:
 

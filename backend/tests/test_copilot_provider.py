@@ -30,6 +30,8 @@ from copilot.session_events import (
 )
 
 _REAL_STREAM = copilot_provider.stream
+_REAL_COMPLETE = copilot_provider.complete
+_REAL_CALL_ROUND = advisor.call_round
 _REAL_ADVISOR_STREAM = advisor.stream_llm
 _REAL_MODELS = copilot_provider.models
 _REAL_SEARCH_WEB = copilot_provider.search_web
@@ -255,7 +257,8 @@ def test_clients_keep_logged_in_authentication_and_session_tool_isolation(monkey
     AssistantUsageData(model="gpt-5.4", content_filter_triggered=True),
     SessionIdleData(aborted=True),
 ])
-def test_partial_answers_and_tool_requests_never_complete_on_failure(monkeypatch, terminal):
+@pytest.mark.parametrize("model", ["gpt-5.4", "auto"])
+def test_partial_answers_and_tool_requests_never_complete_on_failure(monkeypatch, terminal, model):
     captured = {"events": [
         AssistantMessageDeltaData("Partial", "message-1"),
         ExternalToolRequestedData("req", "session", "call", "lookup", {}),
@@ -266,7 +269,7 @@ def test_partial_answers_and_tool_requests_never_complete_on_failure(monkeypatch
     )
     pieces = []
     with pytest.raises(copilot_provider.CopilotError):
-        for piece in _REAL_STREAM("system", [], "gpt-5.4"):
+        for piece in _REAL_STREAM("system", [], model):
             pieces.append(piece)
     assert not any(kind == "tool_call" for kind, _ in pieces)
 
@@ -330,7 +333,8 @@ def test_failed_sdk_turn_persists_reported_tokens_without_executing_a_card(clien
     assert client.get("/api/goals").json() == []
 
 
-def test_sdk_model_fallback_is_an_error_not_a_successful_answer(client, monkeypatch):
+@pytest.mark.parametrize("model", ["definitely-not-a-copilot-model", "gpt-5.4"])
+def test_sdk_model_fallback_is_an_error_not_a_successful_answer(client, monkeypatch, model):
     captured = {"events": [
         AssistantMessageDeltaData("Hello", "message-1"),
         ExternalToolRequestedData("req", "session", "call", "write_goal", {}),
@@ -345,19 +349,64 @@ def test_sdk_model_fallback_is_an_error_not_a_successful_answer(client, monkeypa
     monkeypatch.setattr(advisor, "stream_llm", _REAL_ADVISOR_STREAM)
 
     response = client.post(
-        "/api/chat", json={"content": "Hello", "model": "definitely-not-a-copilot-model"}
+        "/api/chat", json={"content": "Hello", "model": model}
     )
     events = [
         json.loads(line.removeprefix("data: "))
         for line in response.text.splitlines() if line.startswith("data: ")
     ]
     assert events[-1]["kind"] == "error"
-    assert "definitely-not-a-copilot-model" in events[-1]["detail"]
+    assert model in events[-1]["detail"]
     assert "claude-sonnet-5.5" in events[-1]["detail"]
     assert not any(event["kind"] in ("done", "card") for event in events)
     saved = client.get(f"/api/chat/conversations/{events[0]['conversation_id']}").json()
     assert saved["messages"][-1]["status"] == "error"
     assert client.get("/api/goals").json() == []
+
+
+@pytest.mark.parametrize("operation", ["chat", "complete", "round"])
+def test_auto_selection_records_the_resolved_model(client, monkeypatch, operation):
+    captured = {"events": [
+        AssistantMessageDeltaData("Hello", "message-1"),
+        AssistantUsageData(model="gpt-6-luna", input_tokens=100, cache_read_tokens=20,
+                           finish_reason="stop"),
+        SessionIdleData(),
+    ]}
+    if operation == "round":
+        captured["events"].insert(
+            1, ExternalToolRequestedData("req", "session", "call", "lookup", {"symbol": "VWCE"})
+        )
+    monkeypatch.setattr(
+        copilot_provider, "CopilotClient", lambda **options: _Client(captured, **options)
+    )
+    monkeypatch.setattr(copilot_provider, "stream", _REAL_STREAM)
+    monkeypatch.setattr(advisor, "stream_llm", _REAL_ADVISOR_STREAM)
+
+    if operation == "chat":
+        response = client.post("/api/chat", json={"content": "Hello", "model": "auto"})
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines() if line.startswith("data: ")
+        ]
+        assert events[-1]["kind"] == "done", events[-1]
+        assert events[-1]["model"] == "gpt-6-luna"
+        saved = client.get(f"/api/chat/conversations/{events[0]['conversation_id']}").json()
+        answer = saved["messages"][-1]
+        assert answer["status"] == "done"
+        assert answer["model"] == "gpt-6-luna"
+        with SessionLocal() as db:
+            stored = crud.get_chat_conversation(db, events[0]["conversation_id"]).messages[-1]
+            assert (stored.prompt_tokens, stored.cached_tokens, stored.cost) == (100, 20, None)
+    elif operation == "complete":
+        result = _REAL_COMPLETE("system", "Hello", "auto")
+        assert result.model == "gpt-6-luna"
+        assert result.content == "Hello"
+    else:
+        result = _REAL_CALL_ROUND("system", [{"role": "user", "content": "Hello"}], "auto")
+        assert result.model == "gpt-6-luna"
+        assert result.content == "Hello"
+        assert result.calls == (advisor.ToolCall("call", "lookup", '{"symbol":"VWCE"}'),)
+    assert captured["session"]["model"] == "auto"
 
 
 def test_closing_advisor_stream_aborts_sdk_and_removes_session_files(monkeypatch):
