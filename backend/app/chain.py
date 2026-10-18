@@ -60,6 +60,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Iterator
+from contextvars import copy_context
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -369,7 +370,11 @@ def _answered(
     ran = []
     if queued:
         with ThreadPoolExecutor(max_workers=len(queued)) as pool:
-            found = list(pool.map(websearch.search, [query for _, query in queued]))
+            pending = [
+                pool.submit(copy_context().run, websearch.search, query)
+                for _, query in queued
+            ]
+            found = [result.result() for result in pending]
         for (place, _), search in zip(queued, found):
             outcomes[place] = websearch.outcome(search)
             ran.append(search)

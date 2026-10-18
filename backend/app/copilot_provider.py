@@ -15,20 +15,19 @@ import queue
 import shutil
 import tempfile
 import threading
-from collections.abc import Generator, Iterator
-from contextlib import contextmanager, suppress
+from collections.abc import AsyncIterator, Generator, Iterator
+from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from urllib.parse import quote_plus
 
 from pydantic import BaseModel, ConfigDict
 
 from copilot import CopilotClient, RuntimeConnection, ToolSet
 from copilot.rpc import SessionFSReaddirWithTypesEntry
-from copilot.session import PermissionHandler
+from copilot.session import CopilotSession, PermissionHandler
 from copilot.session_fs_provider import SessionFsFileInfo, SessionFsProvider
 from copilot.session_events import (
     AssistantMessageData,
@@ -281,9 +280,36 @@ def _tools(declarations: list[dict] | None) -> tuple[list[Tool], ToolSet]:
     return made, available
 
 
+@asynccontextmanager
+async def _abort_on_stop(
+    session: CopilotSession, cancelled: threading.Event | None
+) -> AsyncIterator[None]:
+    owner = asyncio.current_task()
+
+    async def watch() -> None:
+        while cancelled is not None and not cancelled.is_set():
+            await asyncio.sleep(0.1)
+        if owner is not None:
+            owner.cancel()
+
+    watcher = asyncio.create_task(watch()) if cancelled is not None else None
+    try:
+        if cancelled is not None and cancelled.is_set():
+            raise asyncio.CancelledError
+        yield
+    except asyncio.CancelledError:
+        await session.abort()
+        raise
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+
+
 async def _run(
     output: queue.Queue,
-    holder: dict[str, Any],
+    cancelled: threading.Event,
     system_prompt: str,
     prompt: str,
     model: str,
@@ -294,8 +320,12 @@ async def _run(
     final = ""
     wrote_text = False
     try:
+        if cancelled.is_set():
+            raise asyncio.CancelledError
         with tempfile.TemporaryDirectory(prefix="aurelio-copilot-") as storage:
             async with _client(storage) as client:
+                if cancelled.is_set():
+                    raise asyncio.CancelledError
                 sdk_tools, available = _tools(declarations)
                 async with await client.create_session(
                     model=model,
@@ -308,10 +338,6 @@ async def _run(
                     config_directory=storage,
                     create_session_fs_handler=lambda session: _SessionFiles(storage),
                 ) as session:
-                    holder["loop"] = asyncio.get_running_loop()
-                    holder["session"] = session
-                    holder["ready"].set()
-
                     def receive(event) -> None:
                         nonlocal final, wrote_text
                         data = event.data
@@ -346,7 +372,8 @@ async def _run(
 
                     unsubscribe = session.on(receive)
                     try:
-                        response = await session.send_and_wait(prompt, timeout=300)
+                        async with _abort_on_stop(session, cancelled):
+                            response = await session.send_and_wait(prompt, timeout=300)
                     finally:
                         unsubscribe()
                     state.validate()
@@ -364,7 +391,6 @@ async def _run(
     else:
         output.put(("usage", state.usage()))
     finally:
-        holder["ready"].set()
         output.put(_DONE)
 
 
@@ -390,11 +416,13 @@ def stream(
     Closing the iterator aborts the SDK turn and waits for session cleanup.
     """
     output: queue.Queue = queue.Queue()
-    holder: dict[str, Any] = {"ready": threading.Event()}
     cancelled = _cancellation.get()
+    stopped = threading.Event()
+    if cancelled is not None and cancelled.is_set():
+        raise asyncio.CancelledError
 
     def work() -> None:
-        asyncio.run(_run(output, holder, system_prompt, _conversation(messages), model, declarations))
+        asyncio.run(_run(output, stopped, system_prompt, _conversation(messages), model, declarations))
 
     worker = threading.Thread(target=work, name="aurelio-copilot", daemon=True)
     worker.start()
@@ -416,16 +444,8 @@ def stream(
                 raise CopilotError(f"The call to GitHub Copilot failed ({item}).") from item
             yield item
     finally:
-        if worker.is_alive():
-            holder["ready"].wait(timeout=5)
-            loop = holder.get("loop")
-            session = holder.get("session")
-            if loop is not None and session is not None:
-                try:
-                    asyncio.run_coroutine_threadsafe(session.abort(), loop).result(timeout=5)
-                except Exception:
-                    pass
-        worker.join(timeout=10)
+        stopped.set()
+        worker.join()
 
 
 def complete(system_prompt: str, user_content: str, model: str) -> Result:
@@ -479,6 +499,8 @@ async def _search_web(query: str, model: str) -> WebResult:
     fetched: dict[str, str] = {}
     with tempfile.TemporaryDirectory(prefix="aurelio-copilot-search-") as storage:
         async with _client(storage) as client:
+            if cancelled is not None and cancelled.is_set():
+                raise asyncio.CancelledError
             available = ToolSet().add_builtin("web_fetch")
             async with await client.create_session(
                 model=model,
@@ -516,30 +538,17 @@ async def _search_web(query: str, model: str) -> WebResult:
                             fetched[url] = " ".join(data.result.content.split())
 
                 unsubscribe = session.on(receive)
-                request = asyncio.create_task(
-                    session.send_and_wait_typed(
-                        "Query: "
-                        + query
-                        + "\nStart by fetching: https://www.google.com/search?q="
-                        + quote_plus(query),
-                        _WebAnswer,
-                        timeout=120,
-                    )
-                )
                 try:
-                    while cancelled is not None and not request.done():
-                        if cancelled.is_set():
-                            await session.abort()
-                            raise asyncio.CancelledError
-                        await asyncio.wait((request,), timeout=0.1)
-                    if cancelled is not None and cancelled.is_set():
-                        raise asyncio.CancelledError
-                    answer = await request
+                    async with _abort_on_stop(session, cancelled):
+                        answer = await session.send_and_wait_typed(
+                            "Query: "
+                            + query
+                            + "\nStart by fetching: https://www.google.com/search?q="
+                            + quote_plus(query),
+                            _WebAnswer,
+                            timeout=120,
+                        )
                 finally:
-                    if not request.done():
-                        request.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await request
                     unsubscribe()
                 state.validate()
                 if not fetched:

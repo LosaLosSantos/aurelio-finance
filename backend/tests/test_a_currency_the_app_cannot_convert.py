@@ -209,6 +209,66 @@ def _codes(payload: dict) -> dict:
     return {u["currency"]: (u["not_a_code"], u["shares"]) for u in payload["unconverted"]}
 
 
+@pytest.mark.parametrize("view", ["summary", "allocation", "portfolio", "cashflow"])
+@pytest.mark.parametrize("first_rate", [None, 40.0])
+def test_notice_shares_reuse_the_first_pass_rate_snapshot(client, monkeypatch, view, first_rate):
+    from app import fx, yahoo_rates
+
+    asked = []
+
+    def changing_rate(db, base, days, code):
+        if code == "XYZ":
+            return {day: None for day in days}
+        asked.append(code)
+        rate = first_rate if asked.count(code) == 1 else 80.0
+        return {
+            day: None if rate is None else {
+                "rate": rate, "as_of": day, "ecb_as_of": None,
+            }
+            for day in days
+        }
+
+    missing = "TWD" if first_rate is None else "XYZ"
+    amounts = [("TWD", 4000.0)]
+    if first_rate is not None:
+        amounts.append((missing, 200.0))
+    if view in ("summary", "allocation"):
+        _asset_worth(client, "Taipei flat", "TWD", 4000.0)
+        if first_rate is not None:
+            _asset_worth(client, "Other asset", missing, 200.0)
+    elif view == "portfolio":
+        iid = client.post("/api/institutions", json={"name": "Taipei broker"}).json()["id"]
+        sid = client.post(
+            f"/api/institutions/{iid}/snapshots", json={"date": EARLIER}
+        ).json()["id"]
+        for currency, value in amounts:
+            client.post(f"/api/snapshots/{sid}/holdings", json={
+                "asset_name": currency, "value": value, "currency": currency,
+            }).raise_for_status()
+    else:
+        for currency, value in amounts:
+            client.post("/api/income-sources", json={
+                "name": currency, "amount": value, "currency": currency,
+                "frequency": "monthly", "start_date": EARLIER,
+            }).raise_for_status()
+
+    monkeypatch.setattr(fx, "rates_on", lambda *args: {})
+    monkeypatch.setattr(yahoo_rates, "rates_on_days", changing_rate)
+    response = client.get(f"/api/dashboard/{view}")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    figures = {
+        "summary": ("real_total", "net_worth"),
+        "allocation": ("real_total", "category:unclassified"),
+        "portfolio": ("total_book",),
+        "cashflow": ("monthly_income", "monthly_net"),
+    }[view]
+    expected = 4000.0 if first_rate is None else 200.0
+    assert _codes(payload) == {missing: (False, {key: expected for key in figures})}
+    assert asked == ["TWD"]
+    assert payload[figures[0]] == (4000.0 if first_rate is None else 300.0)
+
+
 def test_an_amount_nobody_can_convert_is_kept_and_said_with_its_share(client):
     """Kept, because dropping it is the other way to be wrong, and said: what
     kind of code, where it is written, and how much of each total it is."""

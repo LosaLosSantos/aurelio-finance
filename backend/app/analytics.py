@@ -685,15 +685,16 @@ _SUMMARY_FIGURES = (
 
 
 def compute_summary(
-    db: Session, as_of: datetime.date | None = None, zero: str | None = None
+    db: Session, as_of: datetime.date | None = None, conv: fx.Converter | None = None
 ) -> dict:
     """Net worth = financial (investments + cash) + real − liabilities, plus counts.
 
-    `zero` computes it again with that code's unconvertible amounts at 0, the
-    second pass `notice` measures each figure by."""
+    `conv` supplies the first pass's rate snapshot for notice share measurement."""
     if as_of is None:
         as_of = datetime.date.today()
-    conv = fx.Converter(db, zero=zero)  # one rate load for the whole computation
+    measure = conv is None
+    if conv is None:
+        conv = fx.Converter(db)
     # All four series read at the SAME date, and never past it. `as_of` is
     # today unless a caller said otherwise, and the summary is the one place
     # where a row dated ahead of it could reach every total at once.
@@ -767,16 +768,16 @@ def compute_summary(
         "liabilities": db.scalar(select(func.count()).select_from(models.Liability)),
         "as_of": as_of_data,
     }
-    if zero is None:
+    if measure:
         result["unconverted"] = notice.said(
             db, conv, result, _SUMMARY_FIGURES,
-            lambda code: compute_summary(db, as_of, zero=code),
+            lambda code: compute_summary(db, as_of, conv=conv.fork(zero=code)),
         )
     return result
 
 
 def compute_allocation(
-    db: Session, as_of: datetime.date | None = None, zero: str | None = None
+    db: Session, as_of: datetime.date | None = None, conv: fx.Converter | None = None
 ) -> dict:
     """Allocation from latest values: financial by asset_class (investments from
     snapshots + cash from the live register), real by category.
@@ -790,9 +791,9 @@ def compute_allocation(
     """
     if as_of is None:
         as_of = datetime.date.today()
-    # One rate load for positions, cash and real assets; `zero` as in
-    # `compute_summary`.
-    conv = fx.Converter(db, zero=zero)
+    measure = conv is None
+    if conv is None:
+        conv = fx.Converter(db)
     real_latest = _latest_valuation_by_asset(db, as_of.isoformat())
 
     by_asset_class: dict[str, float] = {}
@@ -824,10 +825,12 @@ def compute_allocation(
         "base_currency": conv.base,
         "unconverted": [],
     }
-    if zero is None:
+    if measure:
         result["unconverted"] = notice.notice(
             db, conv, _allocation_figures(result),
-            lambda code: _allocation_figures(compute_allocation(db, as_of, zero=code)),
+            lambda code: _allocation_figures(
+                compute_allocation(db, as_of, conv=conv.fork(zero=code))
+            ),
         )
     return result
 
@@ -1163,7 +1166,9 @@ _PORTFOLIO_FIGURES = (
 )
 
 
-def compute_portfolio(db: Session, live: bool = False, zero: str | None = None) -> dict:
+def compute_portfolio(
+    db: Session, live: bool = False, conv: fx.Converter | None = None
+) -> dict:
     """The investment portfolio = the projected positions (latest snapshot per
     institution + later buys from the ledger), with their book values.
     Quantity-based, symboled positions also get a market price: if `live`, all
@@ -1172,13 +1177,15 @@ def compute_portfolio(db: Session, live: bool = False, zero: str | None = None) 
     price carries its `as_of` close date so staleness stays visible. A
     per-symbol price failure leaves that row unpriced.
 
-    `zero` as in `compute_summary`; that pass reads the prices the first one
+    `conv` as in `compute_summary`; that pass reads the prices the first one
     left in the cache, and asks the market nothing."""
     names = {i.id: i.name for i in db.scalars(select(models.Institution))}
     # ONE converter for the whole view. The projection used to make its own and
     # throw it away, so a book value converted at an ECB rate could reach the
     # screen while `fx_as_of` — the date of that very rate — stayed null.
-    conv = fx.Converter(db, zero=zero)
+    measure = conv is None
+    if conv is None:
+        conv = fx.Converter(db)
     held = positions.project(db, conv)
 
     priceable = sorted(
@@ -1387,10 +1394,10 @@ def compute_portfolio(db: Session, live: bool = False, zero: str | None = None) 
         # rate (brief BA): said beside the ECB's.
         "fx_yahoo_as_of": conv.used_yahoo_as_of,
     }
-    if zero is None:
+    if measure:
         result["unconverted"] = notice.said(
             db, conv, result, _PORTFOLIO_FIGURES,
-            lambda code: compute_portfolio(db, live=False, zero=code),
+            lambda code: compute_portfolio(db, live=False, conv=conv.fork(zero=code)),
         )
     return result
 
@@ -1428,7 +1435,9 @@ def flow_status(flow, on: str) -> str:
 _FLOW_FIGURES = ("monthly_income", "monthly_expenses", "monthly_net")
 
 
-def compute_flows_in_force(db: Session, on: str, zero: str | None = None) -> dict:
+def compute_flows_in_force(
+    db: Session, on: str, conv: fx.Converter | None = None
+) -> dict:
     """The income and expenses IN FORCE on `on`, as a monthly run-rate in the
     base currency, with the ones still to start and the ones that have ended
     listed apart and never counted (`flow_status`).
@@ -1460,8 +1469,10 @@ def compute_flows_in_force(db: Session, on: str, zero: str | None = None) -> dic
     chat does). The account since brief AN: without it the chat could not
     point at the right line, nor add one to the right account.
 
-    `zero` as in `compute_summary`."""
-    conv = fx.Converter(db, zero=zero)
+    `conv` as in `compute_summary`."""
+    measure = conv is None
+    if conv is None:
+        conv = fx.Converter(db)
     accounts = {i.id: i.name for i in db.scalars(select(models.Institution))}
 
     def monthly(flow) -> float:
@@ -1527,9 +1538,9 @@ def compute_flows_in_force(db: Session, on: str, zero: str | None = None) -> dic
         "base_currency": conv.base,
         "unconverted": [],
     }
-    if zero is None:
+    if measure:
         result["unconverted"] = notice.said(
             db, conv, result, _FLOW_FIGURES,
-            lambda code: compute_flows_in_force(db, on, zero=code),
+            lambda code: compute_flows_in_force(db, on, conv=conv.fork(zero=code)),
         )
     return result

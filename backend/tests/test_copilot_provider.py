@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import threading
+from contextvars import copy_context
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -13,7 +14,7 @@ from unittest.mock import Mock
 import anyio
 import pytest
 
-from app import advisor, chat, copilot_provider, crud, schemas
+from app import advisor, chain, chat, copilot_provider, crud, schemas, tools, websearch
 from app.database import SessionLocal
 from app.routers.chat import _stream
 from copilot import CopilotClient
@@ -289,6 +290,153 @@ def test_cancelled_web_retrieval_never_starts_an_sdk_client(monkeypatch):
         with pytest.raises(asyncio.CancelledError):
             _REAL_SEARCH_WEB("rates", "gpt-5.4")
         make_client.assert_not_called()
+
+
+def test_analysis_search_workers_abort_on_the_turns_cancellation(monkeypatch):
+    waiting = threading.Barrier(3)
+    captured = []
+    failures = []
+
+    class WaitingSession(_Session):
+        async def send_and_wait_typed(self, *args, **kwargs):
+            waiting.wait(timeout=2)
+            await asyncio.wait_for(self.stopped.wait(), timeout=2)
+            return copilot_provider._WebAnswer(pages=[])
+
+        async def __aexit__(self, *exc):
+            self.captured["closed"] = True
+            return False
+
+    class WaitingClient(_Client):
+        async def create_session(self, **options):
+            self.captured["session"] = options
+            return WaitingSession(self.captured)
+
+    def make_client(**options):
+        found = {}
+        captured.append(found)
+        return WaitingClient(found, **options)
+
+    monkeypatch.setattr(copilot_provider, "CopilotClient", make_client)
+    monkeypatch.setattr(copilot_provider, "search_web", _REAL_SEARCH_WEB)
+    calls = tuple(
+        advisor.ToolCall(str(index), tools.SEARCH_WEB, json.dumps({"query": f"rates {index}"}))
+        for index in range(2)
+    )
+
+    def answer():
+        try:
+            with SessionLocal() as db:
+                chain._answered(db, calls, 2, [tools.SEARCH_WEB])
+        except BaseException as exc:
+            failures.append(exc)
+
+    with copilot_provider.cancellation_scope() as stopped:
+        worker = threading.Thread(target=copy_context().run, args=(answer,))
+        worker.start()
+        try:
+            waiting.wait(timeout=2)
+            stopped.set()
+        finally:
+            worker.join(timeout=3)
+    assert not worker.is_alive()
+    assert len(failures) == 1 and isinstance(failures[0], asyncio.CancelledError)
+    assert len(captured) == 2
+    assert all(found.get("aborted") and found.get("closed") for found in captured)
+
+
+def test_analysis_searches_keep_concurrency_order_and_bounds(monkeypatch):
+    waiting = threading.Barrier(2)
+
+    def search(query):
+        waiting.wait(timeout=2)
+        return websearch.Search(query=query, ran=1)
+
+    monkeypatch.setattr(websearch, "search", search)
+    calls = tuple(
+        advisor.ToolCall(str(index), tools.SEARCH_WEB, json.dumps({"query": f"rates {index}"}))
+        for index in range(3)
+    )
+    with SessionLocal() as db:
+        outcomes, ran = chain._answered(db, calls, 2, [tools.SEARCH_WEB])
+    assert [found.query for found in ran] == ["rates 0", "rates 1"]
+    assert outcomes == [
+        {"ok": True, "result": {"query": "rates 0", "pages": []}},
+        {"ok": True, "result": {"query": "rates 1", "pages": []}},
+        {"ok": False, "error": chain.SEARCHES_SPENT},
+    ]
+
+
+@pytest.mark.parametrize("operation", ["chat", "search"])
+@pytest.mark.parametrize("startup", ["client", "session"])
+def test_stop_during_sdk_startup_prevents_a_later_request(monkeypatch, operation, startup):
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    captured = {}
+    failures = []
+
+    async def wait_for_release():
+        entered.set()
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+
+    class StartingSession(_Session):
+        async def send_and_wait(self, *args, **kwargs):
+            captured["sent"] = True
+            return await super().send_and_wait(*args, **kwargs)
+
+        async def __aexit__(self, *exc):
+            captured["session_closed"] = True
+            return False
+
+    class StartingClient(_Client):
+        async def __aenter__(self):
+            if startup == "client":
+                await wait_for_release()
+            return self
+
+        async def create_session(self, **options):
+            captured["session"] = options
+            if startup == "session":
+                await wait_for_release()
+            return StartingSession(captured)
+
+        async def __aexit__(self, *exc):
+            captured["client_closed"] = True
+            return False
+
+    monkeypatch.setattr(
+        copilot_provider, "CopilotClient", lambda **options: StartingClient(captured, **options)
+    )
+    with copilot_provider.cancellation_scope() as stopped:
+        def call():
+            try:
+                if operation == "chat":
+                    list(_REAL_STREAM("system", [], "gpt-5.4"))
+                else:
+                    _REAL_SEARCH_WEB("rates", "gpt-5.4")
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=copy_context().run, args=(call,))
+        worker.start()
+        try:
+            assert entered.wait(timeout=2)
+            stopped.set()
+            assert not finished.wait(timeout=0.2), "Startup cleanup must remain owned"
+        finally:
+            release.set()
+            worker.join(timeout=3)
+    assert not worker.is_alive()
+    assert len(failures) == 1 and isinstance(failures[0], asyncio.CancelledError)
+    assert not captured.get("sent")
+    assert captured.get("client_closed")
+    if startup == "session":
+        assert captured.get("aborted")
+        assert captured.get("session_closed")
 
 
 def test_stream_maps_copilot_text_tools_and_usage(monkeypatch):

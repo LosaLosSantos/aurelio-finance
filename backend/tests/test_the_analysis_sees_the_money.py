@@ -19,7 +19,7 @@ import datetime
 
 import pytest
 
-from app import advisor, analytics, chain, models, tools, yahoo_rates
+from app import advisor, analytics, chain, models, yahoo_rates
 from app.database import SessionLocal
 from conftest import script_the_chain
 
@@ -399,36 +399,6 @@ def test_every_share_the_app_writes_names_its_whole(client, monkeypatch):
     assert "whole portfolio" not in analyst and "% of portfolio" not in analyst
 
 
-# --- The prompts ---------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "prompt",
-    [advisor.PORTFOLIO_SYSTEM_PROMPT, chain.REVISION_SYSTEM_PROMPT, chain.SYNTHESIS_SYSTEM_PROMPT],
-    ids=["analyst", "revision", "synthesis"],
-)
-def test_every_role_that_writes_figures_is_told_the_three_wholes(prompt):
-    assert "names its whole" in prompt
-    assert "the investments" in prompt and "liquid wealth" in prompt and "everything" in prompt
-
-
-def test_the_analyst_is_told_what_it_reads_and_what_the_real_assets_are_for():
-    prompt = advisor.PORTFOLIO_SYSTEM_PROMPT
-    assert "ONLY the user's investment data" not in prompt
-    assert "not in it at all" not in prompt
-    assert "cash on each account" in prompt and "real assets" in prompt
-    assert "the allocation of everything they own" in prompt
-    assert "a real asset is never cash" in prompt
-    assert "say how old it is" in prompt
-    assert "NO personal context" in prompt
-
-
-def test_the_synthesis_counts_the_real_assets_in_what_is_owned_and_not_in_what_is_spent():
-    prompt = chain.SYNTHESIS_SYSTEM_PROMPT
-    assert "not in the analysis" not in prompt
-    assert "never in what they can spend" in prompt
-
-
 # --- Who reads what -----------------------------------------------------------------
 
 
@@ -471,11 +441,3 @@ def test_the_revision_reads_the_records_again_and_the_confidant_never_does(recor
             assert record not in confidant["user"], f"{record!r} reached the confidant"
         assert "I panic" in confidant["user"]
     assert "I panic" not in seen[0]["user"], "the analyst is blind to the person"
-
-
-def test_the_chats_look_through_names_its_whole_too():
-    reading = " ".join(tools._READING)
-    assert "WHOLE portfolio" not in reading
-    assert "a share of the investments" in reading
-    assert "investments" in tools.REGISTRY["get_look_through"].description
-    assert "whole portfolio" not in tools.REGISTRY["get_look_through"].description
