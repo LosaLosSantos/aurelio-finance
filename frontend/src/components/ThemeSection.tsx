@@ -11,7 +11,9 @@ const LABEL: Record<ThemeChoice, string> = { system: "System", light: "Light", d
    Not a profile answer, and drawn apart from them on purpose. A profile
    answer is saved with "Save profile" and goes to the database; this applies
    on the press, is kept by the browser alone (themeRoot.ts) and is never
-   sent anywhere, so it sits in a card of its own, below the profile's save.
+   sent anywhere, so it sits in a card of its own, after the profile's path,
+   under "This browser" (brief BC; it used to sit between the questions and
+   the goals).
 
    The three are toggle buttons in a group named "Theme", the pattern of the
    Dashboard's chart and table switch: each named by its word, the one in use

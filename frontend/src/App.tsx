@@ -11,8 +11,8 @@ import Dashboard from "./components/Dashboard";
 import Portfolio from "./components/Portfolio";
 import Records, { type RecordsPage } from "./components/Records";
 import Profile from "./components/Profile";
-import Goals from "./components/Goals";
 import ThemeSection from "./components/ThemeSection";
+import { leaveQuestion, mainKey, type Waiting } from "./components/profilePath";
 import Analysis from "./components/Analysis";
 import ChatPanel from "./components/ChatPanel";
 import { Mark } from "./components/Emblem";
@@ -277,6 +277,9 @@ export default function App() {
   // The same for the real asset and the debt open on their pages.
   const [realAsset, setRealAsset] = useState<RealAsset | null>(null);
   const [debt, setDebt] = useState<Liability | null>(null);
+  // What the Profile holds and has not saved, by part, while it is open: the
+  // tab asks before the reader leaves it with something waiting (brief BC).
+  const [profileWaiting, setProfileWaiting] = useState<Waiting | null>(null);
 
   // Where the reader is, at the level a question can be about: the object the
   // page is titled after, never a row inside it. Read at the moment a
@@ -309,8 +312,18 @@ export default function App() {
   // Below 640px the open panel lies over the page (ChatPanel), so it steps
   // aside, or what it opened would open under it, out of reach.
   function fromChat(open: () => void) {
+    if (!mayLeave()) return;
     open();
     if (window.matchMedia("(width < 40rem)").matches) setChatOpen(false);
+  }
+
+  // Whether the main column may stop showing the Profile: yes when it is not
+  // shown or holds nothing unsaved, or when the reader says so. Every way out
+  // of it asks here; the chat beside it keeps its own state either way.
+  function mayLeave(): boolean {
+    if (tab !== "profile" || reading !== null || profileWaiting === null) return true;
+    const question = leaveQuestion(profileWaiting);
+    return question === null || window.confirm(question);
   }
 
   function go(f: Focus) {
@@ -405,6 +418,7 @@ export default function App() {
             result={pacResult}
             onDismiss={() => setPacResult(null)}
             onOpenPortfolio={() => {
+              if (!mayLeave()) return;
               setReading(null);
               setTab("portfolio");
             }}
@@ -445,6 +459,7 @@ export default function App() {
                   key={t.key}
                   active={reading === null && tab === t.key}
                   onClick={() => {
+                    if (!(reading === null && tab === t.key) && !mayLeave()) return;
                     setReading(null);
                     setTab(t.key);
                   }}
@@ -456,7 +471,7 @@ export default function App() {
           </div>
         </header>
 
-        <main key={ledgerVersion} className={"px-6 py-8 " + measure}>
+        <main key={mainKey(tab, ledgerVersion)} className={"px-6 py-8 " + measure}>
           {reading !== null ? (
             <Analysis
               runId={reading === "list" ? null : reading}
@@ -489,16 +504,19 @@ export default function App() {
                   onDebt={setDebt}
                 />
               )}
-              {/* Profile and Goals are two halves of one answer — who you are,
-                  and what you want measurably — so they share a page. */}
-              {/* The theme is how this browser shows the app, not part of
-                  either: its own card, between them, below the profile's
-                  save. */}
+              {/* One path: who you are, in your words, what you want, with
+                  one save (brief BC). The theme is how this browser shows the
+                  app, not part of the profile: after the path, under its own
+                  heading, where the path's strip no longer reaches. */}
               {tab === "profile" && (
                 <div className="space-y-12">
-                  <Profile />
-                  <ThemeSection />
-                  <Goals />
+                  <Profile onWaiting={setProfileWaiting} />
+                  <section aria-labelledby="this-browser" className="space-y-4">
+                    <h2 id="this-browser" className="font-display text-2xl leading-tight text-ink">
+                      This browser
+                    </h2>
+                    <ThemeSection />
+                  </section>
                 </div>
               )}
             </>

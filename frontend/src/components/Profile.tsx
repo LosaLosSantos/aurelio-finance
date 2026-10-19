@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   getSurvey,
   getSurveyQuestions,
@@ -13,10 +13,16 @@ import {
   type TaxSettingsRead,
 } from "../api/tax";
 import { getBaseCurrency, saveBaseCurrency, type BaseCurrencySetting } from "../api/baseCurrency";
+import { createGoal, deleteGoal, getGoals, updateGoal } from "../api/goals";
 import { choicesOf, isVisible, topicsOf, unshownAnswer } from "./questionnaire";
-import { askedAs, othersOf, toSave } from "./profileAnswers";
+import { askedAs, toSave } from "./profileAnswers";
 import { choiceClass } from "./choice";
-import { apiError, btnClass, cardClass, inputClass } from "./ui";
+import { PARTS, currentPart, partOf, partStatus, unsavedWords, waitingTotal, type PartKey, type Waiting } from "./profilePath";
+import { asSent, baseConflict, laidOver, pageFrom, refusalWords, saveProfile, taxToSend, waiting } from "./profileSave";
+import * as goalDrafts from "./goalDrafts";
+import Goals from "./Goals";
+import PathStrip from "./PathStrip";
+import { apiError, cardClass, inputClass, statLabelClass } from "./ui";
 
 /* The questions are the backend's (`GET /api/survey/questions`, app/questionnaire.py):
    the chat's answers to them are checked against the same list, so the two
@@ -25,9 +31,17 @@ import { apiError, btnClass, cardClass, inputClass } from "./ui";
    authoritative for; everything else stored under /api/survey belongs to
    somebody else, today the chat, which can write an answer to a question this
    list never asked, because the analyses declare what they do not know about
-   you and a form cannot ask that in advance. */
+   you and a form cannot ask that in advance.
 
-export default function Profile() {
+   One path since brief BC (`profilePath.ts`): who you are (the questions,
+   then where you pay tax and the currency you count in), in your words, what
+   you want (the goals). One save keeps all of it, the goals included, laid
+   over what is stored at that moment so nothing written elsewhere meanwhile
+   is lost (`profileSave.ts`); the strip at the top says where the reader is
+   and what is not saved yet, and the app asks before the reader leaves with
+   changes waiting (`onWaiting`). */
+
+export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) => void }) {
   const [questions, setQuestions] = useState<SurveyQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   /* Answers stored under keys this form does not ask, posted back with every
@@ -40,14 +54,17 @@ export default function Profile() {
   const [carried, setCarried] = useState<SurveyAnswer[]>([]);
   // The ones deleted here and not saved yet, said under the list with a way back.
   const [dropped, setDropped] = useState<SurveyAnswer[]>([]);
-  /* The tax settings are a different resource from the questionnaire — three
-     keys in `settings`, not survey answers — but they share this page's ONE
+  // The answers as the page read them, as a save sends them: what "not saved"
+  // is counted against, and what the save tells the reader's changes by.
+  const [loaded, setLoaded] = useState<SurveyAnswer[]>([]);
+  /* The tax settings are a different resource from the questionnaire (three
+     keys in `settings`, not survey answers), but they share this page's ONE
      save button on purpose. Two save buttons on one screen is how an edit gets
      lost: you change a rate, press the button you can see, and the rate never
      left the browser. */
   const [tax, setTax] = useState<TaxSettingsRead | null>(null);
   /* Held as strings, so "" can mean cleared. A number input bound to a number
-     cannot express "I have not said" — it collapses to 0, which is the reader
+     cannot express "I have not said": it collapses to 0, which is the reader
      claiming they pay no tax. */
   const [taxCountry, setTaxCountry] = useState("");
   const [cgRate, setCgRate] = useState("");
@@ -57,10 +74,17 @@ export default function Profile() {
      the one save here that asks the rate feed for something. */
   const [base, setBase] = useState<BaseCurrencySetting | null>(null);
   const [pickedBase, setPickedBase] = useState("");
+  // The goals, held until the save like everything else on the page.
+  const [goals, setGoals] = useState<goalDrafts.GoalDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // What the last save could not do, or what the reader held back.
+  const [said, setSaid] = useState<{ tone: "refused" | "held"; text: string } | null>(null);
+  const [current, setCurrent] = useState(0);
+  const partRefs = useRef<(HTMLElement | null)[]>([]);
+  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void load();
@@ -70,11 +94,12 @@ export default function Profile() {
     setLoading(true);
     setError(null);
     try {
-      const [asked, existing, taxes, currentBase] = await Promise.all([
+      const [asked, existing, taxes, currentBase, storedGoals] = await Promise.all([
         getSurveyQuestions(),
         getSurvey(),
         getTaxSettings(),
         getBaseCurrency(),
+        getGoals(),
       ]);
       setQuestions(asked);
       setBase(currentBase);
@@ -83,11 +108,12 @@ export default function Profile() {
       setTaxCountry(taxes.country ?? "");
       setCgRate(taxes.capital_gains_rate?.toString() ?? "");
       setDivRate(taxes.dividend_withholding_rate?.toString() ?? "");
-      const map: Record<string, string> = {};
-      for (const a of existing) if (a.answer != null) map[a.question_key] = a.answer;
-      setAnswers(map);
-      setCarried(othersOf(asked, existing));
+      const page = pageFrom(asked, existing);
+      setAnswers(page.answers);
+      setCarried(page.others);
+      setLoaded(page.loaded);
       setDropped([]);
+      setGoals(goalDrafts.fromStored(storedGoals));
     } catch (err) {
       setError(apiError(err, "Could not reach the backend. Is it running on :8000?"));
     } finally {
@@ -95,63 +121,155 @@ export default function Profile() {
     }
   }
 
+  const now = toSave(questions, answers, carried);
+  const waits = waiting({
+    questions,
+    loaded,
+    now,
+    tax: {
+      stored: {
+        country: tax?.country ?? null,
+        capital_gains_rate: tax?.capital_gains_rate ?? null,
+        dividend_withholding_rate: tax?.dividend_withholding_rate ?? null,
+      },
+      now: taxToSend(taxCountry, cgRate, divRate),
+    },
+    base: { loaded: base?.base_currency ?? pickedBase, picked: pickedBase },
+    drafts: goals,
+  });
+  const total = waitingTotal(waits);
+
+  // The app asks before leaving the tab with changes waiting; it hears what
+  // waits here, and nothing once the page is gone.
+  useEffect(() => {
+    onWaiting({ situation: waits.situation, words: waits.words, goals: waits.goals });
+  }, [onWaiting, waits.situation, waits.words, waits.goals]);
+  useEffect(() => () => onWaiting(null), [onWaiting]);
+
+  // Closing or reloading the browser's tab asks too, through the browser.
+  useEffect(() => {
+    if (total === 0) return;
+    const ask = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [total]);
+
+  // Which part the reader is in (`currentPart`), read again on each scroll.
+  useLayoutEffect(() => {
+    if (loading) return;
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      const tops = partRefs.current.map((el) => (el ? el.getBoundingClientRect().top + window.scrollY : Infinity));
+      setCurrent(
+        currentPart(tops, {
+          stripBottom: stripRef.current?.getBoundingClientRect().bottom ?? 0,
+          height: window.innerHeight,
+          scrolled: window.scrollY,
+          pageHeight: document.documentElement.scrollHeight,
+        }),
+      );
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(read);
+    };
+    read();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [loading]);
+
   function setAnswer(key: string, value: string) {
     setAnswers((a) => ({ ...a, [key]: value }));
-    setSaved(false);
   }
 
   async function save() {
     setSaving(true);
-    setError(null);
-    try {
-      await saveSurvey(toSave(questions, answers, carried));
-      // What the save kept: an answer emptied in its box went with it.
-      setCarried((kept) => kept.filter((a) => (a.answer ?? "").trim() !== ""));
-      setDropped([]);
-      // An empty field CLEARS the key rather than storing 0. The backend
-      // deletes it, so "not said" has one representation instead of three
-      // that look identical on screen.
-      setTax(
-        await saveTaxSettings({
-          country: taxCountry.trim() || null,
-          capital_gains_rate: cgRate === "" ? null : Number(cgRate),
-          dividend_withholding_rate: divRate === "" ? null : Number(divRate),
-        }),
-      );
-      // Last, so a feed that does not answer leaves everything above saved and
-      // says, in the backend's own words, that the base did not change.
-      if (base && pickedBase !== base.base_currency) {
-        setBase(await saveBaseCurrency(pickedBase));
+    setSaid(null);
+    setSaved(false);
+    const result = await saveProfile(
+      {
+        questions,
+        loaded,
+        now,
+        tax: taxToSend(taxCountry, cgRate, divRate),
+        drafts: goals,
+        base: { loaded: base?.base_currency ?? pickedBase, picked: pickedBase },
+      },
+      {
+        getSurvey,
+        putSurvey: saveSurvey,
+        putTax: saveTaxSettings,
+        getGoals,
+        postGoal: createGoal,
+        putGoal: updateGoal,
+        deleteGoal,
+        getBase: getBaseCurrency,
+        putBase: saveBaseCurrency,
+        ask: (question) => window.confirm(question),
+        sentence: apiError,
+      },
+    );
+    if (result.keptBack && result.read) {
+      // The reader kept what is on record for what changed on both sides:
+      // the page shows it, their other changes still waiting over it.
+      const merged = laidOver(questions, loaded, now, result.read.map(asSent), "stored").body;
+      const page = pageFrom(questions, result.read, merged);
+      setAnswers(page.answers);
+      setCarried(page.others);
+      setLoaded(page.loaded);
+      setDropped((all) => all.filter((d) => !page.others.some((o) => o.question_key === d.question_key)));
+      setGoals(result.drafts);
+      if (result.base && base) {
+        if (baseConflict(base.base_currency, pickedBase, result.base.base_currency)) {
+          setPickedBase(result.base.base_currency);
+        }
+        setBase(result.base);
       }
-      setSaved(true);
-    } catch (err) {
-      setError(apiError(err, "Save failed."));
-    } finally {
-      setSaving(false);
+      setSaid({
+        tone: "held",
+        text: "Nothing was saved. What changed on both sides now shows what is on record; your other changes wait for Save profile.",
+      });
+    } else {
+      if (result.survey) {
+        const page = pageFrom(questions, result.survey);
+        setAnswers(page.answers);
+        setCarried(page.others);
+        setLoaded(page.loaded);
+        setDropped([]);
+      }
+      if (result.tax) setTax(result.tax);
+      setGoals(result.drafts);
+      if (result.base) setBase(result.base);
+      const refused = refusalWords(result);
+      if (refused) setSaid({ tone: "refused", text: refused });
+      else setSaved(true);
     }
+    setSaving(false);
   }
 
   if (loading) return <p className="text-ink-soft">Loading…</p>;
 
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-ink">Profile &amp; goals</h2>
-        <p className="text-sm text-ink-soft">
-          A short questionnaire that gives Aurelio your context. Saved on your
-          machine; sent to the AI model through OpenRouter when you run an
-          analysis or ask the chat.
-        </p>
-      </div>
+  function go(index: number) {
+    partRefs.current[index]?.scrollIntoView({ block: "start" });
+  }
 
-      {error && <p className="text-down">{error}</p>}
-
-      {topicsOf(questions).map((topic) => {
+  function topicCards(part: PartKey) {
+    return topicsOf(questions)
+      .filter((topic) => partOf(topic) === part)
+      .map((topic) => {
         const qs = questions.filter((q) => q.topic === topic && isVisible(q, answers));
         if (qs.length === 0) return null;
         return (
           <section key={topic} className={cardClass + " space-y-4 p-5"}>
-            <h3 className="text-sm font-semibold text-ink">{topic}</h3>
+            <h4 className="text-sm font-semibold text-ink">{topic}</h4>
             {qs.map((q) => (
               <QuestionField
                 key={q.key}
@@ -162,61 +280,120 @@ export default function Profile() {
             ))}
           </section>
         );
-      })}
+      });
+  }
 
-      <OtherAnswers
-        answers={carried}
-        dropped={dropped}
-        onChange={(key, value) => {
-          setSaved(false);
-          setCarried((all) => all.map((a) => (a.question_key === key ? { ...a, answer: value } : a)));
-        }}
-        onDelete={(key) => {
-          setSaved(false);
-          const gone = carried.find((a) => a.question_key === key);
-          setCarried((all) => all.filter((a) => a.question_key !== key));
-          if (gone) setDropped((all) => [...all, gone]);
-        }}
-        onRestore={(key) => {
-          const back = dropped.find((a) => a.question_key === key);
-          setDropped((all) => all.filter((a) => a.question_key !== key));
-          if (back) setCarried((all) => [...all, back]);
-        }}
-      />
+  function heading(index: number) {
+    const part = PARTS[index];
+    return (
+      <div className="space-y-1">
+        <p className={statLabelClass}>
+          Part {index + 1} of {PARTS.length}
+        </p>
+        <h3 className="font-display text-2xl leading-tight text-ink">{part.title}</h3>
+        <p className="max-w-[68ch] text-sm text-ink-soft">{part.hint}</p>
+      </div>
+    );
+  }
 
-      <TaxSection
-        known={tax?.known_countries ?? []}
-        country={taxCountry}
-        capitalGains={cgRate}
-        dividends={divRate}
-        onChange={(field, value) => {
-          setSaved(false);
-          if (field === "country") setTaxCountry(value);
-          else if (field === "cg") setCgRate(value);
-          else setDivRate(value);
-        }}
-        onUseDefault={(d) => {
-          setSaved(false);
-          setCgRate(d.capital_gains_rate.toString());
-          setDivRate(d.dividend_withholding_rate.toString());
-        }}
-      />
+  // Each part's place, and room above every field the cursor lands on, so
+  // neither hides under the strip.
+  const partClass =
+    "scroll-mt-28 space-y-6 [&_button]:scroll-mt-32 [&_input]:scroll-mt-32 [&_select]:scroll-mt-32 [&_textarea]:scroll-mt-32";
 
-      <BaseCurrencySection
-        current={base?.base_currency ?? ""}
-        available={base?.available ?? []}
-        picked={pickedBase}
-        onPick={(code) => {
-          setSaved(false);
-          setPickedBase(code);
-        }}
-      />
+  return (
+    <div className="space-y-6">
+      <div className="space-y-1">
+        <h2 className="font-display text-2xl leading-tight text-ink">Your profile</h2>
+        <p className="max-w-[68ch] text-sm text-ink-soft">
+          Who you are and what you want, in three parts. Every question is optional, and nothing
+          is kept until you press Save profile.
+        </p>
+        <p className="max-w-[76ch] text-xs text-ink-faint">
+          Saved on your machine; sent to the AI model through OpenRouter when you run an
+          analysis or ask the chat.
+        </p>
+      </div>
 
-      <div className="flex items-center gap-3">
-        <button onClick={save} disabled={saving} className={btnClass}>
-          {saving ? "Saving…" : "Save profile"}
-        </button>
-        {saved && <span className="text-sm text-up">Saved ✓</span>}
+      {error && <p className="text-down">{error}</p>}
+
+      <div className="space-y-10">
+        <PathStrip
+          stripRef={stripRef}
+          parts={PARTS.map((p) => ({
+            key: p.key,
+            title: p.title,
+            status: partStatus(p.key, questions, answers, goalDrafts.counted(goals)),
+          }))}
+          current={current}
+          onGo={go}
+          unsaved={unsavedWords(waits)}
+          saved={saved}
+          saving={saving}
+          onSave={save}
+          said={said}
+        />
+
+        <section ref={(el) => { partRefs.current[0] = el; }} className={partClass}>
+          {heading(0)}
+          {topicCards("situation")}
+          <TaxSection
+            known={tax?.known_countries ?? []}
+            country={taxCountry}
+            capitalGains={cgRate}
+            dividends={divRate}
+            onChange={(field, value) => {
+              if (field === "country") setTaxCountry(value);
+              else if (field === "cg") setCgRate(value);
+              else setDivRate(value);
+            }}
+            onUseDefault={(d) => {
+              setCgRate(d.capital_gains_rate.toString());
+              setDivRate(d.dividend_withholding_rate.toString());
+            }}
+          />
+          <BaseCurrencySection
+            current={base?.base_currency ?? ""}
+            available={base?.available ?? []}
+            picked={pickedBase}
+            onPick={setPickedBase}
+          />
+        </section>
+
+        <section ref={(el) => { partRefs.current[1] = el; }} className={partClass}>
+          {heading(1)}
+          {topicCards("words")}
+          <OtherAnswers
+            answers={carried}
+            dropped={dropped}
+            onChange={(key, value) => {
+              setCarried((all) => all.map((a) => (a.question_key === key ? { ...a, answer: value } : a)));
+            }}
+            onDelete={(key) => {
+              const gone = carried.find((a) => a.question_key === key);
+              setCarried((all) => all.filter((a) => a.question_key !== key));
+              if (gone) setDropped((all) => [...all, gone]);
+            }}
+            onRestore={(key) => {
+              const back = dropped.find((a) => a.question_key === key);
+              setDropped((all) => all.filter((a) => a.question_key !== key));
+              if (back) setCarried((all) => [...all, back]);
+            }}
+          />
+        </section>
+
+        <section ref={(el) => { partRefs.current[2] = el; }} className={partClass}>
+          {heading(2)}
+          <Goals
+            drafts={goals}
+            base={pickedBase}
+            emptyText="No goals yet."
+            onAdd={(g) => setGoals((all) => goalDrafts.add(all, g))}
+            onChange={(ref, g) => setGoals((all) => goalDrafts.changeRef(all, ref, g))}
+            onRemove={(at) => setGoals((all) => goalDrafts.remove(all, at))}
+            onKeep={(at) => setGoals((all) => goalDrafts.keep(all, at))}
+          />
+        </section>
       </div>
     </div>
   );
@@ -246,7 +423,7 @@ function OtherAnswers({
   return (
     <section className={cardClass + " space-y-4 p-5"}>
       <div>
-        <h3 className="text-sm font-semibold text-ink">Other answers</h3>
+        <h4 className="text-sm font-semibold text-ink">Other answers</h4>
         <p className="mt-1 text-sm text-ink-soft">
           Answers to questions this form does not ask, recorded in the chat. The chat and
           the analyses read them like the rest: change one or delete it here, then save.
@@ -321,7 +498,7 @@ function BaseCurrencySection({
 }) {
   return (
     <section className={cardClass + " space-y-3 p-5"}>
-      <h3 className="text-sm font-semibold text-ink">Base currency</h3>
+      <h4 className="text-sm font-semibold text-ink">Base currency</h4>
       <p className="text-sm text-ink-soft">
         Every total is shown in this currency: your net worth, its history, every
         converted figure. Changing it moves all of them, the history included:
@@ -400,7 +577,7 @@ function TaxSection({
   return (
     <section className={cardClass + " space-y-4 p-5"}>
       <div>
-        <h3 className="text-sm font-semibold text-ink">Tax</h3>
+        <h4 className="text-sm font-semibold text-ink">Tax</h4>
         <p className="mt-1 text-sm text-ink-soft">
           Your own rates, used for an estimate shown beside your portfolio
           figures. Aurelio never puts a tax inside a total: not your net worth,

@@ -1,25 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import {
-  computeRequiredReturn,
-  createGoal,
-  deleteGoal,
-  getGoals,
-  updateGoal,
-  type Goal,
-  type RequiredReturnResult,
-} from "../api/goals";
-import { getBaseCurrency } from "../api/baseCurrency";
-import {
-  Row,
-  RowsOrEmpty,
-  Section,
-  apiError,
-  btnClass,
-  inputClass,
-  money,
-  CURRENCY_LIST,
-} from "./ui";
+import { computeRequiredReturn, type GoalCreate, type RequiredReturnResult } from "../api/goals";
+import { Row, btnClass, cardClass, inputClass, money, CURRENCY_LIST } from "./ui";
 import { goal, marks, refusal } from "./required";
+import { goalBody, shownAs, type GoalDraft } from "./goalDrafts";
 
 const GOAL_TYPES: { value: string; label: string }[] = [
   { value: "protect_inflation", label: "Protect from inflation" },
@@ -30,49 +13,53 @@ const GOAL_TYPES: { value: string; label: string }[] = [
   { value: "other", label: "Something else (describe it)" },
 ];
 
-function typeLabel(value: string | null): string | null {
-  return GOAL_TYPES.find((t) => t.value === value)?.label ?? value;
+function typeLabel(value: string | null | undefined): string | null {
+  return GOAL_TYPES.find((t) => t.value === value)?.label ?? value ?? null;
 }
 
-export default function Goals() {
-  const [items, setItems] = useState<Goal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/* The path's third part: the goals, held with the rest of the profile until
+   "Save profile" (brief BC, `goalDrafts.ts`). The form adds a goal to the
+   list or changes one; a row the save has still to write says "not saved",
+   and a deleted one waits under the list with a way back, as the other
+   answers do. The Profile holds the list and writes it; this part holds the
+   form.
 
-  const [editId, setEditId] = useState<number | null>(null);
+   A new goal's currency is proposed from the base currency picked in the
+   first part, as shown there: it used to be the base read when this block
+   loaded, so a base changed and saved on the same page left the goal
+   proposing the old one until a reload (measured, brief BC). What the reader
+   types in the box wins, and an edited goal keeps its own. */
+export default function Goals({
+  drafts,
+  base,
+  onAdd,
+  onChange,
+  onRemove,
+  onKeep,
+  emptyText,
+}: {
+  drafts: GoalDraft[];
+  /** The base currency picked in the first part. */
+  base: string;
+  onAdd: (now: GoalCreate) => void;
+  /** The goal `ref` names changed: a ref, not a place in the list, which a
+      save made while the form is open can reorder. */
+  onChange: (ref: string, now: GoalCreate) => void;
+  onRemove: (at: number) => void;
+  onKeep: (at: number) => void;
+  emptyText: string;
+}) {
+  const [editRef, setEditRef] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [type, setType] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
   const [targetDate, setTargetDate] = useState("");
   const [currentAmount, setCurrentAmount] = useState("");
   const [monthly, setMonthly] = useState("");
-  /* A goal belongs to no account: its currency is proposed from the base the
-     reader chose, and what they type in the box wins. An edited goal keeps its
-     own. */
-  const [base, setBase] = useState("");
   const [currencyChoice, setCurrencyChoice] = useState<string | null>(null);
   const currency = currencyChoice ?? base;
-  const [submitting, setSubmitting] = useState(false);
-
+  const [error, setError] = useState<string | null>(null);
   const [rr, setRr] = useState<RequiredReturnResult | null>(null);
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const [goals, b] = await Promise.all([getGoals(), getBaseCurrency()]);
-      setItems(goals);
-      setBase(b.base_currency);
-    } catch (err) {
-      setError(apiError(err, "Could not reach the backend. Is it running on :8000?"));
-    } finally {
-      setLoading(false);
-    }
-  }
 
   useEffect(() => {
     if (type !== "target_amount" || !targetAmount || !targetDate) {
@@ -96,7 +83,7 @@ export default function Goals() {
   const isTarget = type === "target_amount";
 
   function reset() {
-    setEditId(null);
+    setEditRef(null);
     setName("");
     setType("");
     setTargetAmount("");
@@ -104,10 +91,13 @@ export default function Goals() {
     setCurrentAmount("");
     setMonthly("");
     setCurrencyChoice(null);
+    setError(null);
   }
 
-  function startEdit(g: Goal) {
-    setEditId(g.id);
+  function startEdit(at: number) {
+    const g = shownAs(drafts[at]);
+    setEditRef(drafts[at].ref);
+    setError(null);
     setName(g.name);
     setType(g.type ?? "");
     setTargetAmount(g.target_amount != null ? String(g.target_amount) : "");
@@ -117,64 +107,36 @@ export default function Goals() {
     setCurrencyChoice(g.currency);
   }
 
-  async function submit(e: FormEvent) {
+  function submit(e: FormEvent) {
     e.preventDefault();
     // The dropdown carries the meaning; a free label like "get rich" adds
-    // nothing, so it is optional — except for "other", where it IS the goal.
+    // nothing, so it is optional, except for "other", where it IS the goal.
     const refused = refusal(goal(type), { type, name, currency });
     if (refused) {
       setError(refused);
       return;
     }
-    setSubmitting(true);
-    setError(null);
-    const payload = {
-      name: name.trim() || (typeLabel(type) ?? type),
-      type,
-      currency: currency.trim(),
-      target_amount: isTarget && targetAmount ? Number(targetAmount) : null,
-      target_date: isTarget && targetDate ? targetDate : null,
-      current_amount: isTarget && currentAmount ? Number(currentAmount) : null,
-      monthly_contribution: isTarget && monthly ? Number(monthly) : null,
-    };
-    try {
-      if (editId != null) await updateGoal(editId, payload);
-      else await createGoal(payload);
-      reset();
-      await load();
-    } catch (err) {
-      setError(apiError(err, "Save failed."));
-    } finally {
-      setSubmitting(false);
-    }
+    const now = goalBody(
+      { name, type, currency, targetAmount, targetDate, currentAmount, monthly },
+      typeLabel(type),
+    );
+    if (editRef != null) onChange(editRef, now);
+    else onAdd(now);
+    reset();
   }
 
-  async function remove(g: Goal) {
-    if (!window.confirm(`Delete goal "${g.name}"?`)) return;
-    setError(null);
-    try {
-      await deleteGoal(g.id);
-      if (editId === g.id) reset();
-      await load();
-    } catch (err) {
-      setError(apiError(err, "Delete failed."));
-    }
-  }
-
-  function goalSubtitle(g: Goal): string | undefined {
+  function goalSubtitle(g: GoalCreate): string | undefined {
     if (g.type === "target_amount" && g.target_amount && g.target_date) {
       return `target ${money(g.currency).format(g.target_amount)} by ${g.target_date}`;
     }
     return undefined;
   }
 
-  if (loading) return <p className="text-ink-soft">Loading…</p>;
+  const listed = drafts.map((d, at) => ({ d, at })).filter(({ d }) => d.kind !== "deleted");
+  const deleted = drafts.map((d, at) => ({ d, at })).filter(({ d }) => d.kind === "deleted");
 
   return (
-    <Section
-      title="Goals"
-      hint="Pick a safe goal type, or set a concrete target (amount + date) to see the annual return it would require."
-    >
+    <div className="space-y-4">
       <form onSubmit={submit} className="space-y-3">
         <div className="flex flex-wrap gap-2">
           <select className={inputClass} aria-label="What the goal is for" {...marks(goal(type), "type")} value={type} onChange={(e) => setType(e.target.value)}>
@@ -214,8 +176,8 @@ export default function Goals() {
         {rr && <RequiredReturnNote rr={rr} />}
 
         <div className="flex items-center gap-2">
-          <button className={btnClass} disabled={submitting}>{submitting ? "..." : editId != null ? "Save goal" : "Add goal"}</button>
-          {editId != null && (
+          <button className={btnClass}>{editRef != null ? "Change goal" : "Add goal"}</button>
+          {editRef != null && (
             <button type="button" onClick={reset} className="rounded-sm px-3 py-2 text-sm text-ink-soft hover:text-ink">
               Cancel
             </button>
@@ -225,26 +187,55 @@ export default function Goals() {
 
       {error && <p className="text-down">{error}</p>}
 
-      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText="No goals yet.">
-        {items.map((g) => (
-          <Row
-            key={g.id}
-            onEdit={() => startEdit(g)}
-            onDelete={() => remove(g)}
-            // The goal's own name says what the row is, so it is the title,
-            // which wraps and is never cut; the kind of goal goes under it. At
-            // 390 a name kept in the attributes line was cut ("A sabbatical
-            // year walking the Camino", 171 of 197px; brief AU).
-            title={g.name}
-            subtitle={[g.name !== typeLabel(g.type) ? typeLabel(g.type) : null, goalSubtitle(g)]
-              .filter(Boolean)
-              .join(" · ") || undefined}
-            note={g.notes}
-            value={g.type === "target_amount" && g.target_amount ? money(g.currency).format(g.target_amount) : undefined}
-          />
-        ))}
-      </RowsOrEmpty>
-    </Section>
+      {listed.length === 0 ? (
+        <p className="text-ink-soft">{emptyText}</p>
+      ) : (
+        <ul className={cardClass + " divide-y divide-hair overflow-hidden"}>
+          {listed.map(({ d, at }) => {
+            const g = shownAs(d);
+            return (
+              <Row
+                key={d.ref}
+                onEdit={() => startEdit(at)}
+                onDelete={() => {
+                  if (editRef === d.ref) reset();
+                  onRemove(at);
+                }}
+                // The goal's own name says what the row is, so it is the title,
+                // which wraps and is never cut; the kind of goal goes under it. At
+                // 390 a name kept in the attributes line was cut ("A sabbatical
+                // year walking the Camino", 171 of 197px; brief AU).
+                title={g.name}
+                subtitle={[g.name !== typeLabel(g.type) ? typeLabel(g.type) : null, goalSubtitle(g)]
+                  .filter(Boolean)
+                  .join(" · ") || undefined}
+                badge={d.kind === "kept" ? undefined : "not saved"}
+                detail={d.kind !== "kept" && d.error ? `Refused at the last save: ${d.error}` : undefined}
+                note={d.kind === "kept" || d.kind === "changed" ? d.goal.notes : undefined}
+                value={g.type === "target_amount" && g.target_amount ? money(g.currency).format(g.target_amount) : undefined}
+              />
+            );
+          })}
+        </ul>
+      )}
+
+      {deleted.length > 0 && (
+        <div className="text-xs text-warn">
+          <p id="goals-deleted">Deleted when you save:</p>
+          <ul aria-labelledby="goals-deleted" className="mt-1 space-y-1">
+            {deleted.map(({ d, at }) => (
+              <li key={d.ref}>
+                {shownAs(d).name}{" "}
+                <button type="button" onClick={() => onKeep(at)} className="text-olive underline-offset-2 hover:underline">
+                  Keep it
+                </button>
+                {d.kind === "deleted" && d.error && <span className="block text-down">Refused at the last save: {d.error}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
