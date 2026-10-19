@@ -50,6 +50,7 @@ import {
   todayISO,
   CURRENCY_LIST,
 } from "./ui";
+import { EMPTY_LINES } from "./emptyStates";
 import { useListEditor, type Draft } from "./listEditor";
 import { arrivalWasStated, sameSum } from "./statedAmount";
 import { rateLine } from "./rateSource";
@@ -518,7 +519,7 @@ const INCOME: CashFlowSpec<IncomeSource, IncomeSourceCreate> = {
   title: "Income",
   hint: "Institution = where it's credited (its cash).",
   needs: INCOME_NEEDS,
-  emptyText: "No income yet.",
+  emptyText: EMPTY_LINES.income,
   noun: "income",
   tagField: "kind",
   tagOptions: KINDS,
@@ -535,7 +536,7 @@ const EXPENSE: CashFlowSpec<Expense, ExpenseCreate> = {
   title: "Expenses",
   hint: "Institution = where it's paid from (its cash).",
   needs: EXPENSE_NEEDS,
-  emptyText: "No expenses yet.",
+  emptyText: EMPTY_LINES.expenses,
   noun: "expense",
   tagField: "nature",
   tagOptions: NATURES,
@@ -729,7 +730,7 @@ function TransferSection({
         )}
       </form>
       {error && <p className="text-down">{error}</p>}
-      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText="No transfers yet.">
+      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText={EMPTY_LINES.transfers}>
         {items.map((t) => (
           <Row
             key={t.id}
@@ -1263,7 +1264,7 @@ function PlanSection({
           instead of adding to yours.
         </p>
       )}
-      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText="No PACs yet.">
+      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText={EMPTY_LINES.pac}>
         {items.map((p) => (
           <Row
             key={p.id}

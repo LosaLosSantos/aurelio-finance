@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { btnClass } from "./ui";
 
 /* The identity marks, drawn rather than imported: an SVG here has no licence
    attached, scales without a second asset, and inherits the ink colour.
@@ -58,13 +59,27 @@ export function Mark({
 
 /* An empty page is the one place an illustration takes nothing from anyone —
    and the place a first-time user most needs a sentence telling them what to
-   do next. */
-export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
+   do next. The step itself is one press away when the page names one
+   (`action`): it goes where the step is taken (brief BC). */
+export function EmptyState({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: { label: string; onClick: () => void };
+}) {
   return (
     <div className="flex flex-col items-center gap-1.5 py-12 text-center">
       <Mark size={68} className="mb-1 text-olive opacity-40" />
       <p className="font-display text-xl leading-tight text-ink">{title}</p>
       <p className="max-w-[48ch] text-sm text-ink-soft">{children}</p>
+      {action && (
+        <button type="button" onClick={action.onClick} className={btnClass + " mt-3"}>
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

@@ -79,6 +79,7 @@ import { costCovers, holdingPayload, offers, shows, unitsBelowCost } from "./sit
 import { prefillWords } from "./prefillNote";
 import { heldFigures } from "./heldTotal";
 import { UnconvertedNotice } from "./UnconvertedNotice";
+import { EMPTY_LINES } from "./emptyStates";
 
 // The occasional, destructive twin of a primary action: same size, same
 // shape, warning colour. `btnClass` is for the action you take every time;
@@ -106,12 +107,18 @@ const asSentence = (s: string) => (s.endsWith(".") ? s : s + ".");
    climbs to its account, an account that is gone to the list. */
 export default function Wealth({
   go,
+  focus,
+  onFocused,
   institution,
   onInstitution,
   snapshot,
   onSnapshot,
 }: {
   go: (f: Focus) => void;
+  /** "institutions" when the reader pressed an empty page's "Add a bank or
+      broker": the list's name box takes the cursor. */
+  focus: Focus | null;
+  onFocused: () => void;
   institution: Institution | null;
   onInstitution: (i: Institution | null) => void;
   snapshot: Snapshot | null;
@@ -173,7 +180,13 @@ export default function Wealth({
   return (
     <div className="space-y-5">
       <Breadcrumb items={crumbs} />
-      {!institution && <InstitutionsLevel onSelect={onInstitution} />}
+      {!institution && (
+        <InstitutionsLevel
+          onSelect={onInstitution}
+          focusName={focus === "institutions"}
+          onFocused={onFocused}
+        />
+      )}
       {institution && !snapshot && (
         <InstitutionLevel institution={institution} onSelect={onSnapshot} go={go} />
       )}
@@ -182,7 +195,23 @@ export default function Wealth({
   );
 }
 
-function InstitutionsLevel({ onSelect }: { onSelect: (i: Institution) => void }) {
+function InstitutionsLevel({
+  onSelect,
+  focusName,
+  onFocused,
+}: {
+  onSelect: (i: Institution) => void;
+  /** Arrived from an empty page's "Add a bank or broker": the cursor goes to
+      the name, where that first step is taken (brief BC). */
+  focusName: boolean;
+  onFocused: () => void;
+}) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!focusName) return;
+    nameRef.current?.focus();
+    onFocused();
+  }, [focusName, onFocused]);
   const [items, setItems] = useState<Institution[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -260,13 +289,13 @@ function InstitutionsLevel({ onSelect }: { onSelect: (i: Institution) => void })
   return (
     <Section title="Institutions">
       <form onSubmit={submit} className="flex flex-wrap gap-2">
-        <input className={inputClass} aria-label="Name of the bank or broker" {...marks(INSTITUTION, "name")} value={name} onChange={(e) => setName(e.target.value)} />
+        <input ref={nameRef} className={inputClass} aria-label="Name of the bank or broker" {...marks(INSTITUTION, "name")} value={name} onChange={(e) => setName(e.target.value)} />
         <input className={inputClass} placeholder="Type (e.g. bank)" aria-label="Type" value={type} onChange={(e) => setType(e.target.value)} />
         <button className={btnClass} disabled={submitting}>{submitting ? "..." : editId != null ? "Save" : "Add"}</button>
         {editId != null && <CancelButton onClick={reset} />}
       </form>
       {formError && <p className="text-down">{formError}</p>}
-      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText="No institutions yet.">
+      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText={EMPTY_LINES.institutions}>
         {items.map((it) => (
           <Row
             key={it.id}
@@ -443,12 +472,9 @@ function CashRegister({
           parts={[{ items: position.unconverted ?? [], labels: { projected: "this account's cash" } }]}
         />
       )}
-      {position && !position.anchor_date && anchors.length === 0 && (
-        <p className="text-xs text-warn">
-          No anchor yet. Add the actual cash you held at a date below. Linked salaries, costs and
-          transfers after that date are then projected automatically.
-        </p>
-      )}
+      {/* No balance at all is said once, under the form, where the list of
+          balances would be (`EMPTY_LINES.cash`); it used to be said twice
+          (brief BC). */}
       {position && !position.anchor_date && anchors.length > 0 && (
         <p className="text-xs text-warn">
           Your earliest anchor is dated {anchors[0].date}, which is in the future, so cash will start
@@ -496,7 +522,7 @@ function CashRegister({
         needs={CASH_ANCHOR}
         amountWidth="w-32"
         addLabel="Add anchor"
-        emptyText="No anchors yet."
+        emptyText={EMPTY_LINES.cash}
       />
     </Section>
   );
@@ -853,7 +879,7 @@ They will be reported as unaccounted for, not removed in silence.
           }))}
         />
       )}
-      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText="No situations yet.">
+      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText={EMPTY_LINES.situations}>
         {items.map((s) => (
           <Row key={s.id} onClick={() => onSelect(s)} onDelete={() => remove(s)} title={s.date} note={s.note} value={money(s.base_currency).format(s.value_base)} />
         ))}
@@ -966,6 +992,8 @@ function SituationDetail({ snapshot }: { snapshot: Snapshot }) {
             onChanged={load}
           />
         ))}
+      {/* A situation with nothing in it said nothing at all (brief BC). */}
+      {holdings.length === 0 && <p className="text-ink-soft">{EMPTY_LINES.situation}</p>}
     </div>
   );
 }

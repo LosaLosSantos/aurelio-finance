@@ -27,6 +27,7 @@ import {
 } from "../api/institutions";
 import { getAllCashAnchors, getCashPositions, type CashAnchor, type CashPosition } from "../api/cash";
 import { EmptyState } from "./Emblem";
+import { EMPTY_LINES, EMPTY_PANELS } from "./emptyStates";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { PaidRecoveryNotice } from "./PaidRecoveryNotice";
 import { acrossCurrencies as isAcross, debitOnEdit, derivedAmount } from "./statedAmount";
@@ -284,7 +285,11 @@ function staleNote(r: PortfolioData["rows"][number]): string | null {
 export default function Portfolio({
   focus,
   onFocused,
+  onStart,
 }: {
+  /** Where the first step is taken when nothing is invested: Records →
+      Wealth, its list of banks and brokers. */
+  onStart: () => void;
   /** "ledger" when the reader pressed "− buys" or "+ sells/dividends" on an
       account page. Both terms come from the same list, so both land in the
       same place — which is the honest answer: the ledger does not keep buys
@@ -536,9 +541,11 @@ export default function Portfolio({
       />
 
       {data.rows.length === 0 ? (
-        <EmptyState title="Nothing invested yet">
-          Add an institution in Records → Wealth, then a dated situation and the holdings it
-          contains. Give each one a ticker and this table fills in on its own.
+        <EmptyState
+          title={EMPTY_PANELS.portfolio.title}
+          action={{ label: EMPTY_PANELS.portfolio.action, onClick: onStart }}
+        >
+          {EMPTY_PANELS.portfolio.text}
         </EmptyState>
       ) : (
         // Dense view: the ruled-ledger treatment — alternating row tint,
@@ -687,6 +694,9 @@ export default function Portfolio({
         </div>
       )}
 
+      {/* The table's columns, read with the table: on an empty portfolio
+          there are none to read (brief BC). */}
+      {data.rows.length > 0 && (
       <p className="max-w-[80ch] text-xs text-ink-faint">
         <em>Recorded</em> is what a position cost: the purchase price where you entered one,
         otherwise the value your last situation recorded (and then <em>Avg cost</em> says
@@ -700,6 +710,7 @@ export default function Portfolio({
         not colour it green. Refreshing a price no longer overwrites a situation (that used to
         force P/L to zero): to record today's values, record a new situation.
       </p>
+      )}
     </Section>
 
     {/* Reading before bookkeeping: positions, then what is really inside them,
@@ -897,6 +908,13 @@ function LookThroughSection() {
         text: "What is really inside your funds: countries, sectors, and the issuers you hold through more than one of them.",
       }}
     >
+      {/* Nothing held, nothing to look inside: one line says what this
+          section is for and where its first step is taken, in place of a 0%
+          bar and two lists, one of which said "Everything is covered." of an
+          empty portfolio (brief BC). */}
+      {data && data.rows.length === 0 ? (
+        <p className="text-ink-soft">{EMPTY_LINES.lookThrough}</p>
+      ) : (
       <div className="flex flex-wrap items-center gap-3">
         <button onClick={() => load(true)} disabled={loading} className={btnClass}>
           {loading ? "Fetching…" : "↻ Update composition"}
@@ -911,6 +929,7 @@ function LookThroughSection() {
           </span>
         )}
       </div>
+      )}
       {/* Every weight below is a share of what the look-through weighs, so a
           code counted there as written moves them all (brief BA). */}
       {data && (
@@ -927,7 +946,7 @@ function LookThroughSection() {
       {error && <p className="text-down">{error}</p>}
       {loading && !data && <p className="text-ink-soft">Loading composition…</p>}
 
-      {data && (
+      {data && data.rows.length > 0 && (
         <>
           {/* Coverage first: every percentage below is a share of the WHOLE
               portfolio, so the reader must see how much of it was decomposed
@@ -1848,7 +1867,7 @@ function BuysSection({
       {pickNote && <p className="mb-2 text-xs text-olive">{pickNote}</p>}
       {error && <p className="text-down">{error}</p>}
       {priceNote && <p className="text-xs text-up">{priceNote}</p>}
-      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText="No transactions yet. Add one, or let PACs and dividends auto-record at app start.">
+      <RowsOrEmpty loading={false} error={null} empty={items.length === 0} emptyText={EMPTY_LINES.ledger}>
         {items.map((t) => (
           <Row
             key={t.id}

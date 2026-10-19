@@ -26,6 +26,7 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { CancelButton } from "./ui";
+import { EMPTY_LINES } from "./emptyStates";
 import { getBaseCurrency } from "../api/baseCurrency";
 import { DatedAmountEditor } from "./DatedAmountEditor";
 import { useReopened } from "./reopen";
@@ -209,7 +210,7 @@ function DebtsLevel({ onSelect }: { onSelect: (l: Liability) => void }) {
         {editId != null && <CancelButton onClick={reset} />}
       </form>
       {formError && <p className="text-down">{formError}</p>}
-      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText="No debts, lucky you.">
+      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText={EMPTY_LINES.debts}>
         {items.map((l) => (
           <Row
             key={l.id}
@@ -272,7 +273,7 @@ function BalancesLevel({ liability }: { liability: Liability }) {
         noun="balance"
         amountLabel="Remaining"
         needs={BALANCE}
-        emptyText="No balances yet."
+        emptyText={EMPTY_LINES.balances}
       />
     </Section>
   );

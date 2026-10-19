@@ -26,6 +26,7 @@ import {
   CURRENCY_LIST,
 } from "./ui";
 import { CancelButton } from "./ui";
+import { EMPTY_LINES } from "./emptyStates";
 import { sameCurrency, withinCurrency } from "./money";
 import { getBaseCurrency } from "../api/baseCurrency";
 import { DatedAmountEditor } from "./DatedAmountEditor";
@@ -168,7 +169,7 @@ function AssetsLevel({ onSelect }: { onSelect: (a: RealAsset) => void }) {
         {editId != null && <CancelButton onClick={reset} />}
       </form>
       {formError && <p className="text-down">{formError}</p>}
-      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText="No real assets yet.">
+      <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText={EMPTY_LINES.realAssets}>
         {items.map((a) => (
           <Row key={a.id} onClick={() => onSelect(a)} onEdit={() => startEdit(a)} note={a.notes} onDelete={() => remove(a)} title={a.name} badge={a.category} subtitle={a.currency} />
         ))}
@@ -255,7 +256,7 @@ function ValuationsLevel({ asset }: { asset: RealAsset }) {
         noun="valuation"
         amountLabel="Value"
         needs={VALUATION}
-        emptyText="No valuations yet."
+        emptyText={EMPTY_LINES.valuations}
       />
     </Section>
   );

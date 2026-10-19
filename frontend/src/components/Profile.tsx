@@ -20,6 +20,7 @@ import { choiceClass } from "./choice";
 import { PARTS, currentPart, partOf, partStatus, unsavedWords, waitingTotal, type PartKey, type Waiting } from "./profilePath";
 import { asSent, baseConflict, laidOver, pageFrom, refusalWords, saveProfile, taxToSend, waiting } from "./profileSave";
 import * as goalDrafts from "./goalDrafts";
+import { EMPTY_LINES } from "./emptyStates";
 import Goals from "./Goals";
 import PathStrip from "./PathStrip";
 import { apiError, cardClass, inputClass, statLabelClass } from "./ui";
@@ -387,7 +388,7 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
           <Goals
             drafts={goals}
             base={pickedBase}
-            emptyText="No goals yet."
+            emptyText={EMPTY_LINES.goals}
             onAdd={(g) => setGoals((all) => goalDrafts.add(all, g))}
             onChange={(ref, g) => setGoals((all) => goalDrafts.changeRef(all, ref, g))}
             onRemove={(at) => setGoals((all) => goalDrafts.remove(all, at))}

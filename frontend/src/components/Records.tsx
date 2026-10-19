@@ -103,6 +103,8 @@ export default function Records({
       {current.key === "wealth" && (
         <Wealth
           go={go}
+          focus={focus === "institutions" ? focus : null}
+          onFocused={onFocused}
           institution={account}
           onInstitution={onAccount}
           snapshot={situation}
@@ -113,7 +115,7 @@ export default function Records({
       {current.key === "debts" && <Debts liability={debt} onLiability={onDebt} />}
       {current.key === "cash" && (
         <CashFlow
-          focus={focus}
+          focus={focus === "institutions" ? null : focus}
           onFocused={onFocused}
           onOpenAccount={(i) => {
             // The account's own page, not one of its situations: the one to

@@ -19,6 +19,7 @@ import {
 } from "../api/dashboard";
 import { getCashFlowSummary, type CashFlowSummary } from "../api/cashflow";
 import { EmptyState } from "./Emblem";
+import { EMPTY_LINES, EMPTY_PANELS } from "./emptyStates";
 import { IN_FORCE, notCounted, undatedLine } from "./inForce";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { UnconvertedNotice } from "./UnconvertedNotice";
@@ -231,7 +232,7 @@ function Meter({ ratio }: { ratio: number | null }) {
     return (
       <div className="space-y-1.5">
         {name}
-        <p className="text-sm text-ink-soft">Not enough data yet.</p>
+        <p className="text-sm text-ink-soft">{EMPTY_LINES.savingsRate}</p>
       </div>
     );
   const clamped = Math.max(0, Math.min(ratio, 1));
@@ -262,7 +263,7 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export default function Dashboard() {
+export default function Dashboard({ onStart }: { onStart: () => void }) {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [allocation, setAllocation] = useState<DashboardAllocation | null>(null);
   const [series, setSeries] = useState<NetWorthPoint[]>([]);
@@ -397,9 +398,11 @@ export default function Dashboard() {
       />
 
       {!hasData && (
-        <EmptyState title="Nothing to show yet">
-          Start in Records → Wealth with an institution and a dated situation. The charts on
-          this page are drawn from what you record there, and from nothing else.
+        <EmptyState
+          title={EMPTY_PANELS.dashboard.title}
+          action={{ label: EMPTY_PANELS.dashboard.action, onClick: onStart }}
+        >
+          {EMPTY_PANELS.dashboard.text}
         </EmptyState>
       )}
 

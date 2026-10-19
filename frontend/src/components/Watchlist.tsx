@@ -4,6 +4,7 @@ import {
   getWatchlist,
   type WatchlistItem,
 } from "../api/watchlist";
+import { EMPTY_LINES } from "./emptyStates";
 import { RowsOrEmpty, Section, apiError, locale } from "./ui";
 import { identityOf, sizedAs } from "./watchItem";
 
@@ -153,7 +154,7 @@ export default function Watchlist({ onBuy }: { onBuy: (item: WatchlistItem) => v
         loading={loading}
         error={error}
         empty={items.length === 0}
-        emptyText="Nothing on the watchlist. Ask the chat what you might look at, and what it suggests lands here with its reasoning."
+        emptyText={EMPTY_LINES.watchlist}
       >
         {items.map((i) => (
           <Item

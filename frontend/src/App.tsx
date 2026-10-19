@@ -330,6 +330,12 @@ export default function App() {
     setReading(null);
     if (f === "ledger") {
       setTab("portfolio");
+    } else if (f === "institutions") {
+      // The list of banks and brokers, not an account left open there.
+      setTab("records");
+      setRecordsPage("wealth");
+      setSituation(null);
+      setAccount(null);
     } else {
       setTab("records");
       setRecordsPage("cash");
@@ -480,11 +486,12 @@ export default function App() {
             />
           ) : (
             <>
-              {tab === "dashboard" && <Dashboard />}
+              {tab === "dashboard" && <Dashboard onStart={() => go("institutions")} />}
               {tab === "portfolio" && (
                 <Portfolio
                   focus={focus === "ledger" ? "ledger" : null}
                   onFocused={() => setFocus(null)}
+                  onStart={() => go("institutions")}
                 />
               )}
               {tab === "records" && (
