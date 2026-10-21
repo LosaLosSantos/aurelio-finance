@@ -115,15 +115,22 @@ def test_a_new_database_is_built_with_no_copy(tmp_path, start_on):
 
 
 def test_a_revision_this_code_does_not_have_is_refused_before_any_copy(one_migration_behind):
-    # A file migrated by a newer version of the app, then started by an older one.
+    # A file migrated by a newer version of the app, then started by an older
+    # one. Said in one sentence since brief BE: at c61e5bc it was Alembic's
+    # CommandError, 156 lines of console under start.ps1.
     db = one_migration_behind
     with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute("UPDATE alembic_version SET version_num = 'ffffffffffff'")
     md5 = _md5(db)
 
-    with pytest.raises(Exception, match="ffffffffffff"):
+    with pytest.raises(database.StartRefused) as refused:
         database.init_db()
 
+    assert str(refused.value) == (
+        "Aurelio did not start, and data.db was not changed: it was migrated by another "
+        "version of Aurelio, most likely a newer one, to revision ffffffffffff, which this "
+        "version does not know. Update Aurelio (git pull), then start it again."
+    )
     assert _beside(db) == []
     assert _md5(db) == md5
 

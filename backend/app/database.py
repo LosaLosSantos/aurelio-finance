@@ -8,6 +8,7 @@ bypass migrations and build the schema straight from the models
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -314,7 +315,82 @@ def _dump(path: Path) -> list[str]:
         conn.close()
 
 
-def _put_back(db: Path, copy: Path, frm: str, to: str, failure: Exception) -> NoReturn:
+# What a migration leaves beside its copy while it runs: named after the copy,
+# so the `*.db.bak-*` that keeps the copy out of git keeps it out too, and
+# removed once the migration is over. Found by a start, it says the last
+# migration never ended (`_after_a_migration_that_died`).
+MIGRATING = ".migrating"
+
+
+def _mark_migrating(db: Path, copy: Path, frm: str, to: str) -> Path:
+    """Write the marker that says a migration from `copy` is running, or
+    refuse to start, with nothing changed and the copy kept."""
+    marker = copy.with_name(copy.name + MIGRATING)
+    try:
+        with open(marker, "x", encoding="utf-8") as f:
+            json.dump({"from": frm, "to": to}, f)
+    except OSError as exc:
+        raise StartRefused(
+            f"Aurelio did not start, and {db.name} was not changed. It needs a migration "
+            f"from {frm} to {to}, and the app marks a migration while it runs, so that a "
+            f"start after one that never ended can say so, but the mark {marker} could "
+            f"not be written: {_reason(exc)}. The copy {copy} is kept. Start the app "
+            "again once that folder can be written to."
+        ) from None
+    return marker
+
+
+def _after_a_migration_that_died(db: Path | None, current: tuple[str, ...]) -> None:
+    """Read the mark of a migration that never ended (`_mark_migrating`):
+    gone when the file reached that migration's revision, or is the copy
+    taken just before it, since either way it is whole; otherwise a refusal
+    that names that copy.
+
+    A process that dies while it migrates (killed, its window closed, the
+    power cut) never reaches the put-back, and the next start used to copy the
+    part-way file and migrate it. Measured at `c61e5bc` (brief BE), with the
+    death simulated on the suite's file one migration behind: the next start
+    failed on what the first had half done, said the part-way file "was put
+    back exactly as it was before" from a copy of itself, and named that copy,
+    not the one taken before the first migration."""
+    if db is None:
+        return
+    for marker in sorted(db.parent.glob(f"{db.name}.bak-*{MIGRATING}"), reverse=True):
+        copy = marker.with_name(marker.name[: -len(MIGRATING)])
+        try:
+            said = json.loads(marker.read_text(encoding="utf-8"))
+            frm, to = str(said["from"]), str(said["to"])
+        except (OSError, ValueError, KeyError, TypeError):
+            frm, to = "a revision", "another"
+        if set(current) == set(to.split("+")):
+            marker.unlink(missing_ok=True)  # it ended, and the process died after it
+            continue
+        if not copy.exists():
+            raise StartRefused(
+                f"Aurelio did not start, and {db.name} was not changed: the last start "
+                f"stopped in the middle of migrating it from {frm} to {to}, so the file may "
+                f"be part-way, and the copy taken just before, {copy}, is not there any "
+                f"more. Put a copy of {db.name} made before that start in its place, delete "
+                f"{marker}, then start the app again."
+            )
+        try:
+            whole = _dump(db) == _dump(copy)
+        except (OSError, sqlite3.Error):
+            whole = False
+        if whole:
+            marker.unlink(missing_ok=True)  # as it was before that migration
+            continue
+        raise StartRefused(
+            f"Aurelio did not start, and {db.name} was not changed: the last start "
+            f"stopped in the middle of migrating it from {frm} to {to}, so the file may "
+            f"be part-way. Put the copy taken just before that migration, {copy}, in "
+            f"place of {db.name}, then start the app again."
+        )
+
+
+def _put_back(
+    db: Path, copy: Path, frm: str, to: str, failure: Exception, marker: Path
+) -> NoReturn:
     """Undo a migration that failed, from the copy taken just before it, and
     refuse to start, saying what state the file is in.
 
@@ -360,6 +436,10 @@ def _put_back(db: Path, copy: Path, frm: str, to: str, failure: Exception) -> No
         matches, mismatch = _dump(db) == _dump(copy), "the two do not match"
     except (OSError, sqlite3.Error) as exc:
         matches, mismatch = False, f"the two could not be compared ({_reason(exc)})"
+    # A file left as it was needs no mark. One that may be part-way keeps it,
+    # so the next start refuses until the copy is in place.
+    if matches:
+        marker.unlink(missing_ok=True)
 
     if matches and not_written is None:
         found = (
@@ -397,7 +477,11 @@ def init_db() -> None:
       nothing written, no Alembic command run. That is every ordinary start,
       and the file comes out of it byte-identical.
     - A revision this code does not have (the file was migrated by a newer
-      version) is refused by Alembic before anything is copied.
+      version) is refused before anything is copied, in one sentence.
+    - A migration marks itself beside its copy while it runs. A start that
+      finds a mark refuses, naming the copy taken before that migration,
+      unless the file reached its revision or is that copy (a process that
+      died mid-migration never reached the put-back).
     - A fresh, empty database is built by the migration chain with no copy:
       there is nothing in it to lose.
     - Anything else is copied next to itself first, and migrated only once the
@@ -417,6 +501,7 @@ def init_db() -> None:
     from alembic.config import Config
     from alembic.runtime.migration import MigrationContext
     from alembic.script import ScriptDirectory
+    from alembic.util.exc import CommandError
     from sqlalchemy import inspect
 
     cfg = Config(str(BASE_DIR / "alembic.ini"))
@@ -435,13 +520,22 @@ def init_db() -> None:
     script = ScriptDirectory.from_config(cfg)
     with engine.connect() as conn:
         current = MigrationContext.configure(conn).get_current_heads()
+    db = _database_file()
+    _after_a_migration_that_died(db, current)
     heads = script.get_heads()
     if set(current) == set(heads):
         return
     for revision in current:
-        script.get_revision(revision)  # one this code does not have raises here
+        try:
+            script.get_revision(revision)
+        except CommandError:
+            raise StartRefused(
+                f"Aurelio did not start, and {db.name if db else DATABASE_URL} was not "
+                "changed: it was migrated by another version of Aurelio, most likely a "
+                f"newer one, to revision {revision}, which this version does not know. "
+                "Update Aurelio (git pull), then start it again."
+            ) from None
 
-    db = _database_file()
     frm, to = "+".join(current) or "base", "+".join(heads)
     if not tables:
         command.upgrade(cfg, "head")
@@ -449,8 +543,10 @@ def init_db() -> None:
         return
     copy = _copy_before_migrating(db, frm, to)
     _console.info("Copied %s to %s before migrating it.", db.name, copy)
+    marker = _mark_migrating(db, copy, frm, to)
     try:
         command.upgrade(cfg, "head")
     except Exception as failure:
-        _put_back(db, copy, frm, to, failure)
+        _put_back(db, copy, frm, to, failure, marker)
+    marker.unlink(missing_ok=True)
     _console.info("Migrated %s to %s.", db.name, to)

@@ -198,7 +198,9 @@ def test_a_put_back_another_program_blocks_leaves_the_file_as_the_migration_left
     assert isinstance(refused, database.StartRefused)
     # Not torn: exactly the file the failed migration left, step one applied.
     assert _dump(failing) == _dump(_chain["after_step_one"])
-    [copy] = _beside(failing)
+    # The migration's mark stays while the file may be part-way (brief BE).
+    [copy, mark] = _beside(failing)
+    assert mark.name == copy.name + ".migrating"
     assert _dump(copy) == before
     sentence = str(refused)
     for words in (
@@ -249,7 +251,8 @@ def test_a_put_back_that_did_not_take_is_not_reported_as_one(failing, monkeypatc
     with pytest.raises(database.StartRefused) as refused:
         database.init_db()
 
-    [copy] = _beside(failing)
+    [copy, mark] = _beside(failing)
+    assert mark.name == copy.name + ".migrating"
     sentence = str(refused.value)
     assert "the two do not match" in sentence
     assert f"Put the copy {copy} back in place of data.db by hand" in sentence
