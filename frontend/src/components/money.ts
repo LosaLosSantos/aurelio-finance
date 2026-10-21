@@ -36,8 +36,14 @@ export const locale: string | undefined =
 export type Money = { format(amount: number): string };
 
 /** "whole" drops the cents (a total, a balance); "cents" keeps the currency's
-    own minor digits, for the few figures where they are the fact. */
-export type Precision = "whole" | "cents";
+    own minor digits, for the few figures where they are the fact; "price" is
+    a price per unit, as a contract note states it: the currency's own minor
+    digits at least, and every further digit it carries, up to eight. A
+    dividend of 0.1615 a share read "€0" in whole units (brief BD). */
+export type Precision = "whole" | "cents" | "price";
+
+/** Every decimal a price per unit is printed with, at most. */
+const PRICE_DIGITS = 8;
 
 /* Minor units, as the backend reads them (`fx._MINOR_EXACT`,
    `fx._MINOR_ANY_CASE`). `Intl` knows none of these as codes, and it reads
@@ -94,40 +100,54 @@ const built = new Map<string, Money>();
 
 /** A formatter for amounts in `currency`, built on first use and kept: an
     `Intl.NumberFormat` is not free to construct and a list asks for the same
-    one per row. */
-export function money(currency: string, precision: Precision = "whole"): Money {
+    one per row. `at` is the locale, the reader's unless a test names one. */
+export function money(currency: string, precision: Precision = "whole", at: string | undefined = locale): Money {
   const code = currency.trim();
-  // Precision first: it is one of two fixed words with no colon in them, so
-  // everything after the first colon is the code, whatever was typed there.
-  const key = `${precision}:${code}`;
+  // Precision first, then the locale: a fixed word and a language tag, neither
+  // with a colon in it, so everything after the second colon is the code,
+  // whatever was typed there.
+  const key = `${precision}:${at ?? ""}:${code}`;
   let formatter = built.get(key);
   if (formatter === undefined) {
-    formatter = build(code, precision);
+    formatter = build(code, precision, at);
     built.set(key, formatter);
   }
   return formatter;
 }
 
-function build(code: string, precision: Precision): Money {
+function build(code: string, precision: Precision, at: string | undefined): Money {
+  // "cents" and "price" keep the currency's own minimum, which `Intl` knows
+  // (two for the euro, none for the yen); "price" lets the rest through.
   const digits: Intl.NumberFormatOptions =
-    precision === "whole" ? { maximumFractionDigits: 0 } : {};
+    precision === "whole"
+      ? { maximumFractionDigits: 0 }
+      : precision === "price"
+        ? { maximumFractionDigits: PRICE_DIGITS }
+        : {};
   if (MINOR_EXACT.has(code) || MINOR_ANY_CASE.has(code.toUpperCase())) {
-    return labelled(code, precision);
+    return labelled(code, precision, at);
   }
   try {
-    return new Intl.NumberFormat(locale, { style: "currency", currency: code, ...digits });
+    return new Intl.NumberFormat(at, { style: "currency", currency: code, ...digits });
   } catch {
     // Not a code `Intl` knows. The backend stores what it was sent as long as
     // it is not blank, and a page that throws on one odd row shows nothing at
     // all — so the figure is printed with the code beside it, as typed.
-    return labelled(code, precision);
+    return labelled(code, precision, at);
   }
 }
 
-function labelled(code: string, precision: Precision): Money {
-  const plain = new Intl.NumberFormat(
-    locale,
-    precision === "whole" ? { maximumFractionDigits: 0 } : { maximumFractionDigits: 2 },
-  );
+function labelled(code: string, precision: Precision, at: string | undefined): Money {
+  const plain = new Intl.NumberFormat(at, {
+    maximumFractionDigits: precision === "whole" ? 0 : precision === "price" ? PRICE_DIGITS : 2,
+  });
   return { format: (amount: number) => `${plain.format(amount)} ${code}` };
+}
+
+/** A price per unit as a number and its code, every digit it carries up to
+    eight: how the positions table prints a listing's price in a currency that
+    is not the base ("131.5 USD"). It printed three at most, so 0.1615 read
+    0.162. */
+export function priceWithCode(amount: number, code: string, at: string | undefined = locale): string {
+  return `${new Intl.NumberFormat(at, { maximumFractionDigits: PRICE_DIGITS }).format(amount)} ${code}`;
 }

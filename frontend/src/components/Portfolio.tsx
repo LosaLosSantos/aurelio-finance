@@ -31,8 +31,8 @@ import { EMPTY_LINES, EMPTY_PANELS } from "./emptyStates";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { PaidRecoveryNotice } from "./PaidRecoveryNotice";
 import { acrossCurrencies as isAcross, debitOnEdit, derivedAmount } from "./statedAmount";
-import { sameCurrency, withinCurrency } from "./money";
-import { fxProvenance, rateLine } from "./rateSource";
+import { priceWithCode, sameCurrency, withinCurrency } from "./money";
+import { fxProvenance } from "./rateSource";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import { getListingCurrencies, getQuote } from "../api/prices";
 import { accountCurrencyOn, listingCurrencyOf } from "./proposedCurrency";
@@ -56,7 +56,7 @@ import {
   olderLine,
 } from "./sameDividend";
 import { deleteQuestion } from "./ledgerDelete";
-import { ledgerDetail } from "./ledgerDetail";
+import { ledgerAmount, ledgerOwnLine, ledgerSubtitle } from "./ledgerLine";
 import { marks, refusal, transaction } from "./required";
 import type { Focus } from "../nav";
 
@@ -616,7 +616,7 @@ export default function Portfolio({
                       "n/a"
                     ) : r.cost_known || paidShare(r) ? (
                       <>
-                        {money(data.base_currency).format(r.avg_cost)}
+                        {money(data.base_currency, "price").format(r.avg_cost)}
                         {r.cost_estimated && (
                           <span className="ml-1 text-[0.65rem] text-warn">est.</span>
                         )}
@@ -635,8 +635,8 @@ export default function Portfolio({
                     {r.live_price == null
                       ? "unknown"
                       : r.currency && r.currency !== data.base_currency
-                        ? `${r.live_price.toLocaleString(locale)} ${r.currency}`
-                        : money(data.base_currency).format(r.live_price)}
+                        ? priceWithCode(r.live_price, r.currency)
+                        : money(data.base_currency, "price").format(r.live_price)}
                     {r.as_of && r.as_of !== data.prices_as_of && (
                       <div className="text-xs text-ink-faint">{fmtDate(r.as_of)}</div>
                     )}
@@ -1877,22 +1877,12 @@ function BuysSection({
             badge={[t.plan_id != null ? "PAC" : t.kind, t.estimated ? "est." : null]
               .filter(Boolean)
               .join(" · ")}
-            subtitle={[
-              fmtDate(t.date),
-              t.price_currency ? `${t.quantity} × ${money(t.price_currency).format(t.unit_price)}` : null,
-              t.fees ? `fees ${money(t.currency).format(t.fees)}` : null,
-              // A sum fixed at one day's rate says which day, so it can be held
-              // against the statement.
-              t.fx_as_of ? rateLine(fmtDate(t.fx_as_of), t.fx_source) : null,
-              instName(t.institution_id),
-              t.symbol,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-            // A dividend's ex-date, on a line that is never clipped (brief AZ).
-            detail={ledgerDetail(t, fmtDate)}
+            subtitle={ledgerSubtitle(t, fmtDate, instName(t.institution_id))}
+            // The arithmetic to the cent, then a dividend's ex-date, on a
+            // line that is never clipped (briefs AZ and BD).
+            detail={ledgerOwnLine(t, fmtDate)}
             note={t.note}
-            value={(t.kind === "buy" ? "−" : "+") + money(t.currency).format(t.amount)}
+            value={ledgerAmount(t)}
           />
         ))}
       </RowsOrEmpty>
