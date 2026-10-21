@@ -248,7 +248,7 @@ def test_the_card_names_the_first_occurrence_and_what_happens_to_the_carry(clien
     ) in said
     assert (
         "Its frequency, the day of its first buy and its funds stay as they are: they change "
-        "on the PAC's form, under Records, Cash flow"
+        "on the PAC's form, in Portfolio"
     ) in said
 
 

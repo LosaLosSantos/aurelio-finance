@@ -62,6 +62,8 @@ export const EMPTY_LINES = {
   expenses:
     "No expenses yet. Add what goes out above, rent or groceries: it is paid from the account you pick, from its first payment.",
   pac: "No PAC yet. A plan that buys the same funds on a schedule goes above: how much, into what, how often; each buy is then recorded on its day.",
+  pacListed:
+    "No PAC yet. A plan that buys the same funds on a schedule is set up in Portfolio, beside the ledger its buys go to, and listed here.",
   transfers: "No transfers yet. Cash moved between two of your accounts goes above, on the day it moved.",
   goals: "No goals yet. Choose above what one is for and add it: it is saved with the rest of your profile.",
 } satisfies Record<string, string>;

@@ -345,7 +345,7 @@ export default function App() {
 
   function go(f: Focus) {
     setReading(null);
-    if (f === "ledger") {
+    if (f === "ledger" || f === "pac") {
       setTab("portfolio");
     } else if (f === "institutions") {
       // The list of banks and brokers, not an account left open there.
@@ -509,16 +509,24 @@ export default function App() {
               {tab === "dashboard" && <Dashboard onStart={() => go("institutions")} />}
               {tab === "portfolio" && (
                 <Portfolio
-                  focus={focus === "ledger" ? "ledger" : null}
+                  focus={focus === "ledger" || focus === "pac" ? focus : null}
                   onFocused={() => setFocus(null)}
                   onStart={() => go("institutions")}
+                  onOpenAccount={(i) => {
+                    // The account's own page, not one of its situations: the
+                    // one to record today is started there.
+                    setSituation(null);
+                    setAccount(i);
+                    setRecordsPage("wealth");
+                    setTab("records");
+                  }}
                 />
               )}
               {tab === "records" && (
                 <Records
                   page={recordsPage}
                   onPage={setRecordsPage}
-                  focus={focus === "ledger" ? null : focus}
+                  focus={focus === "ledger" || focus === "pac" ? null : focus}
                   onFocused={() => setFocus(null)}
                   go={go}
                   account={account}

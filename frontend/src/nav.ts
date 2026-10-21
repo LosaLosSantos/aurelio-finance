@@ -12,5 +12,6 @@
    A `Focus` is that destination, carried from the account page to the page
    that owns the term. "institutions" is the list of banks and brokers in
    Records → Wealth, where an empty Dashboard or Portfolio sends the reader to
-   take the first step (brief BC). */
-export type Focus = "income" | "expenses" | "transfers" | "ledger" | "institutions";
+   take the first step (brief BC). "pac" is the PAC on Portfolio, where Cash
+   flow's list of the plans sends the reader to set or change one (brief BD). */
+export type Focus = "income" | "expenses" | "transfers" | "ledger" | "institutions" | "pac";

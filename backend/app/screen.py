@@ -95,7 +95,8 @@ def resolve(db: Session, page: schemas.ChatPage) -> Screen:
     if isinstance(page, schemas.ChatPagePortfolio):
         return _screen(
             "Portfolio",
-            "The Portfolio page: every investment position, the tax estimate "
+            "The Portfolio page: every investment position, the PACs (each set "
+            "and changed here), the tax estimate "
             "and the transaction ledger, all of it in the picture — the ledger "
             "on screen lists every entry, where the picture carries the most "
             "recent and says how many older ones it left out. The page is about "
@@ -151,7 +152,8 @@ def _records(db: Session, section: str) -> Screen:
     transfers = len(crud.get_transfers(db))
     return _screen(
         label,
-        "Income sources, expenses, transfers between accounts and PACs. "
+        "Income sources, expenses, transfers between accounts, and the PACs "
+        "listed, each set and changed on the Portfolio page. "
         "Income, expenses and PACs are in the picture. The individual "
         f"transfers are NOT — {transfers} on screen — only what they add to and "
         "take from each account in the picture's cash register.",

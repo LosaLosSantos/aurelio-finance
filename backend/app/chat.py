@@ -389,7 +389,7 @@ _PROMPT_TAIL = (
     "account's page, under Records, Wealth); a real asset's later valuations, or "
     "correcting or deleting one (Records, Real assets); a debt and its balances "
     "(Records, Debts); a PAC's frequency, the day of its first buy or its funds, "
-    "a new PAC, or ending one (Records, Cash flow); changing what a ledger entry "
+    "a new PAC, or ending one (Portfolio, the PAC); changing what a ledger entry "
     "is, its kind, its instrument, its account or its currencies (Portfolio, "
     "the ledger); emptying a field of "
     "a line, a goal or a transfer, such as the last day of an income or a "

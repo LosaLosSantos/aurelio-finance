@@ -26,6 +26,8 @@ import {
   type Institution,
 } from "../api/institutions";
 import { getAllCashAnchors, getCashPositions, type CashAnchor, type CashPosition } from "../api/cash";
+import { getAccumulationPlans, type AccumulationPlan } from "../api/accumulationPlans";
+import { PlanSection, type PlanSaved } from "./Plans";
 import { EmptyState } from "./Emblem";
 import { EMPTY_LINES, EMPTY_PANELS } from "./emptyStates";
 import { OmissionsNotice } from "./OmissionsNotice";
@@ -286,6 +288,7 @@ export default function Portfolio({
   focus,
   onFocused,
   onStart,
+  onOpenAccount,
 }: {
   /** Where the first step is taken when nothing is invested: Records →
       Wealth, its list of banks and brokers. */
@@ -294,9 +297,13 @@ export default function Portfolio({
       account page. Both terms come from the same list, so both land in the
       same place — which is the honest answer: the ledger does not keep buys
       and sells apart, and pretending otherwise would invent a distinction the
-      reader would then look for. */
+      reader would then look for. "pac" when Cash flow's list of the plans
+      sent the reader to set or change one (brief BD). */
   focus: Focus | null;
   onFocused: () => void;
+  /** Opens an account's page, where its situation and its cash are recorded:
+      where a plan started on its next date sends the reader for today's. */
+  onOpenAccount: (i: Institution) => void;
 }) {
   const [data, setData] = useState<PortfolioData | null>(null);
   const [txs, setTxs] = useState<Transaction[]>([]);
@@ -309,14 +316,20 @@ export default function Portfolio({
   const [cash, setCash] = useState<CashPosition[]>([]);
   const [anchors, setAnchors] = useState<CashAnchor[]>([]);
   const [listing, setListing] = useState<Record<string, string>>({});
+  const [plans, setPlans] = useState<AccumulationPlan[]>([]);
+  // Up here, not in the PAC's section: a save reloads this page, which draws
+  // "Loading…" in place of every section and so forgets what they held.
+  const [planSaved, setPlanSaved] = useState<PlanSaved | null>(null);
   // The two are siblings: the watchlist raises the intent, the ledger form
   // answers it, and neither has to know the other is on the page.
   const buyForm = useRef<BuyForm>(null);
   const [loading, setLoading] = useState(true);
   const [pricing, setPricing] = useState(false);
   // The ledger, as a place to be sent to. Positions and the look-through sit
-  // above it and are not what "− buys €610" is about.
+  // above it and are not what "− buys €610" is about. And the PAC, where Cash
+  // flow's list of the plans sends the reader (brief BD).
   const ledgerRef = useRef<HTMLDivElement>(null);
+  const pacRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -328,13 +341,14 @@ export default function Portfolio({
     else setLoading(true);
     setError(null);
     try {
-      const [p, t, i, c, a, l] = await Promise.all([
+      const [p, t, i, c, a, l, pl] = await Promise.all([
         getPortfolio(live),
         getTransactions(),
         getInstitutions(),
         getCashPositions(),
         getAllCashAnchors(),
         getListingCurrencies(),
+        getAccumulationPlans(),
       ]);
       setData(p);
       setTxs(t);
@@ -342,6 +356,7 @@ export default function Portfolio({
       setCash(c);
       setAnchors(a);
       setListing(l);
+      setPlans(pl);
     } catch (err) {
       setError(apiError(err, "Could not load the portfolio. Is the backend running on :8000?"));
     } finally {
@@ -351,7 +366,8 @@ export default function Portfolio({
   }
 
   // Arriving AT the ledger. Two waits, not one, and the second is the reason
-  // this is not the three-liner Cash flow gets.
+  // this is not the three-liner Cash flow gets. The PAC, where Cash flow's
+  // list of the plans sends the reader, is arrived at the same way (brief BD).
   //
   // The first is the same there: this component returns "Loading…" first, so
   // on the render that carries the focus there is no ledger to scroll to.
@@ -366,8 +382,8 @@ export default function Portfolio({
   // correctly and then left behind. So the scroll is repeated while the page
   // is still changing height, and stops when it stops.
   useEffect(() => {
-    if (focus !== "ledger" || loading || !data) return;
-    const el = ledgerRef.current;
+    if ((focus !== "ledger" && focus !== "pac") || loading || !data) return;
+    const el = (focus === "ledger" ? ledgerRef : pacRef).current;
     if (!el) return;
     // Consumed immediately: what follows is this effect's own business, and
     // leaving the focus set would re-arm the whole thing on the next render.
@@ -721,6 +737,22 @@ export default function Portfolio({
         position. It counts toward no total on this page, which is exactly what
         makes it safe for the chat to propose one. */}
     <Watchlist onBuy={(i: WatchlistItem) => buyForm.current?.prefillFrom(i)} />
+    {/* The PAC, set and changed here, beside the ledger its buys are written
+        to (brief BD, the reader's D1); Cash flow lists the plans. */}
+    <div ref={pacRef} className="scroll-mt-6">
+      <PlanSection
+        items={plans}
+        institutions={institutions}
+        anchors={anchors}
+        base={data.base_currency}
+        positions={data.rows}
+        instName={(id) => (id == null ? undefined : institutions.find((x) => x.id === id)?.name)}
+        onChanged={() => load(false)}
+        onOpenAccount={onOpenAccount}
+        saved={planSaved}
+        onSaved={setPlanSaved}
+      />
+    </div>
     <div ref={ledgerRef} className="scroll-mt-6">
     <BuysSection
       ref={buyForm}

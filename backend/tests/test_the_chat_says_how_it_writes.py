@@ -87,7 +87,8 @@ def test_the_prompt_says_what_no_card_does_yet_and_where(prompt):
         ("a real asset's later valuations", "Records, Real assets"),
         ("a debt and its balances", "Records, Debts"),
         # Its amount has a card since brief AO (`change_pac_amount`).
-        ("a PAC's frequency, the day of its first buy or its funds, a new PAC, or ending one", "Records, Cash flow"),
+        # Set in Portfolio since brief BD (the reader's D1), listed in Cash flow.
+        ("a PAC's frequency, the day of its first buy or its funds, a new PAC, or ending one", "Portfolio, the PAC"),
         # Correcting and deleting one have a card since brief AO (`change_ledger_entry`).
         ("changing what a ledger entry is, its kind, its instrument, its account or its currencies", "Portfolio, the ledger"),
         # Correcting and deleting a transfer and a balance have a card since brief

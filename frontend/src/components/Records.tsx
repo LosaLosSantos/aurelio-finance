@@ -117,13 +117,8 @@ export default function Records({
         <CashFlow
           focus={focus === "institutions" ? null : focus}
           onFocused={onFocused}
-          onOpenAccount={(i) => {
-            // The account's own page, not one of its situations: the one to
-            // record today is started there.
-            onSituation(null);
-            onAccount(i);
-            onPage("wealth");
-          }}
+          // Its plans are listed here and set in Portfolio (brief BD).
+          onOpenPlans={() => go("pac")}
         />
       )}
     </div>

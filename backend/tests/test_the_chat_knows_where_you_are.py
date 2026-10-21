@@ -181,6 +181,15 @@ def test_the_portfolio_page_says_nothing_on_it_is_selected(client, monkeypatch):
     assert "nothing on it is selected: 'this' is not the first row" in _question(seen[0])
 
 
+def test_the_pac_is_said_where_it_is_set_and_where_it_is_listed(client):
+    """Since brief BD a PAC is set and changed on Portfolio (the reader's D1)
+    and listed in Cash flow: each page's note says which, so the chat sends
+    the reader to the page where a plan is changed."""
+    assert "the PACs (each set and changed here)" in _resolve({"kind": "portfolio"}).note
+    cash = _resolve({"kind": "records", "section": "cash"}).note
+    assert "the PACs listed, each set and changed on the Portfolio page" in cash
+
+
 def test_an_analysis_page_points_at_the_tool_that_reads_it(client, monkeypatch):
     run_id = _one_run(monkeypatch)
     later = _one_run(monkeypatch)

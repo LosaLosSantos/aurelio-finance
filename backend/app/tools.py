@@ -3983,13 +3983,13 @@ def _pac_change(db: Session, args: ChangePacAmountArgs) -> _PacChange:
     if plan.source_institution_id is None:
         raise LookupError(
             f"{plan.name} does not say which account funds it: name it on the PAC's "
-            "form, under Records, Cash flow, which saves the plan only with one."
+            "form, in Portfolio, which saves the plan only with one."
         )
     homeless = [t.symbol for t in plan.targets if t.institution_id is None]
     if homeless:
         raise LookupError(
             f"{plan.name} does not say where {', '.join(homeless)} is held: name it on the "
-            "PAC's form, under Records, Cash flow."
+            "PAC's form, in Portfolio."
         )
     if args.amount == plan.amount:
         raise LookupError(
@@ -4047,7 +4047,7 @@ def _propose_pac_amount(db: Session, args: ChangePacAmountArgs) -> Proposal:
         )
     said.append(
         "Its frequency, the day of its first buy and its funds stay as they are: they "
-        "change on the PAC's form, under Records, Cash flow, where a running plan's "
+        "change on the PAC's form, in Portfolio, where a running plan's "
         "schedule, once edited, can add buys before today."
     )
     fingerprint = json.dumps(
@@ -5234,7 +5234,7 @@ REGISTRY: dict[str, Tool] = {
             name="change_pac_amount",
             description=(
                 "Propose changing what one of their PACs buys with, from its next "
-                "occurrence on, as the PAC's form under Records, Cash flow changes the "
+                "occurrence on, as the PAC's form in Portfolio changes the "
                 "amount. The card names the first occurrence the new amount buys and what "
                 "happens to the carry; the plan's schedule and funds are not changed here."
             ),

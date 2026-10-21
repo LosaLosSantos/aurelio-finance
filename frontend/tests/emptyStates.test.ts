@@ -7,9 +7,9 @@ const lines = Object.entries(EMPTY_LINES);
 const panels = Object.entries(EMPTY_PANELS);
 const all = [...lines, ...panels.map(([k, p]) => [k, p.text] as const)];
 
-// Where a first step is taken: the form above the line, a page of Records, or
-// the chat.
-const PLACES = /\babove\b|\bRecords\b|\bthe chat\b/;
+// Where a first step is taken: the form above the line, a page of Records,
+// Portfolio (where a PAC is set, brief BD), or the chat.
+const PLACES = /\babove\b|\bRecords\b|\bPortfolio\b|\bthe chat\b/;
 
 test("every empty section says where its first step is taken", () => {
   for (const [key, text] of all) assert.match(text, PLACES, `${key}: ${text}`);
