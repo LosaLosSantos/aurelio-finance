@@ -8,6 +8,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  type XAxisTickContentProps,
 } from "recharts";
 import {
   getAllocation,
@@ -19,6 +20,7 @@ import {
 } from "../api/dashboard";
 import { getCashFlowSummary, type CashFlowSummary } from "../api/cashflow";
 import { EmptyState } from "./Emblem";
+import { BREAKDOWN_WORDS, spansAYear, tickLines } from "./chartDays";
 import { EMPTY_LINES, EMPTY_PANELS } from "./emptyStates";
 import { IN_FORCE, notCounted, undatedLine } from "./inForce";
 import { OmissionsNotice } from "./OmissionsNotice";
@@ -80,11 +82,25 @@ function allocationFigures(allocation: DashboardAllocation): Record<string, stri
   return named;
 }
 
-function fmtDay(iso: string): string {
-  return new Date(iso + "T00:00:00").toLocaleDateString(locale, {
-    day: "numeric",
-    month: "short",
-  });
+/* The axis's own tick, as Recharts draws it, and the height it keeps. */
+const TICK = { fontSize: 11, fill: "var(--color-ink-soft)" };
+const AXIS_HEIGHT = 30;
+
+/** A tick that says its year on a line under its day, drawn only when the
+    points span a year or more (`chartDays.ts`); under a year the axis keeps
+    Recharts' own tick. */
+function DayTick({ x, y, payload }: Pick<XAxisTickContentProps, "x" | "y" | "payload">) {
+  const [day, year] = tickLines(String(payload.value), true);
+  return (
+    <text x={x} y={y} textAnchor="middle" fontSize={TICK.fontSize} fill={TICK.fill}>
+      <tspan x={x} dy="0.71em">
+        {day}
+      </tspan>
+      <tspan x={x} dy="1.2em">
+        {year}
+      </tspan>
+    </text>
+  );
 }
 
 function fmtFull(iso: string): string {
@@ -320,6 +336,8 @@ export default function Dashboard({ onStart }: { onStart: () => void }) {
   const first = series[0];
   const last = series[series.length - 1];
   const delta = series.length > 1 ? last.net_worth - first.net_worth : null;
+  // Whether a day and a month can come round again on the axis.
+  const withYear = series.length > 1 && spansAYear(first.date, last.date);
   const hasData = summary.net_worth !== 0 || series.length > 0;
 
   return (
@@ -409,7 +427,7 @@ export default function Dashboard({ onStart }: { onStart: () => void }) {
       {series.length > 1 && (
         <ChartCard
           title={NET_WORTH_OVER_TIME}
-          subtitle="Hover for the financial / real / debt breakdown behind each point."
+          subtitle={BREAKDOWN_WORDS}
           table={
             <table className="w-full text-left text-sm">
               <thead>
@@ -444,12 +462,14 @@ export default function Dashboard({ onStart }: { onStart: () => void }) {
               <CartesianGrid stroke="var(--color-hair)" vertical={false} />
               <XAxis
                 dataKey="date"
-                tickFormatter={fmtDay}
+                // The day alone measures the room between ticks either way.
+                tickFormatter={(v) => tickLines(String(v), false)[0]}
                 minTickGap={28}
                 tickMargin={8}
                 tickLine={false}
                 stroke="var(--color-rule)"
-                tick={{ fontSize: 11, fill: "var(--color-ink-soft)" }}
+                tick={withYear ? (p: XAxisTickContentProps) => <DayTick x={p.x} y={p.y} payload={p.payload} /> : TICK}
+                height={withYear ? AXIS_HEIGHT + 14 : AXIS_HEIGHT}
               />
               <YAxis
                 tickFormatter={(v) => compact.format(Number(v))}

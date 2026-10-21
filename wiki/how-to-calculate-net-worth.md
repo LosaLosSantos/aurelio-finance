@@ -113,8 +113,9 @@ class: a class denominated in dollars can trade in euros on another exchange.
 
 The Dashboard's chart reads the same rules at every date on which something happened: the
 situation in force that day plus the entries after it for investments, the projected cash,
-and the latest valuation and debt balance on or before that day. Hover a point for the
-financial, real and debt figures behind it.
+and the latest valuation and debt balance on or before that day. Tap or point at the chart,
+or tab to it and use the arrow keys, for the financial, real and debt figures behind each
+point; its table lists them all. Over a year or more, each date on its axis says its year.
 
 ## What Aurelio does not do
 
