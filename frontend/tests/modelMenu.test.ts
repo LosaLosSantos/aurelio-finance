@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { modelName, modelNotices, modelsHelp, optionLabel, pickToSend } from "../src/components/modelMenu.ts";
+import { menuFace, modelName, modelNotices, modelsHelp, optionLabel, pickToSend } from "../src/components/modelMenu.ts";
 
 const OPUS = "anthropic/claude-opus-5.5";
 const SONNET = "anthropic/claude-sonnet-4.6";
@@ -105,4 +105,29 @@ test("a name is said without its provider", () => {
   assert.equal(modelName("anthropic/claude-opus-5.5"), "claude-opus-5.5");
   assert.equal(modelName("~anthropic/claude-opus-latest"), "claude-opus-latest");
   assert.equal(modelName("no-provider"), "no-provider");
+});
+
+/* Closed, the menu shows a face (brief BD): the name, then the date or the
+   mark, short enough for a phone; the open list keeps the whole labels. */
+
+const TODAY = "2026-10-20";
+
+test("closed, a model the list dates says its name and until when", () => {
+  assert.deepEqual(menuFace(SONNET, MENU, TODAY, "en-US"), { name: "claude-sonnet-4.6", mark: "until Oct 31" });
+  const later = { ...MENU, models: [entry("moonshotai/kimi-k3", "2027-01-15", true)] };
+  assert.deepEqual(menuFace("moonshotai/kimi-k3", later, TODAY, "en-US"), { name: "kimi-k3", mark: "until Jan 15, 2027" });
+});
+
+test("closed, a model the list lacks says so, the default too, which the open list names", () => {
+  assert.deepEqual(menuFace(KIMI, MENU, TODAY, "en-US"), { name: "kimi-k2.6", mark: "not listed" });
+  const gone = { ...MENU, default: KIMI };
+  assert.deepEqual(menuFace(KIMI, gone, TODAY, "en-US"), { name: "kimi-k2.6", mark: "not listed" });
+  assert.equal(optionLabel(gone.models[2], true), "kimi-k2.6 · default · no longer listed by OpenRouter");
+});
+
+test("closed, a model with no date, one the menu does not offer and the menu not loaded say the name alone", () => {
+  assert.deepEqual(menuFace(OPUS, MENU, TODAY, "en-US"), { name: "claude-opus-5.5", mark: null });
+  assert.deepEqual(menuFace("moonshotai/kimi-k3", MENU, TODAY, "en-US"), { name: "kimi-k3", mark: null });
+  assert.deepEqual(menuFace(SONNET, null, TODAY, "en-US"), { name: "claude-sonnet-4.6", mark: null });
+  assert.deepEqual(menuFace("", null, TODAY, "en-US"), { name: "model…", mark: null });
 });

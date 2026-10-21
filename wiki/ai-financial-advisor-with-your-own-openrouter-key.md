@@ -86,8 +86,9 @@ removed"
 once a day and says it before a call to such a model fails:
 
 - The chat's menu shows the date beside the model's name ("may be retired after
-  2026-10-31"), and marks a model the list no longer has ("no longer listed by OpenRouter")
-  without hiding it, since a model has been seen to leave the list and still answer.
+  2026-10-31"; closed, "until Oct 31"), and marks a model the list no longer has ("no
+  longer listed by OpenRouter"; closed, "not listed") without hiding it, since a model has
+  been seen to leave the list and still answer.
 - From 30 days before the date, a line above the chat's question box names the model the
   next question goes to, the date, and where it is set: a setting in `backend/.env`, the
   app's built-in default, or the menu. The analysis's card says the same of the models a run

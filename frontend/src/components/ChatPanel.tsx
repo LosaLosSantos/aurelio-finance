@@ -26,7 +26,7 @@ import {
   type ChatModels,
   type ChatStepEvent,
 } from "../api/chat";
-import { Explainer, Spinner, apiError, locale, mdComponents, type Explain } from "./ui";
+import { Explainer, Spinner, apiError, locale, mdComponents, todayISO, type Explain } from "./ui";
 import {
   FOLLOWING,
   onContent,
@@ -36,7 +36,7 @@ import {
   type Pane,
 } from "./followStream";
 import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
-import { modelNotices, modelsHelp, optionLabel, pickToSend } from "./modelMenu";
+import { menuFace, modelNotices, modelsHelp, optionLabel, pickToSend } from "./modelMenu";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
 import { STALE_LINE, heading, waiting, workHeading } from "./cardOutcome";
@@ -616,6 +616,14 @@ function StopIcon() {
   );
 }
 
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true" focusable="false" className="shrink-0">
+      <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function ChatPanel({
   open,
   page,
@@ -972,6 +980,7 @@ export default function ChatPanel({
   // What the select shows is what a question goes with (`pickToSend`).
   const currentModel = pickToSend(model, models) ?? models?.default ?? "";
   const notices = modelNotices(currentModel, models);
+  const face = menuFace(currentModel, models, todayISO());
   // What the panel's "?" says, read once: what a question is sent with, the
   // keys, and what is known of each model. The select's tooltip used to say it
   // of the current model alone, to a pointer only (brief AU).
@@ -1193,24 +1202,39 @@ export default function ChatPanel({
                 <PlusIcon />
               </button>
               {/* The model is chosen, not assumed. Default first; what is
-                  known about each, and when, is in the panel's "?". */}
-              <select
-                value={currentModel}
-                onChange={(e) => setModel(e.target.value || null)}
-                disabled={!models}
-                aria-label="Model"
-                className="min-w-0 max-w-[60%] truncate rounded-full border border-hair bg-transparent px-2.5 py-1 text-xs text-ink-soft outline-none transition hover:border-rule hover:text-ink focus:border-olive"
-              >
-                {models ? (
-                  models.models.map((m) => (
-                    <option key={m.slug} value={m.slug}>
-                      {optionLabel(m, m.slug === models.default)}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">model…</option>
+                  known about each, and when, is in the panel's "?".
+                  Closed, a face says the name and the date or the mark
+                  (`menuFace`); the select, transparent and laid over it,
+                  stays the control: the keyboard, its name "Model", the
+                  whole label a screen reader reads, and the open list. */}
+              <span className="relative flex min-w-0 max-w-full items-center gap-1 rounded-full border border-hair px-2.5 py-1 text-xs text-ink-soft transition focus-within:border-olive hover:border-rule hover:text-ink">
+                <span aria-hidden="true" className="truncate">
+                  {face.name}
+                </span>
+                {face.mark && (
+                  <span aria-hidden="true" className="shrink-0 whitespace-nowrap">
+                    · {face.mark}
+                  </span>
                 )}
-              </select>
+                <ChevronIcon />
+                <select
+                  value={currentModel}
+                  onChange={(e) => setModel(e.target.value || null)}
+                  disabled={!models}
+                  aria-label="Model"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+                >
+                  {models ? (
+                    models.models.map((m) => (
+                      <option key={m.slug} value={m.slug}>
+                        {optionLabel(m, m.slug === models.default)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">model…</option>
+                  )}
+                </select>
+              </span>
               {streaming ? (
                 <button
                   type="button"

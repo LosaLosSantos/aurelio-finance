@@ -9,9 +9,16 @@
    stays, marked. Above the question box the panel says the backend's
    sentence for the model a question would call, with where it is set.
 
-   No runtime imports, so `npm test` reaches it. */
+   Closed, the menu showed the option's whole label in a pill capped at 60%
+   of its row, so every label with a date or a mark was cut, the date itself
+   at 1440 ("may be retired af…", brief BD, measured). It now shows a face:
+   the name, then the date as "until Oct 31" or "not listed", the name giving
+   way first; the open list keeps the whole labels.
+
+   Its one runtime import, the locale, names `.ts`, so `npm test` reaches it. */
 
 import type { Schemas } from "../api/types";
+import { locale } from "./money.ts";
 
 type Menu = Schemas["ChatModelsRead"];
 type Entry = Schemas["ChatModel"];
@@ -64,4 +71,30 @@ export function modelNotices(current: string, menu: Menu | null): string[] {
 export function pickToSend(pick: string | null, menu: Menu | null): string | null {
   if (pick === null || menu === null) return pick;
   return menu.models.some((m) => m.slug === pick) ? pick : null;
+}
+
+/** What the closed menu shows of the model a question goes with. */
+export type Face = { name: string; mark: string | null };
+
+/** The closed menu's face for `slug`: its name, and "until <day>" for a model
+    the list dates or "not listed" for one it no longer has, the day with its
+    year when it falls in another year than `today`'s (ISO). "default" is said
+    by the open list only, so the face stays short enough for a phone. Before
+    the menu has loaded, "model…" as the select said. */
+export function menuFace(
+  slug: string,
+  menu: Menu | null,
+  today: string,
+  at: string | undefined = locale,
+): Face {
+  if (!slug) return { name: "model…", mark: null };
+  const entry = menu?.models.find((m) => m.slug === slug);
+  if (entry?.listed === false) return { name: modelName(slug), mark: "not listed" };
+  if (!entry?.retires) return { name: modelName(slug), mark: null };
+  const day = new Date(entry.retires + "T00:00:00").toLocaleDateString(at, {
+    day: "numeric",
+    month: "short",
+    ...(entry.retires.slice(0, 4) !== today.slice(0, 4) ? { year: "numeric" } : {}),
+  });
+  return { name: modelName(slug), mark: `until ${day}` };
 }
