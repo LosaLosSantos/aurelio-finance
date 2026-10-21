@@ -1001,9 +1001,13 @@ export default function ChatPanel({
     // child inside an overflow-hidden shell: the shell is needed to clip the
     // width animation, and an overflow ancestor is what a sticky child sticks
     // to — it would ride away with the page, which is what happened.
+    // Closed, it is out of the Tab order as well as out of sight: `aria-hidden`
+    // alone left its controls to the keyboard, and 31 of 80 Tab presses from
+    // a fresh load landed on them, at 1440 and at 390 (brief BD).
     <aside
       aria-label="Chat with Aurelio"
       aria-hidden={!open}
+      inert={!open}
       className={
         "sticky top-0 h-screen shrink-0 self-start overflow-hidden border-r border-rule bg-surface transition-[width] duration-300 ease-in-out motion-reduce:transition-none max-sm:fixed max-sm:left-14 max-sm:z-30 " +
         (open ? width : "w-0 border-r-0")

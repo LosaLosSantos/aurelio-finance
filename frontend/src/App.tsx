@@ -53,6 +53,22 @@ const SCANNING = "max-w-7xl";
 
 type Tab = (typeof TABS)[number]["key"];
 
+// Below this width the open chat lies over the page instead of beside it
+// (ChatPanel's `max-sm`, brief AU).
+const OVER_PAGE = "(width < 40rem)";
+
+/** Whether the window is that narrow, followed as it is resized. */
+function useOverPage(): boolean {
+  const [over, setOver] = useState(() => window.matchMedia(OVER_PAGE).matches);
+  useEffect(() => {
+    const query = window.matchMedia(OVER_PAGE);
+    const follow = () => setOver(query.matches);
+    query.addEventListener("change", follow);
+    return () => query.removeEventListener("change", follow);
+  }, []);
+  return over;
+}
+
 function TabButton({
   active,
   onClick,
@@ -247,6 +263,7 @@ export default function App() {
   // "this" points at, and it is sent per question because you move between
   // questions.
   const [chatOpen, setChatOpen] = useState(false);
+  const overPage = useOverPage();
   // Which analysis run is open in the main column, "list" for the record of
   // all of them, or null for the tab. Not a tab of its own, because you do not
   // GO to an analysis: a card in the chat sends you to the one it produced, and
@@ -314,7 +331,7 @@ export default function App() {
   function fromChat(open: () => void) {
     if (!mayLeave()) return;
     open();
-    if (window.matchMedia("(width < 40rem)").matches) setChatOpen(false);
+    if (overPage) setChatOpen(false);
   }
 
   // Whether the main column may stop showing the Profile: yes when it is not
@@ -418,7 +435,10 @@ export default function App() {
         onOpenRun={(id) => fromChat(() => setReading(id))}
         onOpenAnalyses={() => fromChat(() => setReading("list"))}
       />
-      <div className="min-w-0 flex-1">
+      {/* While the open chat lies over it, the page is out of the Tab order
+          and out of a screen reader's reach: 40 of 80 Tab presses landed on
+          controls the panel covered, at 390 (brief BD). */}
+      <div className="min-w-0 flex-1" inert={chatOpen && overPage}>
         {pacResult && (
           <PacBanner
             result={pacResult}
