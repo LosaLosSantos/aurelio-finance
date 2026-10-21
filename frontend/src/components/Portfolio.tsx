@@ -707,8 +707,9 @@ export default function Portfolio({
         the position where it cannot. <em>P/L vs recorded</em> compares the two only when a real
         quote priced the row. On a row nothing can price, the difference between the two
         columns is there to read, but a month-old statement is not a market and this app will
-        not colour it green. Refreshing a price no longer overwrites a situation (that used to
-        force P/L to zero): to record today's values, record a new situation.
+        not colour it green. Refresh market prices never writes to a situation. On today's
+        situation a row's ↻ re-prices that row, its price and its value together; a past
+        situation keeps the figures of its own day.
       </p>
       )}
     </Section>

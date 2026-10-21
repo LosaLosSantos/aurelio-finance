@@ -697,8 +697,13 @@ export interface paths {
         put?: never;
         /**
          * Refresh Holding Price
-         * @description Fetch the live quote for a holding's symbol and update its unit price
-         *     (recomputing value if the holding is quantity-based).
+         * @description Re-price a row of today's situation at its latest close: its unit price
+         *     and its value with it, units x close, as the situation's form stores a row
+         *     saved with its "↻ latest close" (`crud.reprice_holding`, brief BD).
+         *
+         *     A row of a past situation is refused: a photograph keeps the close of its
+         *     own day, which its form asks for. So is a row entered as a total, which
+         *     has no units to price.
          */
         post: operations["refresh_holding_price_api_holdings__holding_id__refresh_price_post"];
         delete?: never;

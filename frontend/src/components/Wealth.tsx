@@ -1762,11 +1762,12 @@ function BucketList({
             key={h.id}
             onEdit={() => onEdit(h)}
             onDelete={() => remove(h)}
-            // Today's situation only. The ↻ stores the latest close as the
-            // row's price and leaves its value as recorded (measured, brief
-            // AU), so on a past situation it put a later day's close beside
-            // that day's value.
-            onRefresh={h.symbol && !day ? () => refreshRow(h) : undefined}
+            // Today's situation only, on a row with units: the ↻ stores the
+            // latest close as the row's price and units x that close as its
+            // value, as the form does (brief BD). A past situation keeps its
+            // own day's close, and a row entered as a total has no units to
+            // price; the backend refuses both.
+            onRefresh={h.symbol && !day && h.quantity != null ? () => refreshRow(h) : undefined}
             refreshing={refreshingId === h.id}
             title={h.asset_name}
             subtitle={holdingSubtitle(h)}

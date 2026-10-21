@@ -77,20 +77,61 @@ def _qty_holding(client, **extra) -> int:
     return client.post(f"/api/snapshots/{sid}/holdings", json=payload).json()["id"]
 
 
-def test_refresh_price_updates_price_but_never_the_recorded_value(client, monkeypatch):
-    """Refreshing a price must leave the snapshot's recorded value alone: the
-    snapshot is a dated photograph, and rewriting it with today's market price
-    silently re-dates the record (and collapses P/L vs recorded to zero)."""
-    hid = _qty_holding(client, distribution_policy="acc")
+def _quoted(monkeypatch, price: float = 120.0) -> None:
     monkeypatch.setattr(
         prices,
         "get_quote",
-        lambda s, base: {"symbol": s, "price": 120.0, "currency": "EUR", "as_of": "2026-06-12"},
+        lambda s, base: {"symbol": s, "price": price, "currency": "EUR", "as_of": TODAY},
     )
+
+
+def test_a_row_of_todays_situation_is_repriced_price_and_value_together(client, monkeypatch):
+    """Today's photograph re-priced at the latest close, as its form stores a
+    row saved with "↻ latest close": the price and units x price. The price
+    alone read "70 × 131.5" beside the value of 70 at 128 (brief AU, measured;
+    brief BD), and the situation's total did not move."""
+    hid = _qty_holding(client, distribution_policy="acc")
+    _quoted(monkeypatch)
     body = client.post(f"/api/holdings/{hid}/refresh-price").json()
-    assert body["unit_price"] == 120.0
-    assert body["value"] == 1000.0  # unchanged: 10 units at the recorded 100
+    assert (body["unit_price"], body["value"]) == (120.0, 1200.0)
     assert body["distribution_policy"] == "acc"  # round-trips through the API
+    (inst,) = client.get("/api/institutions").json()
+    (snap,) = client.get(f"/api/institutions/{inst['id']}/snapshots").json()
+    assert snap["value_base"] == 1200.0
+
+
+def test_a_row_of_a_past_situation_is_never_repriced(client, monkeypatch):
+    """A past situation is a dated photograph: rewriting it with today's close
+    silently re-dates the record (and collapsed P/L vs recorded to zero). Its
+    form asks for the close of its own day; the row's refresh refuses, and
+    writes nothing."""
+    iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]
+    past = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+    sid = client.post(f"/api/institutions/{iid}/snapshots", json={"date": past}).json()["id"]
+    hid = client.post(f"/api/snapshots/{sid}/holdings", json={
+        "currency": "EUR", "asset_name": "ZZ World Equity", "asset_class": "equity",
+        "symbol": "ZZWD.MI", "quantity": 10, "unit_price": 100}).json()["id"]
+    _quoted(monkeypatch)
+    answer = client.post(f"/api/holdings/{hid}/refresh-price")
+    assert answer.status_code == 409
+    assert past in answer.json()["detail"]
+    (row,) = client.get(f"/api/snapshots/{sid}/holdings").json()
+    assert (row["unit_price"], row["value"]) == (100.0, 1000.0)
+
+
+def test_a_row_entered_as_a_total_is_not_repriced(client, monkeypatch):
+    """A row with a ticker and a value but no units has nothing to multiply:
+    the refresh refuses rather than store a price no line of the page shows."""
+    iid = client.post("/api/institutions", json={"name": "Broker A"}).json()["id"]
+    sid = client.post(f"/api/institutions/{iid}/snapshots", json={"date": TODAY}).json()["id"]
+    hid = client.post(f"/api/snapshots/{sid}/holdings", json={
+        "currency": "EUR", "asset_name": "ZZ Bond Fund", "asset_class": "bond",
+        "symbol": "ZZBD.MI", "value": 2450}).json()["id"]
+    _quoted(monkeypatch)
+    answer = client.post(f"/api/holdings/{hid}/refresh-price")
+    assert answer.status_code == 400
+    (row,) = client.get(f"/api/snapshots/{sid}/holdings").json()
+    assert (row["unit_price"], row["value"]) == (None, 2450.0)
 
 
 def test_refresh_price_without_symbol_is_400(client):

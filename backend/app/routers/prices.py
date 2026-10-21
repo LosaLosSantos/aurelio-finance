@@ -12,7 +12,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app import crud, fx, models, prices, schemas
+from app import crud, dated, fx, models, prices, schemas
 from app.database import get_db
 from app.routers.deps import get_or_404, holding_read
 
@@ -103,13 +103,35 @@ def resolve_isin(isin: str = Query(..., min_length=1)) -> list[schemas.IsinSugge
 def refresh_holding_price(
     holding_id: int, db: Session = Depends(get_db)
 ) -> schemas.HoldingRead:
-    """Fetch the live quote for a holding's symbol and update its unit price
-    (recomputing value if the holding is quantity-based)."""
+    """Re-price a row of today's situation at its latest close: its unit price
+    and its value with it, units x close, as the situation's form stores a row
+    saved with its "↻ latest close" (`crud.reprice_holding`, brief BD).
+
+    A row of a past situation is refused: a photograph keeps the close of its
+    own day, which its form asks for. So is a row entered as a total, which
+    has no units to price."""
     holding = get_or_404(db, models.Holding, holding_id)
     if not holding.symbol:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This holding has no symbol/ticker to fetch a price for",
+        )
+    day = get_or_404(db, models.Snapshot, holding.snapshot_id).date
+    if day != dated.today():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This situation is dated {day}: a past situation keeps the close of its "
+                "own day, which its form asks for."
+            ),
+        )
+    if holding.quantity is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This row is entered as a total, with no units to price: its form's "
+                "→ units turns its value into units first."
+            ),
         )
     try:
         quote = prices.get_quote(holding.symbol, fx.base_currency(db))
@@ -123,5 +145,5 @@ def refresh_holding_price(
     except prices.PriceError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     return holding_read(
-        db, crud.set_holding_price(db, holding, quote["price"])
+        db, crud.reprice_holding(db, holding, quote["price"])
     )

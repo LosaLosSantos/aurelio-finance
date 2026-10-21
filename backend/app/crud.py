@@ -2180,25 +2180,26 @@ def update_holding(
     return _update(db, models.Holding, holding_id, data, build=_holding_columns)
 
 
-def set_holding_price(
+def reprice_holding(
     db: Session, holding: models.Holding, price: float
 ) -> models.Holding:
-    """Store the latest known unit price on a holding.
+    """A row of today's situation priced at `price`, the latest close: its
+    unit price, and its value with it, units x that close, as the situation's
+    form stores a row saved with its "↻ latest close" (brief BD).
 
-    It deliberately does NOT touch `value`. A holding lives inside a snapshot —
-    a dated photograph — so rewriting its value with today's market price would
-    silently re-date the record: the photo would claim to be from its original
-    date while holding today's numbers. That is what made "P/L vs recorded"
-    collapse to exactly 0 (book and market became the same figure).
-    To record today's values, take a NEW snapshot; the Portfolio view computes
-    market value from live prices on its own and never needs `value` rewritten.
+    It stored the price alone, and the row read "70 × 131.5" beside 8,960.00,
+    the value of 70 at 128 (measured, brief AU). The route calls it on a row
+    of today's situation with units only. A past situation's row is never
+    re-priced: a photograph dated before today must not carry today's numbers,
+    and rewriting one with the market's price is what made "P/L vs recorded"
+    collapse to exactly 0.
 
-    Nor the currency. It used to stamp the quote's currency on a holding that
+    Not the currency. It used to stamp the quote's currency on a holding that
     had none, and no holding can have none any more (a7d2e94c10b8). On a row
     with units the listing's currency is what values it anyway, whatever was
     typed, and a disagreement is shown as `currency_note` for the reader to
-    correct — not overwritten for them."""
-    return _apply(db, holding, {"unit_price": price})
+    correct, not overwritten for them."""
+    return _apply(db, holding, {"unit_price": price, "value": holding.quantity * price})
 
 
 def update_real_asset(
