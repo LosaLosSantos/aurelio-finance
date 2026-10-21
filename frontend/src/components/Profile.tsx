@@ -16,6 +16,7 @@ import { getBaseCurrency, saveBaseCurrency, type BaseCurrencySetting } from "../
 import { createGoal, deleteGoal, getGoals, updateGoal } from "../api/goals";
 import { choicesOf, isVisible, topicsOf, unshownAnswer } from "./questionnaire";
 import { askedAs, toSave } from "./profileAnswers";
+import { answerDays, recordedLine, type Recorded } from "./answerDays";
 import { choiceClass } from "./choice";
 import { PARTS, currentPart, partOf, partStatus, unsavedWords, waitingTotal, type PartKey, type Waiting } from "./profilePath";
 import { asSent, baseConflict, laidOver, pageFrom, refusalWords, saveProfile, taxToSend, waiting } from "./profileSave";
@@ -58,6 +59,9 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
   // The answers as the page read them, as a save sends them: what "not saved"
   // is counted against, and what the save tells the reader's changes by.
   const [loaded, setLoaded] = useState<SurveyAnswer[]>([]);
+  // The day each stored answer was recorded, which the models read in front
+  // of it, shown under it (`answerDays`).
+  const [recorded, setRecorded] = useState<Recorded>({});
   /* The tax settings are a different resource from the questionnaire (three
      keys in `settings`, not survey answers), but they share this page's ONE
      save button on purpose. Two save buttons on one screen is how an edit gets
@@ -113,6 +117,7 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
       setAnswers(page.answers);
       setCarried(page.others);
       setLoaded(page.loaded);
+      setRecorded(answerDays(existing));
       setDropped([]);
       setGoals(goalDrafts.fromStored(storedGoals));
     } catch (err) {
@@ -226,6 +231,7 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
       setAnswers(page.answers);
       setCarried(page.others);
       setLoaded(page.loaded);
+      setRecorded(answerDays(result.read));
       setDropped((all) => all.filter((d) => !page.others.some((o) => o.question_key === d.question_key)));
       setGoals(result.drafts);
       if (result.base && base) {
@@ -244,6 +250,7 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
         setAnswers(page.answers);
         setCarried(page.others);
         setLoaded(page.loaded);
+        setRecorded(answerDays(result.survey));
         setDropped([]);
       }
       if (result.tax) setTax(result.tax);
@@ -276,6 +283,7 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
                 key={q.key}
                 q={q}
                 value={answers[q.key] ?? ""}
+                recorded={recordedLine(recorded, q.key, answers[q.key] ?? "")}
                 onChange={(v) => setAnswer(q.key, v)}
               />
             ))}
@@ -367,6 +375,7 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
           <OtherAnswers
             answers={carried}
             dropped={dropped}
+            recorded={recorded}
             onChange={(key, value) => {
               setCarried((all) => all.map((a) => (a.question_key === key ? { ...a, answer: value } : a)));
             }}
@@ -410,12 +419,14 @@ export default function Profile({ onWaiting }: { onWaiting: (w: Waiting | null) 
 function OtherAnswers({
   answers,
   dropped,
+  recorded,
   onChange,
   onDelete,
   onRestore,
 }: {
   answers: SurveyAnswer[];
   dropped: SurveyAnswer[];
+  recorded: Recorded;
   onChange: (key: string, value: string) => void;
   onDelete: (key: string) => void;
   onRestore: (key: string) => void;
@@ -451,6 +462,7 @@ function OtherAnswers({
               Delete
             </button>
           </div>
+          <RecordedLine line={recordedLine(recorded, a.question_key, a.answer ?? "")} />
         </div>
       ))}
       {dropped.length > 0 && (
@@ -689,13 +701,20 @@ function RateField({
   );
 }
 
+// The day an answer was recorded, faint, under it (`answerDays`).
+function RecordedLine({ line }: { line: string | null }) {
+  return line ? <p className="mt-1 text-xs text-ink-faint">{line}</p> : null;
+}
+
 function QuestionField({
   q,
   value,
+  recorded,
   onChange,
 }: {
   q: SurveyQuestion;
   value: string;
+  recorded: string | null;
   onChange: (v: string) => void;
 }) {
   // An answer on record that no button, option or number box can show: written
@@ -763,6 +782,8 @@ function QuestionField({
           onChange={(e) => onChange(e.target.value)}
         />
       )}
+
+      <RecordedLine line={recorded} />
 
       {unshown && <p className="mt-2 text-sm text-warn">{unshown}</p>}
 
