@@ -29,6 +29,8 @@ PAST = (TODAY - datetime.timedelta(days=60)).isoformat()
 ENDED = (TODAY - datetime.timedelta(days=10)).isoformat()
 SOON = (TODAY + datetime.timedelta(days=30)).isoformat()
 LATER = (TODAY + datetime.timedelta(days=90)).isoformat()
+# The day the fixture enters its flows: today, on the reader's clock.
+ENTERED = TODAY.isoformat()
 
 
 def _made(response) -> int:
@@ -144,8 +146,10 @@ def test_only_the_flows_in_force_today_are_counted_and_the_others_are_listed_apa
     ) in analyst
     assert (
         "- Expenses in force today:\n"
-        f"  - Affitto [essential/housing] 1000.00 EUR monthly, on no account, since {LONG_AGO}\n"
-        "  - Regalo per Marta [essential/other] 200.00 EUR monthly, on no account, no start date"
+        f"  - Affitto [essential/housing] 1000.00 EUR monthly, on no account, since {LONG_AGO}, "
+        f"entered {ENTERED}\n"
+        "  - Regalo per Marta [essential/other] 200.00 EUR monthly, on no account, no start date, "
+        f"entered {ENTERED}"
     ) in analyst
     assert "- Starting after today, so NOT counted above:" in analyst
     assert f"  - income: Nuovo lavoro [active/salary] 4000.00 EUR monthly, on no account, from {SOON}" in analyst
@@ -165,7 +169,10 @@ def test_only_the_flows_in_force_today_are_counted_and_the_others_are_listed_apa
 def test_a_flow_reaches_the_analyst_and_the_chat_as_one_line_with_its_dates(records):
     with SessionLocal() as db:
         analyst, chat = _analyst(db), advisor.build_context(db)
-    line = f"  - Affitto [essential/housing] 1000.00 EUR monthly, on no account, since {LONG_AGO}"
+    line = (
+        f"  - Affitto [essential/housing] 1000.00 EUR monthly, on no account, since {LONG_AGO}, "
+        f"entered {ENTERED}"
+    )
     assert line in chat.splitlines()
     assert line in analyst.splitlines()
 

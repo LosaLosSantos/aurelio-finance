@@ -97,7 +97,7 @@ def resolve(db: Session, page: schemas.ChatPage) -> Screen:
             "Portfolio",
             "The Portfolio page: every investment position, the PACs (each set "
             "and changed here), the tax estimate "
-            "and the transaction ledger, all of it in the picture — the ledger "
+            "and the transaction ledger, all of it in the picture. The ledger "
             "on screen lists every entry, where the picture carries the most "
             "recent and says how many older ones it left out. The page is about "
             "ALL the positions and nothing on it is selected: 'this' is not the "
@@ -113,8 +113,8 @@ def resolve(db: Session, page: schemas.ChatPage) -> Screen:
         )
     return _screen(
         "Dashboard",
-        "The Dashboard: net worth, the allocation and the monthly cash flow — "
-        "the same figures as in the picture — and a chart of net worth OVER "
+        "The Dashboard: net worth, the allocation and the monthly cash flow "
+        "(the same figures as in the picture), and a chart of net worth OVER "
         "TIME. The chart's points are NOT in the picture: no past value of net "
         "worth is in front of you, so a question about how it moved has no "
         "figures to be answered from.",
@@ -140,13 +140,13 @@ def _records(db: Session, section: str) -> Screen:
     if section == "real":
         return _screen(
             label,
-            "The list of real assets, each with its latest valuation — which "
+            "The list of real assets, each with its latest valuation, which "
             "is what the picture carries.",
         )
     if section == "debts":
         return _screen(
             label,
-            "The list of debts, each with its latest outstanding balance — "
+            "The list of debts, each with its latest outstanding balance, "
             "which is what the picture carries.",
         )
     transfers = len(crud.get_transfers(db))
@@ -155,7 +155,7 @@ def _records(db: Session, section: str) -> Screen:
         "Income sources, expenses, transfers between accounts, and the PACs "
         "listed, each set and changed on the Portfolio page. "
         "Income, expenses and PACs are in the picture. The individual "
-        f"transfers are NOT — {transfers} on screen — only what they add to and "
+        f"transfers are NOT ({transfers} on screen): only what they add to and "
         "take from each account in the picture's cash register.",
     )
 
@@ -212,7 +212,7 @@ def _situation(db: Session, page: schemas.ChatPageSituation) -> Screen:
         f"The situation of {snap.date} at {inst.name}: a photograph of what was "
         f"held there that day, as the reader recorded it; {which}. It is not in "
         "the picture, whose positions are projected from the situation each "
-        "account is read from today and the ledger — so here it is, each "
+        "account is read from today and the ledger, so here it is, each "
         "figure in its own currency:\n" + held,
     )
 

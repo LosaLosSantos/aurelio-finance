@@ -1480,6 +1480,10 @@ def compute_flows_in_force(db: Session, on: str, zero: str | None = None) -> dic
             "account": accounts.get(flow.institution_id),
             "start_date": flow.start_date,
             "end_date": flow.end_date,
+            # The reader's day the line was entered, which "since" is not: a
+            # model told an answer of the 20th said "not entered yet" must
+            # be able to tell whether this line came after it (brief BE).
+            "entered": dated.local_day(flow.created_at),
         }
 
     flows = [

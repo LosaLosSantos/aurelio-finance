@@ -26,6 +26,8 @@ LONG_AGO = (TODAY - datetime.timedelta(days=400)).isoformat()
 ENDED = (TODAY - datetime.timedelta(days=20)).isoformat()
 SOON = (TODAY + datetime.timedelta(days=25)).isoformat()
 LATER = (TODAY + datetime.timedelta(days=80)).isoformat()
+# The day the fixture enters its flows: today, on the reader's clock.
+ENTERED = TODAY.isoformat()
 
 
 def _made(response) -> int:
@@ -134,16 +136,17 @@ def test_the_chat_counts_the_flows_in_force_and_lists_the_others_apart(flows):
         "- Left each month (income minus expenses): 1600.00, a savings rate of 61.5%",
         "- 1 of these flows has no start date, so it is counted as in force.",
         "- Income in force today:",
-        f"  - Salary [active/salary] 2500.00 EUR monthly, on no account, since {LONG_AGO}",
-        f"  - Coupon [passive/interest] 100.00 EUR monthly, on no account, since {LONG_AGO}",
+        f"  - Salary [active/salary] 2500.00 EUR monthly, on no account, since {LONG_AGO}, entered {ENTERED}",
+        f"  - Coupon [passive/interest] 100.00 EUR monthly, on no account, since {LONG_AGO}, entered {ENTERED}",
         "- Expenses in force today:",
-        f"  - Rent [essential/housing] 900.00 EUR monthly, on no account, since {LONG_AGO}",
-        "  - Gift [discretionary/other] 100.00 EUR monthly, on no account, no start date",
+        f"  - Rent [essential/housing] 900.00 EUR monthly, on no account, since {LONG_AGO}, entered {ENTERED}",
+        f"  - Gift [discretionary/other] 100.00 EUR monthly, on no account, no start date, entered {ENTERED}",
         "- Starting after today, so NOT counted above:",
-        f"  - income: New job [active/salary] 4000.00 EUR monthly, on no account, from {SOON}",
-        f"  - expense: Car [discretionary/transport] 12000.00 EUR one_off, on no account, from {LATER}",
+        f"  - income: New job [active/salary] 4000.00 EUR monthly, on no account, from {SOON}, entered {ENTERED}",
+        f"  - expense: Car [discretionary/transport] 12000.00 EUR one_off, on no account, from {LATER}, entered {ENTERED}",
         "- Ended before today, so NOT counted above:",
-        f"  - expense: Gym [discretionary/leisure] 40.00 EUR monthly, on no account, since {LONG_AGO}, until {ENDED}",
+        f"  - expense: Gym [discretionary/leisure] 40.00 EUR monthly, on no account, since {LONG_AGO}, until {ENDED}, "
+        f"entered {ENTERED}",
     ]
 
 

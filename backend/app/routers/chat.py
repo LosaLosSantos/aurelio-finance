@@ -13,9 +13,12 @@ answered down the pipe that proposed it, so the answer is a new request against
 the stored conversation — which also means a closed browser leaves nothing
 pending, and a card nobody ever answered is still there, still saying so.
 
-The question is stored and the context built inside the request, before the
-response starts; the answer is stored when the stream ends, in a session of
-its own. The request's session is never used from inside the stream.
+The question is stored inside the request, before the response starts; the
+picture the model reads is built on the stream once `start` has named the
+conversation, and the answer is stored when the stream ends, each in a session
+of its own. So a picture that cannot be built ends as an `error` the reader
+sees, stored as the question's answer. The request's session is never used
+from inside the stream.
 
 One card is different, and it is `run_analysis`: three to six steps, a
 minute of them, so its work happens ON the stream and arrives as `step` events.

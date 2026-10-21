@@ -411,7 +411,9 @@ _PROMPT_TAIL = (
     "the last one is current, read it with `read_analysis` before answering and "
     "build on it, unasked; if there is none, or it is stale, answer and put its "
     "card beside the answer, saying the advice will fit them better on a fresh "
-    "one. Never run one without its card: it costs money. "
+    "one. A gap in the records is no reason for a fresh one: it reads the same "
+    "records and would not see it either; say what is missing and where it is "
+    "entered. Never run one without its card: it costs money. "
     "You cannot steer it and must not try: what those roles "
     "read is built from the records, never from this conversation, and that is "
     "exactly why it can say things you cannot. You see everything at once, "
@@ -625,7 +627,7 @@ def build_chat_context(db: Session) -> str:
         )
         lines.append(
             f"Run {run.id}, finished {dated.local_day(run.created_at)}, "
-            f"{len(run.steps)} steps — {argued}."
+            f"{len(run.steps)} steps: {argued}."
         )
         lines.append(
             "These are its OPENING LINES only. For the whole verdict, call "
@@ -696,26 +698,29 @@ class Pending:
 
 @dataclass(frozen=True)
 class PreparedTurn:
-    """A turn with its context built and its question stored, ready to stream.
+    """A turn with its question stored, or its card decided, ready to stream.
 
-    Two steps on purpose. The context and the question need the database
+    Two steps on purpose. The question and the decision need the database
     session, which belongs to the request; the streaming outlives the request
-    body by as long as the model takes to write. Building first and streaming
-    second means the request's session is never touched from inside the
-    stream — the answer is stored afterwards in a session of its own."""
+    body by as long as the model takes to write. What the model reads is built
+    on the stream, in a session of its own (`_picture`), after `start` has said
+    which conversation this is: a picture that cannot be built is then an
+    ending like any other, said and stored as the turn's answer. The request's
+    session is never touched from inside the stream."""
 
     conversation_id: int
     # None when nobody asked anything: answering a card resumes a conversation
     # without a question in front of it.
     user_message_id: int | None
     model: str
-    messages: list[dict]
     # The label stored with the question, for the `start` frame. None when
     # there is no question, or it was sent without a page.
     page_label: str | None = None
-    # Set only for the confirmed card whose tool runs on the stream. The
-    # messages are EMPTY when it is, and cannot be otherwise: what the model
-    # reads has to include what the tool did, and the tool has not run.
+    # Where the question was asked, as the screen shows it now: what the
+    # picture says of it (`_messages`). None on a turn that answers a card.
+    now: screen.Screen | None = None
+    # Set only for the confirmed card whose tool runs on the stream: what the
+    # model reads has to include what the tool did, and the tool has not run.
     pending: Pending | None = None
     # The id of the card this turn answers, on a turn that answers one. Such a
     # turn ends on the app's note about the decision (`_decision_note`) and is
@@ -730,7 +735,9 @@ class PreparedTurn:
 def _wire(stored: list[models.ChatMessage], now: screen.Screen | None = None) -> list[dict]:
     """The stored turns as the model reads them, in order. A turn with no text
     and no call (an answer that failed before its first word) is skipped; a
-    cut one keeps the words the reader actually saw.
+    cut or broken one keeps the words the reader actually saw, and after them
+    the line the panel showed under them (`_stopped`), so the model does not
+    read half an answer as a whole one (brief BE).
 
     An answer goes back as the rounds that wrote it, in the protocol's own
     shape (`_rounds`): the words of each round, as an assistant turn carrying
@@ -766,7 +773,7 @@ def _wire(stored: list[models.ChatMessage], now: screen.Screen | None = None) ->
     for m in stored:
         blocks = json.loads(m.blocks)
         if m.role == "assistant":
-            out.extend(_answer_on_the_wire(m.id, blocks))
+            out.extend(_answer_on_the_wire(m.id, blocks, _stopped(m)))
             continue
         text = "".join(b.get("text", "") for b in blocks if b.get("kind") == "text")
         if text.strip():
@@ -812,8 +819,12 @@ def _rounds(blocks: list[dict]) -> list[tuple[str, list[tuple[int, dict]]]]:
     return rounds
 
 
-def _answer_on_the_wire(message_id: int, blocks: list[dict]) -> list[dict]:
-    """One stored answer as the model reads it back (see `_wire`)."""
+def _answer_on_the_wire(
+    message_id: int, blocks: list[dict], stopped: str | None = None
+) -> list[dict]:
+    """One stored answer as the model reads it back (see `_wire`), with
+    `stopped`, the line the reader saw under an answer that did not finish,
+    in brackets after its last words."""
     out: list[dict] = []
     for said, calls in _rounds(blocks):
         if not calls:
@@ -823,7 +834,30 @@ def _answer_on_the_wire(message_id: int, blocks: list[dict]) -> list[dict]:
         asked = [_past_call(message_id, place, block) for place, block in calls]
         out.append(tools.request_message(said, [call for call, _ in asked]))
         out.extend(tools.result_message(call, answered) for call, answered in asked)
+    if stopped is not None and out:
+        last = out[-1]
+        if last["role"] == "assistant" and isinstance(last.get("content"), str) and not last.get("tool_calls"):
+            out[-1] = {**last, "content": f"{last['content']}\n\n[{stopped}]"}
+        else:
+            out.append({"role": "assistant", "content": f"[{stopped}]"})
     return out
+
+
+# What the panel shows under an answer that did not finish (`ChatPanel.tsx`,
+# `EndNote`): the second when a broken answer stored no sentence of its own.
+STOPPED = "Stopped before it was finished."
+COULD_NOT_CONTINUE = "The answer could not continue."
+
+
+def _stopped(message: models.ChatMessage) -> str | None:
+    """The line the reader saw under an answer that did not finish, or None
+    for one that did: STOPPED under a cut one, its stored sentence under a
+    broken one."""
+    if message.status == "cut":
+        return STOPPED
+    if message.status == "error":
+        return message.detail or COULD_NOT_CONTINUE
+    return None
 
 
 def _past_call(message_id: int, place: int, block: dict) -> tuple[advisor.ToolCall, dict]:
@@ -909,15 +943,20 @@ def _card_state(card: dict) -> dict:
 
 
 def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
-    """Store the question, rebuild the picture and put the conversation after
-    it. The context travels as the first user message rather than inside the
-    system prompt so the rules stay rules and the data stays data.
+    """Store the question in its conversation, a new one when none is named.
+    The picture is not built here: the stream builds it once `start` has named
+    the conversation (`_picture`), so a picture that fails is an answer the
+    reader can see, in the conversation they asked in, and not a 500 that
+    leaves the question with nothing after it.
+
+    Everything that is read before the question is stored is read before the
+    conversation is opened, so nothing here opens a conversation and then
+    fails.
 
     Raises LookupError for a conversation id that does not exist — the caller
     turns that into its 404."""
-    if request.conversation_id is None:
-        conv = crud.create_chat_conversation(db)
-    else:
+    conv = None
+    if request.conversation_id is not None:
         conv = crud.get_chat_conversation(db, request.conversation_id)
         if conv is None:
             raise LookupError(request.conversation_id)
@@ -925,6 +964,9 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
     # page gone since resolves to the one above it; it never refuses the
     # question.
     here = screen.resolve(db, request.page) if request.page is not None else None
+    model = advisor.resolve_model(request.model or default_model())
+    if conv is None:
+        conv = crud.create_chat_conversation(db)
     blocks = [{"kind": "text", "text": request.content}]
     if here is not None:
         blocks.insert(0, {"kind": "page", "label": here.label})
@@ -933,9 +975,9 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
     return PreparedTurn(
         conversation_id=conv.id,
         user_message_id=question.id,
-        model=advisor.resolve_model(request.model or default_model()),
-        messages=_messages(db, conv, now=here),
+        model=model,
         page_label=here.label if here is not None else None,
+        now=here,
     )
 
 
@@ -1087,7 +1129,6 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
             conversation_id=message.conversation.id,
             user_message_id=None,
             model=advisor.resolve_model(decision.model or default_model()),
-            messages=[],
             pending=Pending(
                 card_id=card_id,
                 tool=card["tool"],
@@ -1125,12 +1166,10 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
         if decided is None:
             raise CardSettled("decided in another window")
 
-    conv = message.conversation
     return PreparedTurn(
-        conversation_id=conv.id,
+        conversation_id=message.conversation.id,
         user_message_id=None,
         model=advisor.resolve_model(decision.model or default_model()),
-        messages=[*_messages(db, conv), _decision_note(message, card_id)],
         decision=card_id,
         decided=decided,
     )
@@ -1513,10 +1552,54 @@ def _kept_decision(detail: str, settled: bool) -> str:
     return f"{detail} {DECISION_KEPT}" if settled else detail
 
 
+# Said when the picture of the records could not be built, before anything was
+# asked of the model.
+PICTURE_FAILED = (
+    "Your records could not be put into the picture the model reads, so nothing "
+    "was asked of it and nothing was spent. Ask again; if it happens again, the "
+    "window the app runs in shows what went wrong."
+)
+
+
+def _picture(turn: PreparedTurn) -> list[dict]:
+    """What the model reads on this turn, built in a session of this
+    function's own: the picture, the conversation as stored, and on a turn
+    that answers a card, the note about the decision.
+
+    Built on the stream, after `start` and after `decided`, and no longer with
+    the question. Built with it, a picture that failed (issue #4's goal a
+    century away, 2026-10-18) answered 500 with the question already stored:
+    in a new conversation before `start`, so the reader never learnt where it
+    was and every retry opened another; on a card's turn after the write, so
+    the panel never heard the decision. Here a failure ends the turn as any
+    other does: said, logged with its traceback, and stored as its answer."""
+    try:
+        with SessionLocal() as db:
+            conv = crud.get_chat_conversation(db, turn.conversation_id)
+            if conv is None:  # deleted between the question and its answer
+                raise advisor.AdvisorError("This conversation was deleted before it was answered.")
+            messages = _messages(db, conv, now=turn.now)
+            if turn.decision is not None:
+                found = crud.find_chat_card(db, turn.decision)
+                if found is None:
+                    raise advisor.AdvisorError(
+                        "The conversation this card belonged to is gone. What it did is done, "
+                        "and on record."
+                    )
+                messages.append(_decision_note(found[0], turn.decision))
+            return messages
+    except advisor.AdvisorError:
+        raise
+    except Exception:
+        logger.exception("the chat's picture could not be built")
+        raise advisor.AdvisorError(PICTURE_FAILED) from None
+
+
 def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]:
     """Run a confirmed card's long tool, saying what it finishes as it finishes,
-    then settle the card and RETURN the messages the model is about to read,
-    ending on the note about the decision, with the card as now stored.
+    then settle the card and RETURN it as now stored. What the model reads is
+    built after it, by the stream (`_picture`), so a picture that fails once
+    the card is settled says that the decision stands.
 
     Two things happen here that do not happen on the ordinary confirm path, and
     both are consequences of the tool taking a minute rather than a millisecond.
@@ -1578,8 +1661,7 @@ def _work(pending: Pending, conversation_id: int) -> Iterator[schemas.ChatEvent]
                     "Another window decided this card while its work was running. "
                     "It is done, and on record."
                 )
-        messages = [*_messages(db, message.conversation), _decision_note(message, pending.card_id)]
-        return messages, decided
+        return decided
 
 
 def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
@@ -1661,7 +1743,7 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         page_label=turn.page_label,
     )
     blocks: list[dict] = []
-    messages = list(turn.messages)
+    messages: list[dict] = []
     ending: tuple[str, str | None] | None = None
     # What the provider said each round read and cost, one entry per round
     # asked, None for a round it said nothing about; and the same for every
@@ -1681,9 +1763,13 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         if turn.decided is not None:
             yield schemas.ChatDecided(card=schemas.ChatCardBlock(**tools.present(turn.decided)))
         if turn.pending is not None:
-            messages, decided = yield from _work(turn.pending, turn.conversation_id)
+            decided = yield from _work(turn.pending, turn.conversation_id)
             settled = True
             yield schemas.ChatDecided(card=schemas.ChatCardBlock(**tools.present(decided)))
+        # What the model reads, built now that the reader knows where this
+        # turn is and what was decided: a failure here is an error like any
+        # other, with the decision kept.
+        messages = _picture(turn)
         # The same on every round that has tools, whatever happens in the
         # turn: they come first in what a provider caches, so a round whose
         # tools changed would pay for everything it sends again.

@@ -270,8 +270,8 @@ class Tool:
     def __post_init__(self) -> None:
         if (self.run is None) == (self.walk is None):
             raise TypeError(
-                f"{self.name}: a tool declares exactly one of run and walk — "
-                "neither leaves it with no body, both leave two that can disagree."
+                f"{self.name}: a tool declares exactly one of run and walk. "
+                "Neither leaves it with no body, both leave two that can disagree."
             )
 
 
@@ -1258,9 +1258,9 @@ def _propose_transaction(db: Session, args: RecordTransactionArgs) -> Proposal:
         rate = fx.rate_words(db, (entry.create.currency, entry.create.price_currency), entry.fx_as_of)
         cash += f" (at {rate})"
     if args.kind == "close":
-        body = f"{what} — {cash} back"
+        body = f"{what}, {cash} back"
     elif args.kind == "dividend":
-        body = f"{what} — {cash} on {args.quantity:g} units"
+        body = f"{what}, {cash} on {args.quantity:g} units"
     else:
         body = (
             f"{args.quantity:g} {what} @ {args.unit_price:.2f} "

@@ -22,6 +22,7 @@ chain (`app/chain.py`), proposed and read from the chat.
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 from collections.abc import Iterable, Iterator
@@ -216,7 +217,7 @@ def _position_caveats(r: dict) -> list[str]:
             "contract note"
         )
     if r.get("currency_note"):
-        notes.append(f"CURRENCY MISMATCH — {r['currency_note']}")
+        notes.append(f"CURRENCY MISMATCH: {r['currency_note']}")
     return notes
 
 def _plan_targets_label(plan) -> str:
@@ -633,7 +634,7 @@ def _render_tax(est: dict) -> list[str]:
         where = f" ({est['country']})" if est["country"] else ""
         return [
             f"- TAX: nothing realized and no gross dividends to estimate on yet. "
-            f"The user's declared rates{where} are {rates} — use these if they ask "
+            f"The user's declared rates{where} are {rates}. Use these if they ask "
             f"what something would cost them, and do not substitute your own."
         ]
 
@@ -663,7 +664,7 @@ def _render_tax(est: dict) -> list[str]:
         if est["dividends_recorded_net"]:
             line += (
                 f" (a further {est['dividends_recorded_net']:.2f} was corrected by "
-                "hand and is already net — no rate applied)"
+                "hand and is already net: no rate applied)"
             )
         lines.append(line)
     if est["total"] is not None:
@@ -1208,7 +1209,10 @@ def _flow_line(flow: dict, *, scheduled: bool) -> str:
     the account its cash moves on (brief AN: the chat could not point at the
     right line, nor add one to the right account, without it) and its dates:
     when it started (or that nobody said) for one in force or ended, when it
-    starts for one still to come, and when it ends if it does."""
+    starts for one still to come, when it ends if it does, and the day the
+    reader entered it. That last one since brief BE: brief AC's paid run read
+    a flow's start as the day it was entered, and placed an answer before a
+    line that came after it."""
     text = _flow_text(
         flow["name"], flow["classified"], flow["category"],
         flow["amount"], flow["currency"], flow["frequency"],
@@ -1226,7 +1230,7 @@ def _flow_line(flow: dict, *, scheduled: bool) -> str:
     else:
         when = f", since {start}" if start else ", no start date"
     until = f", until {flow['end_date']}" if flow["end_date"] else ""
-    return f"{text}{where}{when}{until}"
+    return f"{text}{where}{when}{until}, entered {flow['entered']}"
 
 
 def _render_commitments(
@@ -1747,6 +1751,50 @@ def _short_of_credit(error, body: dict) -> tuple[str, str]:
     )
 
 
+# The most of a provider's own words a refusal repeats. `metadata.raw` is
+# whatever the provider sent back, a page of HTML included, and a refusal is
+# read in the chat's panel, under the question.
+PROVIDER_WORDS_MAX = 300
+
+
+def _provider_said(body: dict) -> str:
+    """The provider's own words, said after OpenRouter's, when OpenRouter
+    passes them on: its error's `metadata` names the provider
+    (`provider_name`) and carries what the provider answered (`raw`), as
+    OpenRouter documents its errors. "" when there is nothing to say, which
+    leaves the sentence as it was.
+
+    Brief AJ's P1 met "Provider returned error" and nothing more; the cause
+    was in `raw`, which nothing read (brief BE)."""
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    words = _words_of(metadata.get("raw")).rstrip(".")
+    if not words:
+        return ""
+    who = str(metadata.get("provider_name") or "").strip() or "The provider"
+    if len(words) > PROVIDER_WORDS_MAX:
+        return f" {who} said: {words[: PROVIDER_WORDS_MAX - 1].rstrip()}…"
+    return f" {who} said: {words}."
+
+
+def _words_of(raw: object) -> str:
+    """What a provider answered, on one line: the message of a JSON error,
+    passed as text or as an object, else the text itself."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return " ".join(raw.split())
+    if isinstance(raw, dict):
+        inner = raw.get("error") if isinstance(raw.get("error"), dict) else raw
+        message = inner.get("message") or raw.get("message") or raw.get("detail")
+        if isinstance(message, str):
+            return " ".join(message.split())
+        return " ".join(json.dumps(raw, ensure_ascii=False).split())
+    return "" if raw is None else " ".join(str(raw).split())
+
+
 def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
     """What the reader is told when a call to OpenRouter fails: what happened,
     what they can do about it, and what OpenRouter said, last.
@@ -1795,6 +1843,7 @@ def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
         f"OpenRouter refused the call to {model} with {status}"
         + (f": {means}. " if means else ". ")
         + f"{remedy} OpenRouter said: {said}."
+        + _provider_said(body)
     )
     if status not in (400, 404):
         return AdvisorError(refused)

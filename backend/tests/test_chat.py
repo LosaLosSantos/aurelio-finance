@@ -307,7 +307,8 @@ def test_an_answer_that_broke_is_stored_as_it_ended(client, monkeypatch):
 def test_a_reader_who_leaves_leaves_a_cut_answer_on_record(client, monkeypatch):
     """Closing the stream early — the browser gone, or Stop pressed — stores
     what had been written so far as `cut`, and the next turn carries those
-    words to the model, because they are what the reader read."""
+    words to the model, because they are what the reader read, and after
+    them the line the panel showed under them (brief BE)."""
     _fake_stream(monkeypatch, pieces=("partial ", "answer ", "never seen"))
     with SessionLocal() as db:
         turn = chat.prepare(db, schemas.ChatRequest(content="hi"))
@@ -324,7 +325,10 @@ def test_a_reader_who_leaves_leaves_a_cut_answer_on_record(client, monkeypatch):
 
     seen = _fake_stream(monkeypatch)
     _ask(client, "go on", conversation_id=turn.conversation_id)
-    assert seen[0]["messages"][-2] == {"role": "assistant", "content": "partial answer "}
+    assert seen[0]["messages"][-2] == {
+        "role": "assistant",
+        "content": "partial answer \n\n[Stopped before it was finished.]",
+    }
 
 
 def test_an_answer_with_no_words_is_not_repeated_to_the_model(client, monkeypatch):
