@@ -492,9 +492,37 @@ def _clean_isin(raw: str | None) -> str | None:
     return cleaned or None
 
 
-class HoldingCostRefused(ValueError):
+class HoldingRefused(ValueError):
+    """A row the app will not store as the request leaves it, refused in the
+    reader's words, which the route sends as its 422."""
+
+
+class HoldingCostRefused(HoldingRefused):
     """A cost that says it paid for more units than the row holds, or for
     units of a row that has none. Refused in the reader's words."""
+
+
+def _priced_or_valued(row: dict) -> None:
+    """Refuse units that say neither their price, nor what they are worth, nor
+    what they cost.
+
+    The situation form never sends such a row: units go with a price, a total
+    with its value. Through the API alone, measured at `c61e5bc` (brief BE),
+    10 units with no price, value or cost were stored, and after a buy of 5 at
+    100 the projection read a book of 500.00 for 15 units, an average of 33.33
+    and the cost known: the 10 counted as paid for at nothing. Units with a
+    cost and no price stay: what was paid is then the one observation there
+    is (`test_a_photograph_that_recorded_no_value_is_not_an_observation_of_zero`)."""
+    if (
+        row["quantity"] is not None
+        and row["unit_price"] is None
+        and row["value"] is None
+        and row["cost_basis"] is None
+    ):
+        raise HoldingRefused(
+            "Units need a price, a value or a cost: type the price per unit, what the "
+            "whole position is worth, or what it cost."
+        )
 
 
 def _units_paid_for(row: dict) -> None:
@@ -586,12 +614,14 @@ def _forget_paid_declined(db: Session, holding_ids: Collection[int]) -> None:
 
 def _holding_columns(db: Session, row: dict, sent: Collection[str]) -> dict:
     """Holding columns: a cleaned ISIN, and a `value` worked out from quantity
-    x unit price when it was not given. A cost that paid for more units than
-    the row holds is refused (`_units_paid_for`).
+    x unit price when it was not given. Units with no price, value or cost are
+    refused (`_priced_or_valued`), and so is a cost that paid for more units
+    than the row holds (`_units_paid_for`).
 
     It takes the session it does not need and the sent keys it does not read,
     because the three builders `_update` calls share one shape — see `Build`.
     """
+    _priced_or_valued(row)
     _units_paid_for(row)
     payload = dict(row)
     payload["isin"] = _clean_isin(row["isin"])

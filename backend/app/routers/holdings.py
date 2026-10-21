@@ -16,9 +16,10 @@ from app.routers.deps import get_or_404, holding_read, holding_reads
 router = APIRouter(prefix="/api", tags=["holdings"])
 
 
-def _refused(exc: crud.HoldingCostRefused) -> HTTPException:
-    """A cost that pays for more units than the row holds: a 422 whose detail
-    is the sentence, which the form shows as written (brief AV)."""
+def _refused(exc: crud.HoldingRefused) -> HTTPException:
+    """A row the app will not store: a 422 whose detail is the sentence,
+    which the form shows as written. A cost that pays for more units than the
+    row holds (brief AV), and units with no price, value or cost (brief BE)."""
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
 
 
@@ -36,7 +37,7 @@ def create_holding(
     get_or_404(db, models.Snapshot, snapshot_id)
     try:
         return holding_read(db, crud.create_holding(db, snapshot_id, payload))
-    except crud.HoldingCostRefused as exc:
+    except crud.HoldingRefused as exc:
         raise _refused(exc)
 
 
@@ -74,7 +75,7 @@ def update_holding(
     get_or_404(db, models.Holding, holding_id)
     try:
         return holding_read(db, crud.update_holding(db, holding_id, payload))
-    except crud.HoldingCostRefused as exc:
+    except crud.HoldingRefused as exc:
         raise _refused(exc)
 
 

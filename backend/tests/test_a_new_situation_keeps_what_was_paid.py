@@ -20,6 +20,7 @@ from contextlib import closing
 import pytest
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import text
 
 from app import crud, database, pac, prices, schemas, screen
 from app.database import SessionLocal
@@ -184,8 +185,12 @@ def test_a_cost_recorded_for_every_unit_is_carried_whole(client, monkeypatch):
 
 def test_units_with_no_value_and_no_cost_are_carried_as_head_carried_them(client, monkeypatch):
     """Filed under STILL OPEN: such units count as costing nothing, so with a
-    buy the row reads all paid and the new row's cost covers every unit."""
-    bank, _ = _photo(client, unit_price=None)
+    buy the row reads all paid and the new row's cost covers every unit. The
+    API refuses such a row since brief BE; one written before is read so."""
+    bank, hid = _photo(client)
+    with SessionLocal() as db:
+        db.execute(text("UPDATE holdings SET unit_price = NULL, value = NULL WHERE id = :id"), {"id": hid})
+        db.commit()
     _buy(client, bank, "2026-02-02", 5, 100)
     _market(monkeypatch, None)
     _, row = _new_situation(client, bank)

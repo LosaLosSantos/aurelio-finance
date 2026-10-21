@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 
 import pytest
+from sqlalchemy import text
 
 from app import crud, dated, fx, positions, prices
 from app.database import SessionLocal
@@ -338,10 +339,15 @@ def test_a_row_with_a_single_situation_proposes_nothing(client, the_day):
 
 def test_units_photographed_with_no_value_and_no_cost_are_not_proposed(client, the_day):
     """STILL OPEN F3: such units sit in the paid pool at zero. Nothing bought
-    them, so nothing is proposed for them."""
+    them, so nothing is proposed for them. The API refuses such a row since
+    brief BE; one written before is read so."""
     bank = _account(client)
     sid = _made(client.post(f"/api/institutions/{bank}/snapshots", json={"date": FIRST}))["id"]
-    _made(client.post(f"/api/snapshots/{sid}/holdings", json={**FUND, "quantity": 10, "currency": "EUR"}))
+    _made(client.post(f"/api/snapshots/{sid}/holdings",
+                      json={**FUND, "quantity": 10, "unit_price": 100, "currency": "EUR"}))
+    with SessionLocal() as db:
+        db.execute(text("UPDATE holdings SET unit_price = NULL, value = NULL"))
+        db.commit()
     _buy(client, bank, "2026-04-01", 5, 100)
     _situation(client, bank, SECOND, _row(15, 105))
     assert _walk().proposals == []

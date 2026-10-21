@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import anyio
 import pytest
 from mcp.client import Client
+from sqlalchemy import text
 
 from app import crud, pac, positions, prices
 from app.database import SessionLocal, engine
@@ -201,8 +202,12 @@ def test_a_row_with_no_units_says_no_units_paid(client):
 def test_units_photographed_with_no_value_and_no_cost_read_as_they_did(client):
     """Filed under STILL OPEN by brief AV: such units count as costing nothing,
     and the row says its cost is known once a buy joins them. The paid pool
-    keeps that reading rather than changing it in passing."""
-    bank = _photo(client, unit_price=None)
+    keeps that reading rather than changing it in passing. The API refuses
+    such a row since brief BE; one written before is read so."""
+    bank = _photo(client)
+    with SessionLocal() as db:
+        db.execute(text("UPDATE holdings SET unit_price = NULL, value = NULL"))
+        db.commit()
     _made(client.post("/api/transactions", json={
         "kind": "buy", "date": "2026-02-02", "institution_id": bank, "asset_name": "Fondo Alfa",
         "symbol": "ALFA.MI", "quantity": 5, "unit_price": 100, "currency": "EUR",

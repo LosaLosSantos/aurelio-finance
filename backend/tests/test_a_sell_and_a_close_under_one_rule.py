@@ -17,6 +17,7 @@ result at average cost. Every name and figure here is invented.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
 from app import advisor, analytics, crud
 from app.database import SessionLocal
@@ -194,8 +195,12 @@ def test_a_disposal_with_no_unit_left_follows_what_the_position_was(client):
 
 def test_units_with_no_value_and_no_cost_read_as_they_did(client):
     """Filed under STILL OPEN: such units count as costing nothing. The rule
-    keeps that reading: their sale is a gain, as it was."""
-    bank = _photo(client, unit_price=None)
+    keeps that reading: their sale is a gain, as it was. The API refuses such
+    a row since brief BE; one written before is read so."""
+    bank = _photo(client)
+    with SessionLocal() as db:
+        db.execute(text("UPDATE holdings SET unit_price = NULL, value = NULL"))
+        db.commit()
     _entry(client, bank, "buy", "2026-02-02", quantity=5, unit_price=100)
     _entry(client, bank, "sell", "2026-05-04", quantity=15, unit_price=110)
     row = _row(client)
