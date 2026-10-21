@@ -36,6 +36,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import crud, fx, geo, issuers, models, notice, positions, prices
@@ -406,6 +407,38 @@ def _poorer(result: dict, cached: models.CompositionCache) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class StoredIsin:
+    """What the stored catalogue (`instruments`, downloaded by `catalogue`)
+    says of a base ticker: whether it holds any fund at all, and the ISIN of
+    the one fund it gives that ticker, None when it gives none or several."""
+
+    held: bool
+    isin: str | None
+
+
+def _stored_isin(db: Session, ticker: str) -> StoredIsin:
+    """The stored catalogue's ISIN for `ticker`, a base ticker as
+    `_base_ticker` writes it. Two rows read at most, and one more to tell an
+    empty catalogue from a ticker it does not give."""
+    found = list(
+        db.scalars(
+            select(models.Instrument.isin)
+            .where(func.upper(models.Instrument.base_ticker) == ticker.upper())
+            .limit(2)
+        )
+    )
+    if len(found) == 1:
+        return StoredIsin(held=True, isin=found[0])
+    held = bool(found) or db.scalar(select(models.Instrument.isin).limit(1)) is not None
+    return StoredIsin(held=held, isin=None)
+
+
+# A caller that did not look, read as an empty stored catalogue: the screener,
+# then Trackinsight, as before the stored catalogue was read.
+NOTHING_STORED = StoredIsin(held=False, isin=None)
+
+
 def get_composition(
     db: Session, symbol: str, refresh: bool = False, isin: str | None = None
 ) -> dict:
@@ -447,7 +480,7 @@ def get_composition(
             raise Undecomposable(symbol, _errors_in(cached))
 
     try:
-        result = _resolve_and_fetch(symbol, isin)
+        result = _resolve_and_fetch(symbol, isin, _stored_isin(db, _base_ticker(symbol)))
     except CompositionError as exc:
         # Stale data beats no data — unless the stale row IS this same refusal,
         # which has nothing to serve and only needs its date moved on.
@@ -537,11 +570,13 @@ def _remember_that_nothing_answered(
     )
 
 
-def _resolve_and_fetch(symbol: str, isin: str | None = None) -> dict:
+def _resolve_and_fetch(
+    symbol: str, isin: str | None = None, stored: StoredIsin = NOTHING_STORED
+) -> dict:
     """The waterfall, all plain HTTP: an ISIN (given, or resolved from the
-    ticker) unlocks justETF, which owns the country/sector axes; Trackinsight
-    covers funds by ticker when no ISIN is available; yfinance closes the gap
-    with sectors alone."""
+    ticker, `stored` first) unlocks justETF, which owns the country/sector
+    axes; Trackinsight covers funds by ticker when no ISIN is available;
+    yfinance closes the gap with sectors alone."""
     errors: list[str] = []
 
     # Ask what the instrument IS before assuming it is a fund. A direct share
@@ -578,7 +613,7 @@ def _resolve_and_fetch(symbol: str, isin: str | None = None) -> dict:
 
     isin = (isin or "").strip().upper() or (symbol.upper() if is_isin(symbol) else None)
     if not isin:
-        isin = _resolve_isin(_base_ticker(symbol), errors)
+        isin = _resolve_isin(_base_ticker(symbol), errors, stored)
 
     # The issuer first: it publishes every position, so the axes and the
     # overlap come from the real portfolio instead of a published top ten.
@@ -644,18 +679,31 @@ def _resolve_and_fetch(symbol: str, isin: str | None = None) -> dict:
     }
 
 
-def _resolve_isin(ticker: str, errors: list[str]) -> str | None:
-    """Ticker -> ISIN without a browser. justETF's screener is tried first
-    (it is the same catalogue the profile pages come from), then Trackinsight.
-    A miss is normal: alternative listings carry their own ticker (Milan's
-    MVOL is Xetra's IQQ0 in the screener), which is exactly why a holding can
-    carry its ISIN explicitly, and why a miss ends by saying so."""
-    try:
-        row = _justetf_catalogue().get(ticker)
-        if row:
-            return row
-    except Exception as exc:
-        errors.append(f"justETF catalogue: {type(exc).__name__}: {exc}")
+def _resolve_isin(ticker: str, errors: list[str], stored: StoredIsin) -> str | None:
+    """Ticker -> ISIN without a browser: the stored catalogue's, when it
+    gives the ticker one fund; justETF's screener only while the stored
+    catalogue holds no fund at all; then Trackinsight.
+
+    The stored catalogue is the screener's own download, kept (`catalogue`),
+    and until brief BE nothing here read it: the screener was downloaded a
+    second time (6.2 MB on 2026-10-04), and when that failed, offline or with
+    justETF down, a fund the app knew was not looked through and the reader
+    was told to add an ISIN the app held (measured at `c61e5bc`). A ticker it
+    gives to several funds (15 of 4,528 in the test database's catalogue) is
+    asked of Trackinsight, which resolves by its own ticker, rather than taken
+    from whichever the screener's dictionary kept last. A miss is normal:
+    alternative listings carry their own ticker (Milan's MVOL is Xetra's IQQ0
+    in the screener), which is exactly why a holding can carry its ISIN
+    explicitly, and why a miss ends by saying so."""
+    if stored.isin:
+        return stored.isin
+    if not stored.held:
+        try:
+            row = _justetf_catalogue().get(ticker)
+            if row:
+                return row
+        except Exception as exc:
+            errors.append(f"justETF catalogue: {type(exc).__name__}: {exc}")
     try:
         found = _fetch_trackinsight_isin(ticker)
         if found:

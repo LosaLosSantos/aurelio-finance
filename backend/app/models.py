@@ -715,7 +715,7 @@ class PriceCache(Base):
 
 class FxRate(Base):
     """One ECB reference rate: units of `currency` per 1 `base`, as published
-    for the day `as_of`. Fetched from frankfurter.app (see app/fx.py).
+    for the day `as_of`. Fetched from frankfurter.dev (see app/fx.py).
 
     A row per DAY, kept: a refresh adds the days after the newest one rather
     than overwriting it, so the table is the history of the rates as well as

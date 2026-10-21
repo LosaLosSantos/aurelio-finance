@@ -673,6 +673,40 @@ def _settle(
 # reads configuration ever meets these rows.
 _DIVIDENDS_ASKED = "dividends_asked:{symbol}"
 
+# A ticker whose dividends Yahoo answered nothing about while the market
+# answered (the canary of `prices.market_reachable`): a ticker it does not know,
+# delisted or typed wrong. Asked again only on the reader's next day; the rows
+# of an earlier day go as the day's are written, as `_UNPRICED_ON`'s do. Brief
+# BE measured at `c61e5bc` three asks in three catch-ups, a request at every
+# page load. An outage (the canary silent too) is kept nowhere, so the next
+# catch-up asks again and says nothing, as decided in review on 2026-09-30.
+_UNANSWERED_ON = "dividends_unanswered:{symbol}"
+
+
+def _unanswered_today(db: Session, symbol: str, today: str) -> bool:
+    """Whether Yahoo answered nothing about `symbol`'s dividends today while
+    the market answered. One read."""
+    return db.scalar(
+        select(models.Setting.value).where(models.Setting.key == _UNANSWERED_ON.format(symbol=symbol))
+    ) == today
+
+
+def _remember_unanswered(db: Session, symbol: str, today: str) -> None:
+    """Keep `symbol` as answered nothing today, and forget the rows of an
+    earlier day, as statements (`_remember_unpriced` says why). Committed at
+    once."""
+    db.execute(
+        delete(models.Setting)
+        .where(
+            models.Setting.key.startswith(_UNANSWERED_ON.format(symbol=""), autoescape=True),
+            models.Setting.value != today,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    upsert = sqlite_insert(models.Setting).values(key=_UNANSWERED_ON.format(symbol=symbol), value=today)
+    db.execute(upsert.on_conflict_do_update(index_elements=["key"], set_={"value": today}))
+    commit(db)
+
 
 def _parse_kept(value: str | None) -> dict | None:
     """A kept answer as stored, or None when there is none or it cannot be
@@ -790,11 +824,17 @@ def _dividend_history(
             else:
                 start = need if reaches else reach
                 since = min(datetime.date.fromisoformat(start), datetime.date.fromisoformat(kept["on"]))
+            if _unanswered_today(db, symbol, today):
+                # Yahoo said nothing of it today while the market answered.
+                answers[symbol] = prices.DividendWindow(answered=False, dividends=[])
+                return answers[symbol]
             try:
                 fetched = prices.get_dividends_since(symbol, since)
             except prices.PriceError as exc:
                 answers[symbol] = exc
                 raise
+            if not fetched.answered and prices.market_reachable():
+                _remember_unanswered(db, symbol, today)
             answer = fetched
             if fetched.answered:
                 merged = _merge(kept, fetched, since)
@@ -942,8 +982,10 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
                 skipped.append({"label": symbol, "occurrence": None, "reason": str(exc)})
                 continue
             if not window.answered:
-                # Nobody answered. Not kept, so the next catch-up asks again,
-                # and said nowhere, as before: the next start retries by itself.
+                # Nobody answered. Said nowhere, as before. An outage is not
+                # kept, so the next start retries by itself; a ticker Yahoo
+                # does not know, while the market answers, waits for the next
+                # day (`_UNANSWERED_ON`).
                 continue
             # A row this catch-up wrote, still on the ex-date it was written on
             # but keeping none (one the reader corrected before rows kept their
@@ -1646,7 +1688,8 @@ def refresh_prices(db: Session) -> dict[str, dict]:
     threads (measured 2026-10-08, 18 symbols in 1.24 s).
 
     A listing's currency is the cache's; one it never learnt is asked once
-    (`get_currencies`). A symbol that does not answer keeps the price it had,
+    (`get_currencies`), and one it learnt as GBP once more, since it may be
+    pence (`_POUNDS_ASKED_AGAIN`). A symbol that does not answer keeps the price it had,
     with its date, which the picture and the pages show, and one Yahoo priced
     nothing for, while it priced others or while the market answered, is not
     asked again that day, a restart included (`_UNPRICED_ON`). Returns what
@@ -1667,6 +1710,10 @@ def refresh_prices(db: Session) -> dict[str, dict]:
     if not due:
         return {}
     known = {s: cached[s].currency for s in due if s in cached and cached[s].currency}
+    # Pounds the cache may have learnt for pence: asked once more below.
+    doubtful = _pounds_not_asked_again(db, [s for s, c in known.items() if c == "GBP"])
+    for symbol in doubtful:
+        del known[symbol]
     try:
         quotes = prices.get_quotes(due)
     except prices.PriceError as exc:
@@ -1689,7 +1736,39 @@ def refresh_prices(db: Session) -> dict[str, dict]:
     for symbol, quote in quotes.items():
         quote["currency"] = known.get(symbol) or found.get(symbol)
     crud.upsert_price_caches(db, quotes)
+    _asked_again(db, [s for s in doubtful if s in found])
     return quotes
+
+
+# A listing's currency the cache learnt as "GBP" may be pence. Until `2fb9f7b`
+# (2026-10-08) `_fetch_currency` upper-cased what Yahoo names, and London
+# quotes some listings in pence, "GBp": such a row values its position a
+# hundredfold. A currency once learnt is never asked again, so a row learnt
+# then stays wrong for good (measured at `c61e5bc`, brief BE). Each symbol the
+# cache holds as GBP is therefore asked once more by the day's refresh: the
+# answer's spelling replaces the row's, and the symbol is kept here as asked,
+# with the reader's day. One that Yahoo does not answer is asked at its next
+# refresh.
+_POUNDS_ASKED_AGAIN = "pounds_asked_again:{symbol}"
+
+
+def _pounds_not_asked_again(db: Session, symbols: list[str]) -> list[str]:
+    """Which of `symbols`, each cached as GBP, have not been asked again yet.
+    One read."""
+    keys = {_POUNDS_ASKED_AGAIN.format(symbol=s): s for s in symbols}
+    asked = set(db.scalars(select(models.Setting.key).where(models.Setting.key.in_(list(keys)))))
+    return [s for key, s in keys.items() if key not in asked]
+
+
+def _asked_again(db: Session, symbols: list[str]) -> None:
+    """Keep `symbols` as asked again, with the reader's day. Committed at once."""
+    for symbol in symbols:
+        upsert = sqlite_insert(models.Setting).values(
+            key=_POUNDS_ASKED_AGAIN.format(symbol=symbol), value=dated.today()
+        )
+        db.execute(upsert.on_conflict_do_update(index_elements=["key"], set_={"value": dated.today()}))
+    if symbols:
+        commit(db)
 
 
 def catch_up(db: Session, as_of: datetime.date | None = None) -> dict:

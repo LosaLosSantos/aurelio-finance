@@ -1,4 +1,4 @@
-"""Foreign-exchange rates (ECB via frankfurter.app) and conversion to the base.
+"""Foreign-exchange rates (ECB via frankfurter.dev) and conversion to the base.
 
 Every total is in ONE currency, the base, which the reader's database names in
 `settings` (`base_currency`, read by `base_currency`); anything in another
@@ -48,7 +48,11 @@ from app.database import commit, read_only
 # only base every figure it holds was ever computed in.
 BASE_CURRENCY_KEY = "base_currency"
 DEFAULT_BASE_CURRENCY = "EUR"
-FRANKFURTER_URL = "https://api.frankfurter.app"
+# Frankfurter's own address. The app called api.frankfurter.app, which answers
+# every request with a 301 to this one (seen 2026-10-05; again on 2026-10-21 for
+# brief BE, the two bodies byte-identical): each rate request was two, to two
+# hosts. Redirects are still followed (`_fetch_rates`), should it move again.
+FRANKFURTER_URL = "https://api.frankfurter.dev/v1"
 CACHE_TTL_HOURS = 24  # ECB publishes one reference rate per working day
 
 
