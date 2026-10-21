@@ -54,7 +54,7 @@ test("justETF's catalogue and its profile page are one source to the reader", ()
   assert.equal(readReason(raw).words, "Nothing could look inside it: justETF did not answer.");
 });
 
-test("a coin or a commodity is not told to add a fund's ISIN; anything else is", () => {
+test("a coin or a commodity is not told to add a fund's ISIN; a fund is", () => {
   const raw =
     "Nothing can decompose 'BTC-EUR': No ISIN found for 'BTC-EUR'. Add the fund's ISIN to this holding to unlock the country breakdown. · " +
     "Trackinsight: CompositionError: Trackinsight has no composition for 'BTC-EUR' · " +
@@ -62,8 +62,36 @@ test("a coin or a commodity is not told to add a fund's ISIN; anything else is",
   assert.equal(readReason(raw, "crypto").words, "Nothing could look inside it: Trackinsight and Yahoo had nothing.");
   assert.equal(readReason(raw, "commodity").words, "Nothing could look inside it: Trackinsight and Yahoo had nothing.");
   assert.equal(
-    readReason(raw, "equity").words,
+    readReason(raw, "fund_etf").words,
     "Nothing could look inside it: Trackinsight and Yahoo had nothing. No ISIN found for 'BTC-EUR'. Add the fund's ISIN to this holding to unlock the country breakdown.",
+  );
+});
+
+/* A share is never told to add a fund's ISIN (brief BD). */
+
+test("a share Yahoo names with no country and no sector is said as a share, with no remedy", () => {
+  const raw = "Nothing can decompose 'ZZSH.DE': Yahoo: a share, with no country and no sector given";
+  assert.deepEqual(readReason(raw, "equity"), {
+    words: "A share: Yahoo names no country or sector for it, so there is nothing to place it by.",
+    detail: raw,
+  });
+});
+
+test("a row of Stocks & ETF, a share or a fund typed by hand, is told the remedy as a condition", () => {
+  // The demo's share offline, as P0 measured it (brief BD), the sources' text shortened.
+  const raw =
+    "Nothing can decompose 'SAP.DE': justETF catalogue: ConnectionError: refused · " +
+    "No ISIN found for 'SAP'. Add the fund's ISIN to this holding to unlock the country breakdown. · " +
+    "Trackinsight: ConnectError: refused · Yahoo: DNSError: refused";
+  assert.equal(
+    readReason(raw, "equity").words,
+    "Nothing could look inside it: justETF, Trackinsight and Yahoo did not answer. " +
+      "No fund's ISIN was found for 'SAP'. If it is a fund, add its ISIN to this holding; a share needs none, Yahoo places it by its ticker.",
+  );
+  assert.equal(
+    readReason(raw, "bond").words,
+    "Nothing could look inside it: justETF, Trackinsight and Yahoo did not answer. " +
+      "No ISIN found for 'SAP'. Add the fund's ISIN to this holding to unlock the country breakdown.",
   );
 });
 

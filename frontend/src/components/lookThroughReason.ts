@@ -17,6 +17,13 @@
    nothing inside for one to unlock (the one form offers them no ISIN either,
    situationForm.ts).
 
+   Nor is it said, as it stands, of a share (brief BD). A share Yahoo names
+   with no country and no sector is said as a share, from the backend's own
+   sentence (`composition.SHARE_WITH_NO_PLACE`). And a row of Stocks & ETF
+   (`equity`) may be a share or a fund typed by hand, which the page cannot
+   tell apart, so its remedy is said as a condition: a fund needs its ISIN, a
+   share none, Yahoo placing it by its ticker.
+
    Pure, so `tests/lookThroughReason.test.ts` runs it under Node. */
 
 /** The sources as the look-through names them (composition.py), in words. */
@@ -48,6 +55,19 @@ function list(names: string[]): string {
 /** The classes told nothing about an ISIN. */
 const NO_ISIN_TO_GIVE = ["crypto", "commodity"];
 
+/** The backend's sentence for a share Yahoo names with no country and no
+    sector, and the page's words for it. */
+const SHARE = /^Yahoo: a share\b/;
+const SHARE_WORDS = "A share: Yahoo names no country or sector for it, so there is nothing to place it by.";
+
+/** The backend's remedy, and the ticker it names. */
+const REMEDY = /^No ISIN found for '([^']*)'/;
+
+/** The remedy for a row that may be a share or a fund. */
+function eitherRemedy(ticker: string): string {
+  return `No fund's ISIN was found for '${ticker}'. If it is a fund, add its ISIN to this holding; a share needs none, Yahoo places it by its ticker.`;
+}
+
 /** The words for a reason the look-through returned for a position of class
     `assetClass`. */
 export function readReason(raw: string, assetClass: string | null = null): Reason {
@@ -60,8 +80,11 @@ export function readReason(raw: string, assetClass: string | null = null): Reaso
   const remedies: string[] = [];
   for (const piece of all[1].split(" · ")) {
     const part = piece.trim();
-    if (part.startsWith("No ISIN found for")) {
-      if (!NO_ISIN_TO_GIVE.includes(assetClass ?? "")) remedies.push(part);
+    if (SHARE.test(part)) return { words: SHARE_WORDS, detail: text };
+    const remedy = REMEDY.exec(part);
+    if (remedy) {
+      if (NO_ISIN_TO_GIVE.includes(assetClass ?? "")) continue;
+      remedies.push(assetClass === "equity" ? eitherRemedy(remedy[1]) : part);
       continue;
     }
     const cut = part.indexOf(": ");

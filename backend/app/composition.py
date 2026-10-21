@@ -84,6 +84,12 @@ class Undecomposable(CompositionError):
 # with real (empty) axes, so `_ttl_for` gives it the short TTL on its own.
 UNDECOMPOSABLE = "undecomposable"
 
+# Why a share Yahoo names, with no country and no sector, is not looked
+# inside (brief BD). The fund sources cannot place a share either, and their
+# remedy, adding a fund's ISIN, is not a share's: the share stops here, and
+# the page reads this sentence and says it as a share (lookThroughReason.ts).
+SHARE_WITH_NO_PLACE = "Yahoo: a share, with no country and no sector given"
+
 
 def _base_ticker(symbol: str) -> str:
     """Strip the Yahoo exchange suffix: 'VWCE.MI' -> 'VWCE'."""
@@ -248,7 +254,10 @@ def _canonical_sector(name: str) -> str:
 
 def _fetch_equity_profile(symbol: str) -> dict | None:
     """A single share's own profile: {name, country, sector}, or None if the
-    instrument is not a plain share. Network call.
+    instrument is not a plain share. Network call. A share Yahoo gives no
+    country and no sector is still a share, said with both None: it used to
+    come back as None, as if it were a fund, and the fund sources' remedy
+    told it to add a fund's ISIN (brief BD).
 
     A direct equity has no holdings file to look inside, and never will — but
     it does not need one: a share of Apple *is* 100% United States and 100%
@@ -263,8 +272,6 @@ def _fetch_equity_profile(symbol: str) -> dict | None:
     if (info.get("quoteType") or "").upper() != "EQUITY":
         return None
     country, sector = info.get("country"), info.get("sector")
-    if not (country or sector):
-        return None  # a share we cannot place is no better than a fund we cannot open
     return {
         "name": info.get("longName") or info.get("shortName"),
         "country": country,
@@ -548,6 +555,9 @@ def _resolve_and_fetch(symbol: str, isin: str | None = None) -> dict:
             equity = None
             logger.info("%s profile lookup failed: %s: %s", symbol, type(exc).__name__, exc)
         if equity is not None:
+            if not (equity["country"] or equity["sector"]):
+                # Nothing to place it by, and nothing inside it to open.
+                raise Undecomposable(symbol, [SHARE_WITH_NO_PLACE])
             name = equity["name"] or symbol
             return {
                 "errors": errors,
