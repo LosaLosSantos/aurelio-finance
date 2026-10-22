@@ -124,11 +124,14 @@ def send(payload: schemas.ChatRequest, db: Session = Depends(get_db)) -> Streami
 
     Configuration problems (no key, no package) arrive as an `error` event
     rather than a 503: the client has one path for "this stopped, and here is
-    why", whichever moment it stopped at. A conversation that does not exist
-    is the one thing refused before the stream: there is nowhere to store the
-    question."""
+    why", whichever moment it stopped at. Two things are refused before the
+    stream: a conversation that does not exist (404), since there is nowhere
+    to store the question, and a Thinking position the model does not have
+    (422), before anything is stored."""
     try:
         turn = chat.prepare(db, payload)
+    except chat.ThinkingNotOffered as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     except LookupError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -153,7 +156,7 @@ def decide(
     settled, so the ordering can fail into a run no receipt names and never
     into a receipt over a run that did not happen.
 
-    Three refusals, all of them BEFORE the first byte, because a refusal
+    Four refusals, all of them BEFORE the first byte, because a refusal
     arriving mid-stream is one the client has to fish out of an event — except
     for the analyzer, whose work is a minute long and therefore happens ON the
     stream. Its card is still checked here and cannot be decided twice; what
@@ -167,6 +170,8 @@ def decide(
       409  it is stale: what it was drawn against has moved since it was
            proposed, so what the card says would happen is no longer what
            would happen
+      422  the decision came with a Thinking position its model does not
+           have, refused before the card is read, so nothing is decided
 
     Anything the model itself fails at afterwards arrives as an `error` event,
     the same as any other turn — by then the write has happened and the reader
@@ -177,6 +182,8 @@ def decide(
     """
     try:
         turn = chat.resume(db, card_id, payload)
+    except chat.ThinkingNotOffered as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     except chat.CardGone:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat card {card_id} not found"

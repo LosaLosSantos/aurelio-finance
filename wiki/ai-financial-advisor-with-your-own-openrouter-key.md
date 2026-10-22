@@ -56,11 +56,13 @@ The model menu in the chat offers these:
 | `anthropic/claude-sonnet-4.6` | 1M | $3 / $15 |
 | `openai/gpt-6.1-sol-pro` | 1.05M | $2 / $10 |
 | `qwen/qwen3.8-max-0902` | 1M | $2 / $6 |
-| `moonshotai/kimi-k3` | 1M | $3 / $15 |
-| `moonshotai/kimi-k2.6` | | about six times cheaper than K3 |
+| `moonshotai/kimi-k3` | 1M | $0.24 to $4.50 / $5.50 to $22.50, by provider |
+| `moonshotai/kimi-k2.6` | 262K | $0.45 to $1.09 / $1.89 to $4.60, by provider |
 
-The prices are OpenRouter's as checked in October 2026 (August for the two Kimi models), and
-they change: the [models page](https://openrouter.ai/models) has today's.
+The prices are OpenRouter's as checked in October 2026, and they change: the
+[models page](https://openrouter.ai/models) has today's. The two Kimi models are served by
+many providers at different prices, and OpenRouter picks one for each request: on October 22,
+2026 a question to Kimi K3 was charged $2.24 / $14.52.
 
 Any other model OpenRouter serves can be set by its slug in `backend/.env`, and it then
 appears in the chat's menu too:
@@ -102,6 +104,36 @@ Reading the list is one request a day to OpenRouter, with no key and nothing of 
 it reaches OpenRouter from your computer's address, as every question to the chat does, and
 nothing more is sent. With no key set it is never made, and on a day the list cannot be read
 the app says nothing about dates.
+
+## Can it answer sooner by thinking less?
+
+Yes, on five of the six models in the menu. Beside the model, a **Thinking** control offers
+two positions: **normal**, what the model does when nothing is said, and the one lighter
+position the model really has. It is "light" (OpenRouter's `effort: low`) on Claude Opus 5.5,
+GPT-6.1 Sol Pro and Qwen 3.8 Max, which cannot stop reasoning, and "off" on Kimi K3 and Kimi
+K2.6, which can. Claude Sonnet 4.6 has no control: it does not reason unless asked. The
+choice is kept for each model in the browser tab, beside the model you picked.
+
+Measured on October 22, 2026, through the app with the demo household, one question that
+looks through the funds (one tool round, then the answer). At every setting every model found
+the same thing; what moved was the time:
+
+| Model | Normal | Light or off |
+|---|---|---|
+| `anthropic/claude-opus-5.5` | 14 to 17 s | 12 s, light |
+| `openai/gpt-6.1-sol-pro` | 23 s | 20 s, light |
+| `qwen/qwen3.8-max-0902` | 53 s | 22 s, light |
+| `moonshotai/kimi-k3` | 9 s | 15 s, off (it reasoned nothing; its provider's cache read less) |
+| `moonshotai/kimi-k2.6` | 31 s | 13 s, off |
+
+The cost moved by cents at most: on Opus a question cost $0.03 to $0.04 at either setting once
+the conversation was cached, and Kimi K2.6 off cost $0.006 against $0.018. A harder question
+may well differ; that was not measured. The [AI portfolio review](ai-portfolio-review.md)
+does not follow the control: its roles think as their models do by default.
+
+One limit, chosen on purpose: when a round of the chat calls a tool, what the model reasoned
+in that round is shown and kept with the answer, and is not sent back to the model with the
+tool's result.
 
 ## Can it search the web?
 

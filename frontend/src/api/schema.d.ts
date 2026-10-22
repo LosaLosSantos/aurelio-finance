@@ -224,9 +224,10 @@ export interface paths {
          *
          *     Configuration problems (no key, no package) arrive as an `error` event
          *     rather than a 503: the client has one path for "this stopped, and here is
-         *     why", whichever moment it stopped at. A conversation that does not exist
-         *     is the one thing refused before the stream: there is nowhere to store the
-         *     question.
+         *     why", whichever moment it stopped at. Two things are refused before the
+         *     stream: a conversation that does not exist (404), since there is nowhere
+         *     to store the question, and a Thinking position the model does not have
+         *     (422), before anything is stored.
          */
         post: operations["send_api_chat_post"];
         delete?: never;
@@ -256,7 +257,7 @@ export interface paths {
          *     settled, so the ordering can fail into a run no receipt names and never
          *     into a receipt over a run that did not happen.
          *
-         *     Three refusals, all of them BEFORE the first byte, because a refusal
+         *     Four refusals, all of them BEFORE the first byte, because a refusal
          *     arriving mid-stream is one the client has to fish out of an event — except
          *     for the analyzer, whose work is a minute long and therefore happens ON the
          *     stream. Its card is still checked here and cannot be decided twice; what
@@ -270,6 +271,8 @@ export interface paths {
          *       409  it is stale: what it was drawn against has moved since it was
          *            proposed, so what the card says would happen is no longer what
          *            would happen
+         *       422  the decision came with a Thinking position its model does not
+         *            have, refused before the card is read, so nothing is decided
          *
          *     Anything the model itself fails at afterwards arrives as an `error` event,
          *     the same as any other turn — by then the write has happened and the reader
@@ -2460,6 +2463,11 @@ export interface components {
              * @description OpenRouter slug for the follow-up; empty means the chat default
              */
             model?: string | null;
+            /**
+             * Thinking
+             * @description The Thinking control for the follow-up, as on a question; refused with a 422 before anything is written when the model offers no such position
+             */
+            thinking?: ("normal" | "light" | "off") | null;
         };
         /**
          * ChatCardField
@@ -2632,6 +2640,8 @@ export interface components {
             searches: boolean;
             /** Slug */
             slug: string;
+            /** @description The model's lighter position on the chat's Thinking control, beside normal; null when it offers none (its normal is already off, or nothing is known of what it takes) */
+            thinking: components["schemas"]["ChatThinking"] | null;
             /**
              * Warning
              * @description What the panel says above the question box while this model is the one a question goes to: that OpenRouter's list dates it within `model_list.WARN_DAYS` days, or on a day already past, or no longer has it; with where it is set and how to change it. Null when there is nothing to say
@@ -2821,6 +2831,11 @@ export interface components {
              * @description The page on screen when this was sent. A hint about what 'this' refers to, never a narrowing of the question; null says nothing
              */
             page?: (components["schemas"]["ChatPageDashboard"] | components["schemas"]["ChatPagePortfolio"] | components["schemas"]["ChatPageProfile"] | components["schemas"]["ChatPageRecords"] | components["schemas"]["ChatPageAccount"] | components["schemas"]["ChatPageSituation"] | components["schemas"]["ChatPageRealAsset"] | components["schemas"]["ChatPageDebt"] | components["schemas"]["ChatPageAnalyses"] | components["schemas"]["ChatPageAnalysis"]) | null;
+            /**
+             * Thinking
+             * @description The chat's Thinking control: normal, or null, sends nothing; light or off is the model's lighter position (`ChatModel.thinking`), refused with a 422 when the model offers no such position
+             */
+            thinking?: ("normal" | "light" | "off") | null;
         };
         /**
          * ChatSources
@@ -2951,6 +2966,24 @@ export interface components {
             kind: "text";
             /** Text */
             text: string;
+        };
+        /**
+         * ChatThinking
+         * @description A model's lighter position on the chat's Thinking control, and what was
+         *     measured of it.
+         */
+        ChatThinking: {
+            /**
+             * Lighter
+             * @description "off" where the model was measured to stop reasoning, "light" where it reasons less and cannot stop
+             * @enum {string}
+             */
+            lighter: "light" | "off";
+            /**
+             * Measured
+             * @description What that position did against normal, measured, with the day
+             */
+            measured: string;
         };
         /**
          * ChatThought

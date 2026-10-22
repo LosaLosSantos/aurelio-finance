@@ -517,8 +517,12 @@ CURATED_MODELS: tuple[tuple[str, str], ...] = (
     ("anthropic/claude-sonnet-4.6", "1M context, $3 / $15 per 1M tokens (checked Oct 2026)"),
     ("openai/gpt-6.1-sol-pro", "1.05M context, $2 / $10 per 1M tokens (checked Oct 2026)"),
     ("qwen/qwen3.8-max-0902", "1M context, $2 / $6 per 1M tokens (checked Oct 2026)"),
-    ("moonshotai/kimi-k3", "1M context, $3 / $15 per 1M tokens (checked Aug 2026)"),
-    ("moonshotai/kimi-k2.6", "about six times cheaper than K3 (checked Aug 2026)"),
+    # Kimi's price is the provider's that OpenRouter routes to, and its
+    # providers' input prices differ by almost nineteen times: the ranges are
+    # OpenRouter's list's (2026-10-21); a question on 2026-10-22 was charged
+    # K3 at $2.24 / $14.52 (brief BF's paid P0).
+    ("moonshotai/kimi-k3", "1M context, $0.24 to $4.50 in and $5.50 to $22.50 out per 1M tokens by provider (checked Oct 2026)"),
+    ("moonshotai/kimi-k2.6", "262K context, $0.45 to $1.09 in and $1.89 to $4.60 out per 1M tokens by provider (checked Oct 2026)"),
 )
 
 _ENV_MODELS = (
@@ -532,6 +536,92 @@ _ENV_MODELS = (
 # The variables `default_model` reads, in order, before the app's built-in
 # default: what the panel names as where the chat's default is set (brief BB).
 DEFAULT_READS = ("OPENROUTER_CHAT_MODEL", "OPENROUTER_MODEL")
+
+
+# --- The Thinking control (brief BF) ------------------------------------------
+
+# Beside the model menu, two positions: normal, what the model does when
+# nothing is said (nothing is sent, so the request is the one it was before
+# the control), and the one lighter position the model really has. Measured on
+# 2026-10-22 through the app's own loop, one look-through question with one
+# tool round per model and setting (brief BF's paid P0, $1.146343 in all): no
+# setting changed what any answer found; the time moved most, the cost by
+# cents. Opus 5.5, GPT-6.1 Sol Pro and Qwen 3.8 Max refuse to stop reasoning
+# (OpenRouter answers `effort: "none"` with a 400 before routing, nothing
+# charged), so theirs is the least they take, `effort: low`, said "light".
+# Kimi K3 (`effort: none`) and Kimi K2.6 (`enabled: false`) were measured
+# reasoning 0 tokens, so theirs is said "off". Sonnet 4.6 has none: it reasons
+# nothing when nothing is said, its low and high reasoned 21 and 45 tokens,
+# and each change wrote its prompt into the cache again. A model set only in
+# backend/.env has none either, since nothing is known of what it takes. A
+# deeper position was measured too and left out by the reader (D1 (b)): it
+# changed no answer, and cost GPT-6.1 Sol Pro thirty seconds.
+#
+# The analysis never takes this setting (the reader's D2): its roles ask as
+# they always did (`advisor.call_llm`, `call_round`).
+
+
+@dataclass(frozen=True)
+class Lighter:
+    """A model's lighter position: its word, the reasoning object it sends,
+    and what it did against normal, as the panel's "?" says it."""
+
+    word: str
+    reasoning: dict
+    measured: str
+
+
+THINKING: dict[str, Lighter] = {
+    "anthropic/claude-opus-5.5": Lighter(
+        "light",
+        {"effort": "low"},
+        "light answered in 12 seconds against 14 to 17 normal, for $0.03 to $0.04 "
+        "either way once the conversation was cached",
+    ),
+    "openai/gpt-6.1-sol-pro": Lighter(
+        "light",
+        {"effort": "low"},
+        "light answered in 20 seconds against 23 normal, for the same $0.08",
+    ),
+    "qwen/qwen3.8-max-0902": Lighter(
+        "light",
+        {"effort": "low"},
+        "light answered in 22 seconds against 53 normal, for $0.05 against $0.06",
+    ),
+    "moonshotai/kimi-k3": Lighter(
+        "off",
+        {"effort": "none"},
+        "off reasoned nothing where normal reasoned briefly; once, it took 15 "
+        "seconds against 9 and $0.06 against $0.05, the provider's cache reading less",
+    ),
+    "moonshotai/kimi-k2.6": Lighter(
+        "off",
+        {"enabled": False},
+        "off answered in 13 seconds against 31 normal, for $0.006 against $0.018",
+    ),
+}
+
+
+class ThinkingNotOffered(Exception):
+    """A Thinking position the model does not have. Refused before anything is
+    stored or written, so a question or a card's answer sent with it changes
+    nothing (the router's 422)."""
+
+
+def reasoning_for(model: str, thinking: str | None) -> dict | None:
+    """What a turn on `model` sends for the reader's Thinking position: None
+    for normal (or none given), the model's lighter reasoning object for its
+    own lighter word. Raises ThinkingNotOffered for any other position."""
+    if thinking in (None, "normal"):
+        return None
+    lighter = THINKING.get(model)
+    if lighter is None:
+        raise ThinkingNotOffered(f"{model} offers no Thinking setting; ask without one.")
+    if thinking != lighter.word:
+        raise ThinkingNotOffered(
+            f'{model} offers Thinking normal or {lighter.word}, not "{thinking}".'
+        )
+    return lighter.reasoning
 
 
 def default_model() -> str:
@@ -576,6 +666,11 @@ def available_models(db: Session) -> schemas.ChatModelsRead:
                     s, listing, model_list.where_set(s, DEFAULT_READS) if s == default else model_list.PICKED
                 ),
                 searches=bool(tools.web_search(s)),
+                thinking=(
+                    schemas.ChatThinking(lighter=THINKING[s].word, measured=THINKING[s].measured)
+                    if s in THINKING
+                    else None
+                ),
             )
             for s in ordered
         ],
@@ -730,6 +825,10 @@ class PreparedTurn:
     # stream: every card but the analyzer's, which is decided when its run is
     # stored. Sent as `decided` right after `start`.
     decided: dict | None = None
+    # What every round of the turn sends as OpenRouter's reasoning object, from
+    # the reader's Thinking position (`reasoning_for`); None for normal, which
+    # sends nothing.
+    reasoning: dict | None = None
 
 
 def _wire(stored: list[models.ChatMessage], now: screen.Screen | None = None) -> list[dict]:
@@ -953,8 +1052,11 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
     conversation is opened, so nothing here opens a conversation and then
     fails.
 
-    Raises LookupError for a conversation id that does not exist — the caller
-    turns that into its 404."""
+    Raises LookupError for a conversation id that does not exist (the caller
+    turns that into its 404), and ThinkingNotOffered for a Thinking position
+    the model does not have, before anything is stored."""
+    model = advisor.resolve_model(request.model or default_model())
+    reasoning = reasoning_for(model, request.thinking)
     conv = None
     if request.conversation_id is not None:
         conv = crud.get_chat_conversation(db, request.conversation_id)
@@ -964,7 +1066,6 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
     # page gone since resolves to the one above it; it never refuses the
     # question.
     here = screen.resolve(db, request.page) if request.page is not None else None
-    model = advisor.resolve_model(request.model or default_model())
     if conv is None:
         conv = crud.create_chat_conversation(db)
     blocks = [{"kind": "text", "text": request.content}]
@@ -978,6 +1079,7 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
         model=model,
         page_label=here.label if here is not None else None,
         now=here,
+        reasoning=reasoning,
     )
 
 
@@ -1109,7 +1211,11 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
 
     Raises CardGone, CardSettled or CardStale; the caller turns each into its
     status code, before any stream starts. A refusal after the first byte is a
-    refusal the client has to parse out of an event."""
+    refusal the client has to parse out of an event. And ThinkingNotOffered,
+    first of all, before the card is read or anything written: a decision
+    sent with a Thinking position its model does not have decides nothing."""
+    model = advisor.resolve_model(decision.model or default_model())
+    reasoning = reasoning_for(model, decision.thinking)
     found = crud.find_chat_card(db, card_id)
     if found is None:
         raise CardGone(card_id)
@@ -1128,7 +1234,8 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
         return PreparedTurn(
             conversation_id=message.conversation.id,
             user_message_id=None,
-            model=advisor.resolve_model(decision.model or default_model()),
+            model=model,
+            reasoning=reasoning,
             pending=Pending(
                 card_id=card_id,
                 tool=card["tool"],
@@ -1169,7 +1276,8 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
     return PreparedTurn(
         conversation_id=message.conversation.id,
         user_message_id=None,
-        model=advisor.resolve_model(decision.model or default_model()),
+        model=model,
+        reasoning=reasoning,
         decision=card_id,
         decided=decided,
     )
@@ -1808,6 +1916,10 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 # none follows it.
                 cache_at=None if last else kept,
                 kept_to=kept_to,
+                # The Thinking control's lighter position, on every round;
+                # passed only when set, so a turn at normal calls exactly as
+                # it did before the control.
+                **({"reasoning": turn.reasoning} if turn.reasoning is not None else {}),
             ):
                 if kind == "thought":
                     _say(blocks, "thought", piece)
@@ -1834,6 +1946,13 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
             # left to read. The words it wrote are the answer either way.
             if last or not calls:
                 break
+            # The round's reasoning does not go back with its calls, a limit
+            # the reader chose (brief BF, D4 (b)). Every family's pages ask for
+            # it inside a tool loop; in brief BF's paid P0 (2026-10-22) no tool
+            # round failed without it, on any model, and Kimi K3 answered as
+            # well without it as with it; Opus 5.5 at normal reasons nothing
+            # before its calls. Sending it back would carry a provider's
+            # signature into a round OpenRouter may route elsewhere.
             messages.append(tools.request_message("".join(said), calls))
             # The round's web searches first, all at once, and what they cost
             # into the turn's figures before anything is said about them: a

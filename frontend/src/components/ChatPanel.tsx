@@ -37,6 +37,17 @@ import {
 } from "./followStream";
 import { foundOn, linkOf, type Link, type WebPage } from "./webSources";
 import { menuFace, modelNotices, modelsHelp, optionLabel, pickToSend } from "./modelMenu";
+import {
+  type Choices,
+  type Position,
+  lighterOf,
+  positionLabel,
+  positionOf,
+  readChoices,
+  thinkingHelp,
+  thinkingToSend,
+  withPosition,
+} from "./thinkingSwitch";
 import { withDecided } from "./cardDecided";
 import { lineText } from "./cardFields";
 import { STALE_LINE, heading, waiting, workHeading } from "./cardOutcome";
@@ -87,16 +98,23 @@ type Message = {
 
 const STORAGE_KEY = "aurelio.chat.v2";
 
-type Stored = { conversationId: number | null; model: string | null };
+// `thinking` is the Thinking control's choice per model (brief BF), kept beside
+// the pick and for as long as it is; an entry stored before the control reads
+// as normal for every model.
+type Stored = { conversationId: number | null; model: string | null; thinking: Choices };
 
 function load(): Stored {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return { conversationId: null, model: null };
-    const parsed = JSON.parse(raw) as Partial<Stored>;
-    return { conversationId: parsed.conversationId ?? null, model: parsed.model ?? null };
+    if (!raw) return { conversationId: null, model: null, thinking: {} };
+    const parsed = JSON.parse(raw) as Partial<Record<keyof Stored, unknown>>;
+    return {
+      conversationId: (parsed.conversationId as number | null | undefined) ?? null,
+      model: (parsed.model as string | null | undefined) ?? null,
+      thinking: readChoices(parsed.thinking),
+    };
   } catch {
-    return { conversationId: null, model: null };
+    return { conversationId: null, model: null, thinking: {} };
   }
 }
 
@@ -647,6 +665,7 @@ export default function ChatPanel({
   const [conversationId, setConversationId] = useState<number | null>(initial.conversationId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [model, setModel] = useState<string | null>(initial.model);
+  const [thinking, setThinking] = useState<Choices>(initial.thinking);
   const [models, setModels] = useState<ChatModels | null>(null);
   const [draft, setDraft] = useState("");
   const [view, setView] = useState<"chat" | "history">("chat");
@@ -703,8 +722,8 @@ export default function ChatPanel({
   }, [initial.conversationId]);
 
   useEffect(() => {
-    save({ conversationId, model });
-  }, [conversationId, model]);
+    save({ conversationId, model, thinking });
+  }, [conversationId, model, thinking]);
 
   /* Follow the answer down, by moving the TRANSCRIPT and nothing else.
 
@@ -819,8 +838,16 @@ export default function ChatPanel({
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const sentModel = pickToSend(model, models);
     const end = await streamChat(
-      { conversation_id: conversationId, content: q, model: pickToSend(model, models), page },
+      {
+        conversation_id: conversationId,
+        content: q,
+        model: sentModel,
+        page,
+        // For the model that answers: the pick, or the default.
+        thinking: thinkingToSend(thinking, sentModel ?? models?.default ?? "", models),
+      },
       {
         onStart: (cid, _question, pageLabel) => {
           setConversationId(cid);
@@ -882,9 +909,14 @@ export default function ChatPanel({
     const controller = new AbortController();
     abortRef.current = controller;
     let started = false;
+    const sentModel = pickToSend(model, models);
     const end = await decideCard(
       cardId,
-      { decision, model: pickToSend(model, models) },
+      {
+        decision,
+        model: sentModel,
+        thinking: thinkingToSend(thinking, sentModel ?? models?.default ?? "", models),
+      },
       {
         onStart: (cid) => {
           started = true;
@@ -981,6 +1013,11 @@ export default function ChatPanel({
   const currentModel = pickToSend(model, models) ?? models?.default ?? "";
   const notices = modelNotices(currentModel, models);
   const face = menuFace(currentModel, models, todayISO());
+  // The Thinking control for that model: shown only when it has a lighter
+  // position (brief BF).
+  const lighter = lighterOf(currentModel, models);
+  const position = positionOf(thinking, currentModel, models);
+  const thinkingSays = thinkingHelp(currentModel, models);
   // What the panel's "?" says, read once: what a question is sent with, the
   // keys, and what is known of each model. The select's tooltip used to say it
   // of the current model alone, to a pointer only (brief AU).
@@ -988,7 +1025,8 @@ export default function ChatPanel({
     question: "How does the chat work?",
     text:
       "Each question is sent with the page you were on, said under it as “asked on”: that is what “this” and “here” point at. Enter sends; Shift+Enter starts a new line." +
-      (models ? " " + modelsHelp(models) : ""),
+      (models ? " " + modelsHelp(models) : "") +
+      (thinkingSays ? " " + thinkingSays : ""),
   };
 
   // The width is written once and applied to BOTH the animated outer shell and
@@ -1201,46 +1239,76 @@ export default function ChatPanel({
               >
                 <PlusIcon />
               </button>
-              {/* The model is chosen, not assumed. Default first; what is
-                  known about each, and when, is in the panel's "?".
-                  Closed, a face says the name and the date or the mark
-                  (`menuFace`); the select, transparent and laid over it,
-                  stays the control: the keyboard, its name "Model", the
-                  whole label a screen reader reads, and the open list. */}
-              <span className="relative flex min-w-0 max-w-full items-center gap-1 rounded-full border border-hair px-2.5 py-1 text-xs text-ink-soft transition focus-within:border-olive hover:border-rule hover:text-ink">
-                <span aria-hidden="true" className="truncate">
-                  {face.name}
+              {/* The model and its Thinking control, in a group of their own
+                  that wraps where the two do not fit (brief BF, 390 px): the
+                  model's name is never cut to make room for the control, and
+                  the buttons at the row's two ends keep their places. */}
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                {/* The model is chosen, not assumed. Default first; what is
+                    known about each, and when, is in the panel's "?".
+                    Closed, a face says the name and the date or the mark
+                    (`menuFace`); the select, transparent and laid over it,
+                    stays the control: the keyboard, its name "Model", the
+                    whole label a screen reader reads, and the open list. */}
+                <span className="relative flex min-w-0 max-w-full items-center gap-1 rounded-full border border-hair px-2.5 py-1 text-xs text-ink-soft transition focus-within:border-olive hover:border-rule hover:text-ink">
+                  <span aria-hidden="true" className="truncate">
+                    {face.name}
+                  </span>
+                  {face.mark && (
+                    <span aria-hidden="true" className="shrink-0 whitespace-nowrap">
+                      · {face.mark}
+                    </span>
+                  )}
+                  <ChevronIcon />
+                  <select
+                    value={currentModel}
+                    onChange={(e) => setModel(e.target.value || null)}
+                    disabled={!models}
+                    aria-label="Model"
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+                  >
+                    {models ? (
+                      models.models.map((m) => (
+                        <option key={m.slug} value={m.slug}>
+                          {optionLabel(m, m.slug === models.default)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">model…</option>
+                    )}
+                  </select>
                 </span>
-                {face.mark && (
-                  <span aria-hidden="true" className="shrink-0 whitespace-nowrap">
-                    · {face.mark}
+                {/* The Thinking control (brief BF): normal, or the one lighter
+                    position the model has, kept per model in the tab. Shown
+                    only for a model that has one. A face like the model pill's,
+                    the select laid over it as the control, so the keyboard and
+                    a screen reader meet a select named "Thinking". */}
+                {lighter && (
+                  <span className="relative flex shrink-0 items-center gap-1 rounded-full border border-hair px-2.5 py-1 text-xs text-ink-soft transition focus-within:border-olive hover:border-rule hover:text-ink">
+                    <span aria-hidden="true" className="whitespace-nowrap">
+                      {positionLabel(position)}
+                    </span>
+                    <ChevronIcon />
+                    <select
+                      value={position}
+                      onChange={(e) =>
+                        setThinking(withPosition(thinking, currentModel, e.target.value as Position))
+                      }
+                      aria-label="Thinking"
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    >
+                      <option value="normal">{positionLabel("normal")}</option>
+                      <option value={lighter}>{positionLabel(lighter)}</option>
+                    </select>
                   </span>
                 )}
-                <ChevronIcon />
-                <select
-                  value={currentModel}
-                  onChange={(e) => setModel(e.target.value || null)}
-                  disabled={!models}
-                  aria-label="Model"
-                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
-                >
-                  {models ? (
-                    models.models.map((m) => (
-                      <option key={m.slug} value={m.slug}>
-                        {optionLabel(m, m.slug === models.default)}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="">model…</option>
-                  )}
-                </select>
-              </span>
+              </div>
               {streaming ? (
                 <button
                   type="button"
                   onClick={() => abortRef.current?.abort()}
                   aria-label="Stop the answer"
-                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-ink text-ground transition hover:bg-ink-soft"
+                  className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-ground transition hover:bg-ink-soft"
                 >
                   <StopIcon />
                 </button>
@@ -1249,7 +1317,7 @@ export default function ChatPanel({
                   type="submit"
                   disabled={!draft.trim()}
                   aria-label="Send"
-                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-olive text-on-accent transition hover:bg-olive-deep disabled:opacity-40 disabled:hover:bg-olive"
+                  className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-olive text-on-accent transition hover:bg-olive-deep disabled:opacity-40 disabled:hover:bg-olive"
                 >
                   <ArrowUpIcon />
                 </button>

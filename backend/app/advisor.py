@@ -2328,6 +2328,7 @@ def stream_llm(
     tools: list[dict] | None = None,
     cache_at: tuple[int, ...] | None = None,
     kept_to: int | None = None,
+    reasoning: dict | None = None,
 ) -> Iterator[tuple[str, str | ToolCall | Usage]]:
     """The streaming sibling of `call_llm`: yields the answer as it is written,
     one `(kind, piece)` pair at a time, for a whole conversation rather than a
@@ -2380,6 +2381,12 @@ def stream_llm(
     nothing from the cache, and still has to reach the provider that holds
     what the next turn reads.
 
+    `reasoning` is OpenRouter's reasoning object, sent as it is when the
+    reader set the chat's Thinking control to its lighter position
+    (`chat.THINKING`); None, the control's "normal", sends nothing, so the
+    request is the one it was before the control existed. Every round of a
+    turn gets the same, the round with no tools included.
+
     Raises AdvisorError — before the first piece if nothing is configured or
     the call is refused, in the middle if the stream breaks. A stream that
     thinks but never answers is an empty response; a stream that asks for a
@@ -2425,11 +2432,14 @@ def stream_llm(
     model = resolve_model(model)
     system: str | list[dict] = system_prompt
     asked = messages
-    # The session and the top-level marker are not parameters the SDK knows,
-    # so they travel in extra_body, which it merges into the request as it is.
+    # The session, the top-level marker and the reasoning object are not
+    # parameters the SDK knows, so they travel in extra_body, which it merges
+    # into the request as it is.
     extra: dict = {}
     if caches_on_request(model):
         extra["session_id"] = SESSION_ID
+    if reasoning is not None:
+        extra["reasoning"] = reasoning
     if cache_at is not None and caches_on_request(model):
         if len(cache_at) > _MARKED_MESSAGES:
             raise ValueError(

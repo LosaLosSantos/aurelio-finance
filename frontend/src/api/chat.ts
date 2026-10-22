@@ -97,6 +97,8 @@ export async function streamChat(
     content: string;
     model: string | null;
     page: ChatPage | null;
+    // The Thinking control's lighter word, or null for normal (brief BF).
+    thinking: "light" | "off" | null;
   },
   handlers: StreamHandlers,
   signal: AbortSignal,
@@ -154,7 +156,12 @@ export type StreamHandlers = {
 // one way: the answer to a card cannot travel up the pipe that proposed it.
 export async function decideCard(
   cardId: string,
-  body: { decision: "confirm" | "reject"; model: string | null },
+  body: {
+    decision: "confirm" | "reject";
+    model: string | null;
+    // The Thinking control's lighter word, or null for normal (brief BF).
+    thinking: "light" | "off" | null;
+  },
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<StreamEnd> {

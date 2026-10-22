@@ -26,7 +26,7 @@ function entry(
   warning: string | null = null,
   searches = false,
 ) {
-  return { slug, note, retires, listed, warning, searches };
+  return { slug, note, retires, listed, warning, searches, thinking: null };
 }
 
 const MENU = {

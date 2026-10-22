@@ -3071,6 +3071,12 @@ ChatPage = Annotated[
 ]
 
 
+# The positions of the chat's Thinking control (brief BF): normal, what a model
+# does when nothing is said, or the one lighter position it has, said "light"
+# where it reasons less and "off" where it stops (`chat.THINKING`).
+ThinkingPosition = Literal["normal", "light", "off"]
+
+
 class ChatRequest(BaseModel):
     """One more question in a conversation.
 
@@ -3092,6 +3098,14 @@ class ChatRequest(BaseModel):
         description=(
             "The page on screen when this was sent. A hint about what 'this' "
             "refers to, never a narrowing of the question; null says nothing"
+        ),
+    )
+    thinking: ThinkingPosition | None = Field(
+        default=None,
+        description=(
+            "The chat's Thinking control: normal, or null, sends nothing; light or "
+            "off is the model's lighter position (`ChatModel.thinking`), refused "
+            "with a 422 when the model offers no such position"
         ),
     )
 
@@ -3137,6 +3151,25 @@ class ChatConversationDetail(ChatConversationRead):
     messages: list[ChatMessageRead]
 
 
+class ChatThinking(BaseModel):
+    """A model's lighter position on the chat's Thinking control, and what was
+    measured of it."""
+
+    model_config = API_OUT
+
+    lighter: Literal["light", "off"] = Field(
+        ...,
+        description=(
+            "\"off\" where the model was measured to stop reasoning, \"light\" "
+            "where it reasons less and cannot stop"
+        ),
+    )
+    measured: str = Field(
+        ...,
+        description="What that position did against normal, measured, with the day",
+    )
+
+
 class ChatModel(BaseModel):
     """One entry of the model dropdown."""
 
@@ -3177,6 +3210,14 @@ class ChatModel(BaseModel):
         description=(
             "Whether a question to this model may search the web, which runs on "
             "a model of its own (`search_warning`)"
+        ),
+    )
+    thinking: ChatThinking | None = Field(
+        default=None,
+        description=(
+            "The model's lighter position on the chat's Thinking control, beside "
+            "normal; null when it offers none (its normal is already off, or "
+            "nothing is known of what it takes)"
         ),
     )
 
@@ -3365,6 +3406,14 @@ class ChatCardDecision(BaseModel):
     model: str | None = Field(
         default=None,
         description="OpenRouter slug for the follow-up; empty means the chat default",
+    )
+    thinking: ThinkingPosition | None = Field(
+        default=None,
+        description=(
+            "The Thinking control for the follow-up, as on a question; refused "
+            "with a 422 before anything is written when the model offers no such "
+            "position"
+        ),
     )
 
 
