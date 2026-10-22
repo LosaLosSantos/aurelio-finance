@@ -349,17 +349,19 @@ def _a_share(holding: dict, asset_class: str | None = None) -> bool:
     as held via a bond fund and an equity fund, "same stock inside 2+ funds",
     and the analyst had to guess the bond fund held debt.
 
-    Only iShares' file says what each line is. Every other source (justETF's
-    top ten, Trackinsight's, Yahoo's, Vanguard's file) and every entry cached
-    before brief AR says nothing, and brief BF's P0 (2026-10-21) measured what
-    that let through: a government bond fund read from justETF put "Italy
-    (Republic Of) Regs" among the companies and in the overlap. So a line of
-    no kind takes its position's own class: in a position recorded as Bonds
-    it is the fund's debt, and anywhere else it counts as it always did. The
-    one case this leaves is a bond fund recorded under Stocks & ETF whose
-    source says nothing, and the axis's descriptions say so. A considered
-    purchase takes the class of the held fund it is more of (`_class_of`); one
-    of a fund not held has no class, and is read as before."""
+    iShares' file says what each line is, and Vanguard's has since brief BF
+    (its `securityType`). Every other source (justETF's top ten,
+    Trackinsight's, Yahoo's) says nothing, nor does an entry cached before its
+    source said it (brief AR for iShares, brief BF for Vanguard), and brief
+    BF's P0 (2026-10-21) measured what that let through: a government bond
+    fund read from justETF put "Italy (Republic Of) Regs" among the companies
+    and in the overlap. So a line of no kind takes its position's own class:
+    in a position recorded as Bonds it is the fund's debt, and anywhere else
+    it counts as it always did. The one case this leaves is a bond fund
+    recorded under Stocks & ETF whose source says nothing, and the axis's
+    descriptions say so. A considered purchase takes the class of the held
+    fund it is more of (`_class_of`); one of a fund not held has no class,
+    and is read as before."""
     kind = holding.get("kind")
     if kind is not None:
         return kind in SHARE_KINDS

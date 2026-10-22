@@ -23,8 +23,8 @@ Comparing two funds' top ten holdings is the quick way, and it undercounts: a co
 2. each fund weighted by what you actually hold of it today;
 3. the same company recognized under the slightly different names two files give it.
 
-Aurelio does all three for the funds it can read from the issuer's own file (iShares funds,
-and the Vanguard funds it knows), and says so when a fund is known only by its top ten.
+Aurelio does all three for the funds it can read from the issuer's own file (iShares and
+Vanguard funds), and says so when a fund is known only by its top ten.
 
 ## Where do the holdings come from?
 
@@ -32,7 +32,12 @@ A fund's composition is fetched from the best source that answers, in this order
 
 1. **The issuer's own file**, where Aurelio knows how to read it. iShares publishes every
    position of a fund, refreshed daily, with a country and a sector on each line. Vanguard
-   publishes every position at month end, so about three weeks behind.
+   publishes every position at month end, so about three weeks behind. Which file is a
+   Vanguard fund's is read from Vanguard's own list of its funds (414 on October 21, 2026),
+   asked only when you hold a Vanguard fund it has not found yet, at most once a day unless
+   Vanguard did not answer, and kept. Each line of Vanguard's file says what it is, so only
+   its shares count as companies. A fund of funds, such as Vanguard LifeStrategy, is read
+   from justETF instead: its own file lists the funds it holds, not what they hold.
 2. **justETF**, for the UCITS funds the issuers' files do not cover: countries, sectors and the
    ten largest holdings.
 3. **Trackinsight**, by ticker, when no ISIN is known.

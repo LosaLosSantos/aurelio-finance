@@ -1,9 +1,10 @@
 """A position recorded as Bonds names no company, and one name is one move.
 
-Brief BF (2026-10-22), the reader's D3 (B) and (e). Only iShares' file says
-what each of a fund's lines is; every other source (justETF's top ten,
-Trackinsight's, Yahoo's, Vanguard's file) says nothing, and such a line
-counted as a company's shares. Measured in the brief's P0 on two invented
+Brief BF (2026-10-22), the reader's D3 (B) and (e). Only iShares' file said
+what each of a fund's lines is (Vanguard's does too since the brief's part
+3); every other source (justETF's top ten, Trackinsight's, Yahoo's) says
+nothing, and such a line counted as a company's shares. Measured in the
+brief's P0 on two invented
 government bond funds read without kinds: "Italy (Republic Of) Regs" stood
 among the companies at 7.5% and in the overlap, which the analyst read as the
 same stock held twice. A line of no kind now takes its position's own class:

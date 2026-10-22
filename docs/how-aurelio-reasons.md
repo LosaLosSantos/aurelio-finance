@@ -225,11 +225,16 @@ has already been paid for.
 - A company inside a bond fund is its debt, not its stock. A bond fund's file
   lists its issuers' notes under the issuers' names, so under the name alone a
   company's bonds and its shares in an equity fund read as one stock held
-  twice. Where a file says what each line is (iShares' does), only a share
-  counts in the companies and the overlap. Where nothing says it (justETF's top
-  ten, Trackinsight's, Yahoo's, Vanguard's file), the position's own class
+  twice. Where a file says what each line is (iShares' and Vanguard's do), only
+  a share counts in the companies and the overlap. Where nothing says it
+  (justETF's top ten, Trackinsight's, Yahoo's), the position's own class
   decides: a line of a position recorded as Bonds is the fund's debt, and
   anywhere else it counts as a share.
+- A fund of funds' own file is not its holdings. It lists the funds it holds,
+  and read as holdings their countries are where those funds are listed: a
+  Vanguard LifeStrategy fund read as 64% United Kingdom and 35% Germany. A
+  Vanguard file more than half of whose value is other funds is left to the
+  next source.
 - "Nobody answered" and "this instrument does not exist" are different
   statements. Presenting the first as the second teaches people to correct a
   ticker that was right. There is a third: "that day has no close", which says

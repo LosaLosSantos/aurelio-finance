@@ -13,11 +13,14 @@ What each one gives:
   ISIN to the product id; ISHARES_PRODUCT_IDS below stands in for it for
   the funds it lists, because the screener is the part that moves.
 - **Vanguard**: 4000+ rows, month-end (so ~3 weeks behind), with an ISO
-  country code and a sector, but NO per-row ISIN and nothing that says what a
-  line is. Its GraphQL schema exposes no ISIN field and introspection is
-  disabled, so ISIN -> portfolio id cannot be discovered programmatically; the
-  map below is seeded by hand and grows as funds are needed. The two funds it
-  holds are equity funds, whose lines are shares.
+  country code, a sector and what the line is (`securityType`, asked since
+  brief BF), but NO per-row ISIN. Its GraphQL introspection is disabled, but
+  a fund's ISIN is there: the German site's product page lists every
+  portfolio id it sells, and one `funds(portIds)` query on the same address
+  answers each one's ISIN (brief BF, 2026-10-21). So a held Vanguard fund
+  that the hand map below lacks is looked up there, and the map read is kept
+  with its day (`_vanguard_port_id`). A fund of funds, whose file lists other
+  funds rather than their holdings, is left to the next source (FundOfFunds).
 
 These are the sites' own endpoints, not a documented API: they can change
 without notice. That is exactly why they sit at the TOP of a waterfall rather
@@ -28,7 +31,10 @@ failing (see app/composition.py).
 from __future__ import annotations
 
 import datetime
+import json
 import logging
+import re
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +64,90 @@ ISHARES_HOLDINGS = (
 )
 VANGUARD_GRAPHQL = "https://www.de.vanguard/gpx/graphql"
 
-# Hand-maintained because Vanguard's schema exposes no ISIN. Add a fund here
-# when you own it; unmapped Vanguard funds simply fall through the waterfall.
+# By hand, the fallback for the day Vanguard's own list cannot be read (below):
+# a fund listed here is fetched without it.
 VANGUARD_PORT_IDS = {
     "IE00BK5BQT80": "9679",  # Vanguard FTSE All-World UCITS ETF (USD) Acc
     "IE00B3RBWM25": "9505",  # Vanguard FTSE All-World UCITS ETF (USD) Dist
 }
+
+# Vanguard's own list of its funds, read when a held Vanguard fund is not in
+# the hand map: the German product page carries every portfolio id it sells in
+# its embedded page state (`site-config.portIds`), and the GraphQL address
+# above answers each one's ISIN. Measured in brief BF's P0 (2026-10-21, eight
+# requests to Vanguard; the page and this query about 69 KB on the wire): 414
+# portfolio ids on the page, all 414 answered with one ISIN each, the two
+# pairs of the hand map among them. The query is the one sent then, word for
+# word, though only the ISINs are read. Both are the site's own endpoints and
+# can move without notice, like the holdings query; a read that fails is
+# said, and the hand map stays.
+VANGUARD_PRODUCTS_PAGE = "https://www.de.vanguard/professionell/anlageprodukte"
+_VANGUARD_STATE = re.compile(r'<script id="serverApp-state"[^>]*>(.*?)</script>', re.S)
+VANGUARD_FUNDS_QUERY = (
+    "query FundsQuery($portIds: [String!]!) { funds(portIds: $portIds) { portId profile { "
+    'portId fundFullName productTypeLevel1 polarisPdtTypeIndicator identifiers(altIds: ["ISIN"]) '
+    "{ altId altIdCode altIdValue } } } }"
+)
+# Where the read is kept, in `settings`: the reader's day it was last read,
+# the map, ISIN to portfolio id, every read's pairs added to it, and, when
+# that day's answer could not be read, why (`unread`).
+VANGUARD_KEPT = "vanguard_port_ids"
+# One read at a time in this process: two look-throughs at once ask once.
+_vanguard_guard = threading.Lock()
+
+# The site's own holdings query, as brief BF's P0 sent it (2026-10-21, word for
+# word, on FTSE All-World 9679, Global Aggregate Bond EUR Hedged 9443 and
+# LifeStrategy 9494): beside the four fields the look-through reads, what
+# each line is (`securityType`).
+VANGUARD_HOLDINGS_QUERY = "\n".join((
+    "query FundsHoldingsQuery($portIds: [String!], $securityTypes: [String!], $lastItemKey: String) {",
+    "    funds(portIds: $portIds) {",
+    "      profile {",
+    "        fundFullName",
+    "        fundCurrency",
+    "        primarySectorEquityClassification",
+    "      }",
+    "    }",
+    "    borHoldings(portIds: $portIds) {",
+    "      holdings(limit: 1500, securityTypes: $securityTypes, lastItemKey: $lastItemKey) {",
+    "        items {",
+    "          issuerName",
+    "          securityLongDescription",
+    "          gicsSectorDescription",
+    "          icbSectorDescription",
+    "          icbIndustryDescription",
+    "          marketValuePercentage",
+    "          sedol1",
+    "          quantity",
+    "          ticker",
+    "          securityType",
+    "          finalMaturity",
+    "          effectiveDate",
+    "          marketValueBaseCurrency",
+    "          bloombergIsoCountry",
+    "          couponRate",
+    "        }",
+    "        totalHoldings",
+    "        lastItemKey",
+    "      }",
+    "    }",
+    "  }",
+))
+# The `securityType`s that are a company's shares: the site's own stock codes
+# (its bundle groups them, P0) but a fund's (EQ.ETF, MF.MF) and an option's
+# (EQ.RIGHT, EQ.WRT). On P0's first pages these five were read: EQ.STOCK,
+# EQ.REIT, EQ.PREF, EQ.DRCPT, EQ.FSH; EQ.PSH is the site's, not seen. Every
+# other code (a bond's FI.*, money market MM.*, currency CT.* and CRNY, a
+# derivative DE.*) is said as it is, and is no company (`composition._a_share`).
+VANGUARD_SHARES = frozenset({"EQ.STOCK", "EQ.REIT", "EQ.PREF", "EQ.DRCPT", "EQ.FSH", "EQ.PSH"})
+VANGUARD_FUNDS = frozenset({"EQ.ETF", "MF.MF"})
+# A file more than half of whose value is in other funds' lines is a fund of
+# funds, and its lines are not its holdings: their countries are where those
+# funds are listed. Measured in P0: LifeStrategy 9494, 99.5335% in EQ.ETF
+# lines (its whole file, 17 lines), read as United Kingdom 64.38% and Germany
+# 35.15%; FTSE All-World and Global Aggregate Bond, 0% on their first pages.
+# Half is the word "mostly"; nothing measured falls between.
+FUND_OF_FUNDS_ABOVE_PCT = 50.0
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -90,6 +174,21 @@ class IssuerUnreachable(IssuerError):
     answer. Not "this is not our fund", which is a plain IssuerError: the
     next adapter still gets its turn, and this reason is kept so the cached
     entry can say in words why the issuer's file is missing."""
+
+
+class FundOfFunds(IssuerError):
+    """The issuer's file is the fund's own and lists other funds, not their
+    holdings (a Vanguard LifeStrategy fund): read as holdings, those funds'
+    listing countries would stand for its exposure. Its reason is kept, as an
+    unreachable issuer's is, and the fund falls to the next source."""
+
+
+class VanguardListUnread(IssuerUnreachable):
+    """Vanguard answered, and its list of funds could not be read from the
+    answer: the page no longer carries it, or the query was refused or gave no
+    ISIN. Kept with the day and said again that day without asking
+    (`_vanguard_port_id`); a list that did not answer is not kept, and is
+    asked again at the next look."""
 
 
 def _plain(value):
@@ -263,37 +362,224 @@ def fetch_ishares(isin: str) -> dict:
     return _aggregate(rows, None)
 
 
+def _named_vanguard(isin: str) -> bool:
+    """Whether the stored fund catalogue names `isin` as one of Vanguard's
+    funds. Vanguard's list is read only for those, so a reader who holds no
+    Vanguard fund never asks Vanguard anything; a fund the catalogue does not
+    list is not asked about either, and the hand map is its way in."""
+    from app import models
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        fund = db.get(models.Instrument, isin)
+        return fund is not None and fund.name.strip().lower().startswith("vanguard")
+
+
+def _vanguard_pairs(payload) -> dict[str, str]:
+    """{ISIN: portfolio id} from the funds query's answer. An entry not of
+    the shape measured (a null fund or identifier, a `data` that is not an
+    object) is skipped rather than raised; an answer that carries errors
+    beside its funds keeps the pairs it holds."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    funds = data.get("funds") if isinstance(data, dict) else None
+    ports: dict[str, str] = {}
+    for fund in funds if isinstance(funds, list) else []:
+        if not isinstance(fund, dict) or not fund.get("portId"):
+            continue
+        profile = fund.get("profile")
+        identifiers = profile.get("identifiers") if isinstance(profile, dict) else None
+        for ident in identifiers if isinstance(identifiers, list) else []:
+            if isinstance(ident, dict) and ident.get("altIdCode") == "ISIN" and ident.get("altIdValue"):
+                ports[str(ident["altIdValue"]).strip().upper()] = str(fund["portId"])
+    return ports
+
+
+def _read_vanguards_list() -> dict[str, str]:
+    """{ISIN: portfolio id} for every fund Vanguard's German site lists: its
+    product page, then one query for the ISINs. Two network calls. Raises,
+    in words, VanguardListUnread when Vanguard answered and the list could
+    not be read from its answer, and IssuerUnreachable when it did not answer
+    (a failed connection or a 5xx)."""
+    import httpx
+
+    seen = datetime.datetime.now(datetime.timezone.utc).astimezone().date().isoformat()
+    try:
+        page = httpx.get(
+            VANGUARD_PRODUCTS_PAGE, headers={"User-Agent": _UA}, timeout=60, follow_redirects=True
+        )
+    except httpx.HTTPError as exc:
+        raise IssuerUnreachable(
+            f"Vanguard's product page did not answer ({type(exc).__name__})"
+        ) from exc
+    if page.status_code != 200:
+        said = f"Vanguard's product page answered {page.status_code} (seen {seen})"
+        if page.status_code >= 500:
+            raise IssuerUnreachable(said)
+        raise VanguardListUnread(said)
+    found = _VANGUARD_STATE.search(page.text)
+    try:
+        state = json.loads(found.group(1)) if found else {}
+        listed = state["_angular_initial_state"][":items"]["root"][":items"]["site-config"]["portIds"]
+        port_ids = [p.strip() for p in str(listed).split(",") if p.strip()]
+    except (ValueError, KeyError, TypeError):
+        port_ids = []
+    if not port_ids:
+        raise VanguardListUnread(
+            f"Vanguard's product page no longer lists its funds where the app reads them "
+            f"({VANGUARD_PRODUCTS_PAGE}, seen {seen}). A fund missing from VANGUARD_PORT_IDS in "
+            "app/issuers.py falls back to the next source."
+        )
+    try:
+        resp = httpx.post(
+            VANGUARD_GRAPHQL,
+            headers={"Content-Type": "application/json", "X-Consumer-ID": "de7", "User-Agent": _UA},
+            json={
+                "operationName": "FundsQuery",
+                "variables": {"portIds": port_ids},
+                "query": VANGUARD_FUNDS_QUERY,
+            },
+            timeout=60,
+        )
+    except httpx.HTTPError as exc:
+        raise IssuerUnreachable(
+            f"Vanguard's list of funds did not answer ({type(exc).__name__})"
+        ) from exc
+    if resp.status_code >= 500:
+        raise IssuerUnreachable(f"Vanguard's list of funds answered {resp.status_code} (seen {seen})")
+    try:
+        payload = resp.json() if resp.status_code == 200 else None
+    except ValueError:
+        payload = None
+    ports = _vanguard_pairs(payload)
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if ports:
+        if errors:
+            logger.warning(
+                "Vanguard's list of funds answered %d ISINs and errors: %s", len(ports), str(errors)[:300]
+            )
+        return ports
+    if not isinstance(payload, dict) or errors:
+        said = str(errors)[:120] if errors else resp.status_code
+        raise VanguardListUnread(f"Vanguard refused the query for its list of funds ({said})")
+    raise VanguardListUnread(f"Vanguard's list of funds answered no ISIN (seen {seen})")
+
+
+def _kept_vanguards() -> tuple[str | None, dict[str, str], str | None]:
+    """The read kept in `settings`: its day, its map, and why that day's read
+    failed when Vanguard answered and its list could not be read; or
+    (None, {}, None)."""
+    from app import models
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        row = db.get(models.Setting, VANGUARD_KEPT)
+    try:
+        kept = json.loads(row.value) if row is not None and row.value else {}
+        ports = {str(k): str(v) for k, v in dict(kept.get("ports") or {}).items()}
+        return kept.get("day"), ports, kept.get("unread")
+    except (ValueError, TypeError, AttributeError):
+        return None, {}, None
+
+
+def _keep_vanguards(day: str, ports: dict[str, str], unread: str | None = None) -> None:
+    """Keep the read in `settings`. A write that fails (the database still
+    busy past its wait) is logged, not raised: what was just read serves the
+    look-through that asked, and the list is read again at the next."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app import models
+    from app.database import SessionLocal, sole_writer
+
+    kept = {"day": day, "ports": ports, **({"unread": unread} if unread else {})}
+    value = json.dumps(kept, separators=(",", ":"))
+    try:
+        with SessionLocal() as db:
+            with sole_writer(db):
+                row = sqlite_insert(models.Setting).values(key=VANGUARD_KEPT, value=value)
+                db.execute(row.on_conflict_do_update(index_elements=["key"], set_={"value": value}))
+    except SQLAlchemyError as exc:
+        logger.warning("Vanguard's list was read and could not be kept: %s", exc)
+
+
+def _vanguard_port_id(isin: str) -> str | None:
+    """The portfolio id of a Vanguard fund: the hand map's, else the one kept
+    from Vanguard's own list. That list is read only for a fund the stored
+    catalogue names as Vanguard's and the kept map lacks, and at most once a
+    day: a read Vanguard answered and whose list could not be read
+    (VanguardListUnread) is kept with its day and its reason, said again that
+    day without asking; one that did not answer is kept nowhere, and is asked
+    again at the next look, as an outage is elsewhere in the app. Each read
+    adds to the map, so a fund once found keeps its id when a later list no
+    longer names it, and nothing is asked again for it. None for a fund that
+    is not Vanguard's, or that Vanguard's list did not hold when read today.
+    Raises IssuerUnreachable, said in words, when the list could not be
+    read."""
+    from app import dated
+
+    if isin in VANGUARD_PORT_IDS:
+        return VANGUARD_PORT_IDS[isin]
+    _, ports, _ = _kept_vanguards()
+    if isin in ports:
+        return ports[isin]
+    if not _named_vanguard(isin):
+        return None
+    today = dated.today()
+    with _vanguard_guard:
+        day, ports, unread = _kept_vanguards()
+        if isin in ports:
+            return ports[isin]
+        if day == today:
+            if unread:
+                raise VanguardListUnread(unread)
+            return None
+        try:
+            read = _read_vanguards_list()
+        except VanguardListUnread as exc:
+            _keep_vanguards(today, ports, str(exc))
+            raise
+        ports = {**ports, **read}
+        _keep_vanguards(today, ports)
+        return ports.get(isin)
+
+
+def _vanguard_kind(security_type) -> str | None:
+    """What a Vanguard line is, in the look-through's words: "Equity" for a
+    company's shares (VANGUARD_SHARES), the file's own code for anything else,
+    None where the file says nothing."""
+    code = str(security_type or "").strip()
+    if not code:
+        return None
+    return "Equity" if code in VANGUARD_SHARES else code
+
+
 def fetch_vanguard(isin: str) -> dict:
-    """Every position of a Vanguard UCITS fund, by ISIN (month-end data).
-    Network calls; raises."""
+    """Every position of a Vanguard UCITS fund, by ISIN (month-end data), each
+    line with what it is. Network calls; raises, FundOfFunds for a file more
+    than half of whose value is other funds."""
     import httpx
 
     from app import geo
 
-    port_id = VANGUARD_PORT_IDS.get(isin.upper())
+    port_id = _vanguard_port_id(isin.upper())
     if not port_id:
         raise IssuerError(f"{isin} has no known Vanguard portfolio id")
 
-    query = (
-        "query FundsHoldingsQuery($portIds:[String!],$lastItemKey:String){"
-        "borHoldings(portIds:$portIds){holdings(limit:1500,lastItemKey:$lastItemKey){"
-        "items{issuerName gicsSectorDescription marketValuePercentage "
-        "bloombergIsoCountry} totalHoldings lastItemKey}}}"
-    )
     rows: list[dict] = []
     last_key = None
     for _ in range(10):  # 1500 per page; a guard, not a real limit
         resp = httpx.post(
             VANGUARD_GRAPHQL,
             headers={
+                "User-Agent": _UA,
                 "Content-Type": "application/json",
                 "X-Consumer-ID": "de7",
-                "User-Agent": _UA,
+                "Accept": "application/json",
             },
             json={
                 "operationName": "FundsHoldingsQuery",
                 "variables": {"portIds": [port_id], "lastItemKey": last_key},
-                "query": query,
+                "query": VANGUARD_HOLDINGS_QUERY,
             },
             timeout=60,
         )
@@ -310,6 +596,7 @@ def fetch_vanguard(isin: str) -> dict:
                 pct = float(item.get("marketValuePercentage"))
             except (TypeError, ValueError):
                 continue
+            kind = _vanguard_kind(item.get("securityType"))
             rows.append(
                 {
                     "name": str(item.get("issuerName") or "").strip(),
@@ -317,6 +604,7 @@ def fetch_vanguard(isin: str) -> dict:
                     "pct": pct,
                     "country": geo.country_from_iso2(item.get("bloombergIsoCountry")),
                     "sector": item.get("gicsSectorDescription") or None,
+                    **({"kind": kind} if kind else {}),
                 }
             )
         last_key = block.get("lastItemKey")
@@ -324,6 +612,12 @@ def fetch_vanguard(isin: str) -> dict:
             break
     if not rows:
         raise IssuerError(f"Vanguard returned no holdings for {isin}")
+    in_funds = sum(r["pct"] for r in rows if r.get("kind") in VANGUARD_FUNDS)
+    if in_funds > FUND_OF_FUNDS_ABOVE_PCT:
+        raise FundOfFunds(
+            f"Vanguard's file for {isin} lists other funds ({in_funds:.2f}% of it), not "
+            "their holdings: a fund of funds is read from the next source."
+        )
     return _aggregate(rows, None)
 
 
@@ -340,6 +634,9 @@ def fetch(isin: str) -> dict:
         except IssuerUnreachable as exc:
             # Could not ask this issuer, so it may or may not be its fund:
             # the next adapter is asked anyway, and the reason is kept.
+            unanswered.append(str(exc))
+        except FundOfFunds as exc:
+            # Its fund, and a file that is not its holdings: said too.
             unanswered.append(str(exc))
         except IssuerError:
             continue  # not this issuer's fund
