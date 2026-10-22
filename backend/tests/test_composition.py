@@ -1008,8 +1008,10 @@ def test_one_issuer_written_two_ways_is_one_row():
     which is exactly the failure `_company_key` exists to prevent for companies
     written differently by two issuers.
 
-    The axis is called ISSUERS rather than companies for the same reason: a
-    government is not a company, and it belongs there."""
+    Since brief BF the page calls the axis Companies, and a line of no kind in
+    a position recorded as Bonds is left out of it (`_a_share`); the key still
+    merges the two spellings wherever such lines are counted, and in the
+    overlap and a weighing's moves."""
     from app.composition import _company_key
 
     assert _company_key("Italy (Republic Of) Regs") == _company_key("Italy (Republic Of)")

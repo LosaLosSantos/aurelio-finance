@@ -189,5 +189,6 @@ def test_the_analyst_reads_no_stock_held_twice_for_a_bond(client, monkeypatch):
     _files(monkeypatch, {EQUITY_FUND: EQUITY_FILE, BOND_FUND: BOND_FILE})
     with SessionLocal() as db:
         context = advisor.build_portfolio_context(db)
-    assert "same stock inside 2+ funds" not in context
+    # The overlap's heading since brief BF; an overlap of none is no heading.
+    assert "Overlapping top holdings" not in context
     assert "Alfa Corp: " not in context and "ALFA CORP: " not in context

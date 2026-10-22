@@ -225,8 +225,11 @@ has already been paid for.
 - A company inside a bond fund is its debt, not its stock. A bond fund's file
   lists its issuers' notes under the issuers' names, so under the name alone a
   company's bonds and its shares in an equity fund read as one stock held
-  twice. The issuers' files say what each line is, and only a share counts in
-  the companies and the overlap; a line nothing describes counts as before.
+  twice. Where a file says what each line is (iShares' does), only a share
+  counts in the companies and the overlap. Where nothing says it (justETF's top
+  ten, Trackinsight's, Yahoo's, Vanguard's file), the position's own class
+  decides: a line of a position recorded as Bonds is the fund's debt, and
+  anywhere else it counts as a share.
 - "Nobody answered" and "this instrument does not exist" are different
   statements. Presenting the first as the second teaches people to correct a
   ticker that was right. There is a third: "that day has no close", which says

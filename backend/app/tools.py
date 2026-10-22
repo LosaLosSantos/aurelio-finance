@@ -318,8 +318,13 @@ _READING = (
     "companies and overlap are the twenty largest by weight. A name that is "
     "not in them is not absent from the portfolio: it is below that cut, and "
     "saying 'you do not hold it' would be wrong.",
-    "overlap lists the names held inside two or more positions, with the "
-    "positions holding them. Its percentage is a share of all the investments, "
+    "companies are the companies whose shares are held, through the funds and "
+    "directly. A line counts as a company's shares when its source says so, or, "
+    "when its source says nothing of what it is, when its position is not "
+    "recorded as Bonds; a bond fund recorded otherwise, read from such a "
+    "source, can still put a government or a company's debt among them.",
+    "overlap lists the companies whose shares are held inside two or more "
+    "positions, with the positions holding them. Its percentage is a share of all the investments, "
     "not of one position, and it is a floor: a fund whose source publishes only its top "
     "holdings hides everything below that rank.",
     "A row with decomposed=false carries the reason in `error`. 'No source "
@@ -4997,7 +5002,8 @@ REGISTRY: dict[str, Tool] = {
                 "What the reader's funds are made of underneath: the country, "
                 "sector and currency weights of the investments as a whole "
                 "(not the cash on the accounts) seen through the funds, the "
-                "largest single companies held, and "
+                "largest single companies held (their shares, never a bond "
+                "fund's lines when the position is recorded as Bonds), and "
                 "which companies sit inside more than one position. Use it "
                 "when the question is about exposure held THROUGH a fund "
                 "('how much NVIDIA do I own in total', 'do these two ETFs "

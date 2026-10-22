@@ -338,19 +338,32 @@ def _company_key(name: str) -> str:
 SHARE_KINDS = frozenset({"Equity"})
 
 
-def _a_share(holding: dict) -> bool:
-    """Whether a holding line is a company's stock, for the companies and the
-    overlap: one its source calls equity, or one it says nothing about.
+def _a_share(holding: dict, asset_class: str | None = None) -> bool:
+    """Whether a holding line is a company's shares, for the companies and the
+    overlap: one its source calls equity; or, when its source says nothing of
+    what it is, any line of a position not recorded as Bonds.
 
     A bond fund lists its issuers' notes under the issuers' names, and under
     `_company_key` "ALFA CORP" in a bond fund is the same key as Alfa Corp's
     shares in an equity fund. On brief AR's seed (2026-10-12) one company read
     as held via a bond fund and an equity fund, "same stock inside 2+ funds",
-    and the analyst had to guess the bond fund held debt. A line whose kind
-    nobody said (every source but an issuer's file that says it, and every
-    entry cached before) counts as it always did."""
+    and the analyst had to guess the bond fund held debt.
+
+    Only iShares' file says what each line is. Every other source (justETF's
+    top ten, Trackinsight's, Yahoo's, Vanguard's file) and every entry cached
+    before brief AR says nothing, and brief BF's P0 (2026-10-21) measured what
+    that let through: a government bond fund read from justETF put "Italy
+    (Republic Of) Regs" among the companies and in the overlap. So a line of
+    no kind takes its position's own class: in a position recorded as Bonds
+    it is the fund's debt, and anywhere else it counts as it always did. The
+    one case this leaves is a bond fund recorded under Stocks & ETF whose
+    source says nothing, and the axis's descriptions say so. A considered
+    purchase takes the class of the held fund it is more of (`_class_of`); one
+    of a fund not held has no class, and is read as before."""
     kind = holding.get("kind")
-    return kind is None or kind in SHARE_KINDS
+    if kind is not None:
+        return kind in SHARE_KINDS
+    return asset_class != "bond"
 
 
 def _humanize(key: str) -> str:
@@ -817,8 +830,9 @@ def _composition_of(db: Session, p, refresh: bool) -> tuple[dict | None, str | N
 def compute_portfolio_composition(db: Session, refresh: bool = False) -> dict:
     """Aggregate the look-through over the whole investment portfolio.
 
-    Position weights use book values (market pricing is a separate concern and
-    this must work offline). For every symboled position the composition is
+    Position weights are each position's current value, the market's where it
+    prices the position and its last observed value where it cannot, so this
+    still works offline. For every symboled position the composition is
     fetched/cached; positions no source can decompose (single stocks, crypto,
     value-only lumps) stay whole in an 'undecomposed' bucket so the coverage
     is always honest. Aggregates: portfolio-level country and sector weights
@@ -934,10 +948,11 @@ def _aggregate(
             for s in comp["sectors"]:
                 key = _canonical_sector(s["name"])
                 sectors[key] = sectors.get(key, 0.0) + weight * s["pct"]
-            # The companies and the overlap read a company's stock only: a line
-            # that is its debt, cash, a currency or a future is not one
+            # The companies and the overlap read a company's shares only: a line
+            # its source calls debt, cash, a currency or a future is not one,
+            # nor is a line of no kind in a position recorded as Bonds
             # (`_a_share`). The countries and the sectors above keep every line.
-            shares = [h for h in comp["top_holdings"] if _a_share(h)]
+            shares = [h for h in comp["top_holdings"] if _a_share(h, p.asset_class)]
             for h in shares:
                 key = _company_key(h["name"])
                 entry = overlap.setdefault(
@@ -997,9 +1012,10 @@ def _aggregate(
             if v >= 0.01
         ]
 
-    # Every top holding, weighted to the whole portfolio: the company axis was
-    # already in the data (it is what `overlap` is computed from), so showing
-    # only the overlapping subset threw away the more useful view.
+    # Every line counted as a company's shares (`_a_share`), weighted to the
+    # whole portfolio: the company axis was already in the data (it is what
+    # `overlap` is computed from), so showing only the overlapping subset threw
+    # away the more useful view.
     companies = [
         {"name": e["label"], "pct": round(e["pct"], 2)}
         for _, e in sorted(overlap.items(), key=lambda kv: kv[1]["pct"], reverse=True)
@@ -1075,20 +1091,69 @@ class _Considered:
 MOVES = 5
 
 
-def _moves(before: list[dict], after: list[dict]) -> list[dict]:
-    """The names whose share moves most from `before` to `after`, largest move
-    first, each with both shares; a name under 0.01% on one side reads 0."""
-    was = {e["name"]: e["pct"] for e in before}
-    now = {e["name"]: e["pct"] for e in after}
+def _same(name: str) -> str:
+    return name
 
-    def moved(name: str) -> float:
-        return abs(now.get(name, 0.0) - was.get(name, 0.0))
+
+def _moves(before: list[dict], after: list[dict], key=_same) -> list[dict]:
+    """The names whose share moves most from `before` to `after`, largest move
+    first, each with both shares; a name under 0.01% on one side reads 0.
+
+    `key` is what makes two names one. The countries, sectors and currencies
+    come in one spelling each; a company does not: each side of a weighing
+    labels it with the longest spelling its own sources wrote, so a purchase
+    whose source writes "Italy (Republic Of) Regs" where the held fund writes
+    "Italy (Republic Of)" made one name two moves, 8 to 0 and 0 to 7 (brief
+    BF's P0, 2026-10-21). The companies are matched by `_company_key`, as the
+    overlap matches them, and said by the longest spelling of the two."""
+    was: dict[str, float] = {}
+    now: dict[str, float] = {}
+    label: dict[str, str] = {}
+    for side, entries in ((was, before), (now, after)):
+        for e in entries:
+            k = key(e["name"])
+            side[k] = side.get(k, 0.0) + e["pct"]
+            # A line no source named (Vanguard's file has them) is labelled
+            # too: its empty name is still the longest it has.
+            if k not in label or len(e["name"]) > len(label[k]):
+                label[k] = e["name"]
+
+    def moved(k: str) -> float:
+        return abs(now.get(k, 0.0) - was.get(k, 0.0))
 
     return [
-        {"name": name, "before_pct": was.get(name, 0.0), "after_pct": now.get(name, 0.0)}
-        for name in sorted(set(was) | set(now), key=moved, reverse=True)[:MOVES]
-        if moved(name) >= 0.01
+        {"name": label[k], "before_pct": was.get(k, 0.0), "after_pct": now.get(k, 0.0)}
+        for k in sorted(set(was) | set(now), key=moved, reverse=True)[:MOVES]
+        if moved(k) >= 0.01
     ]
+
+
+# How each axis's names are matched across a weighing (`_moves`).
+_MATCHED_BY = {"companies": _company_key}
+
+
+def _held_as(fetched: list, purchase: Purchase) -> list:
+    """The held positions `purchase` would be more of: the same ISIN, or the
+    symbol the position is looked up by."""
+    isin = (purchase.isin or "").strip().upper()
+    return [
+        (p, comp, why)
+        for p, comp, why in fetched
+        if (isin and (p.isin or "").strip().upper() == isin)
+        or (purchase.symbol and _lookup_key(p) == purchase.symbol)
+    ]
+
+
+def _class_of(held: list) -> str | None:
+    """The class a considered purchase is read with (`_a_share`): the one the
+    reader recorded the fund under, when more of a held fund is considered (the
+    largest position's, if two say differently), and none for a fund not held,
+    which reads as it did before brief BF. Without it, more of a fund held as
+    Bonds counted its lines of no kind as companies on the purchase's side
+    alone, and a weighing's companies moved from nothing to its issuers."""
+    if not held:
+        return None
+    return max(held, key=lambda t: t[0].current_value)[0].asset_class
 
 
 def weigh_purchase(db: Session, purchase: Purchase) -> dict:
@@ -1110,7 +1175,7 @@ def weigh_purchase(db: Session, purchase: Purchase) -> dict:
         symbol=purchase.symbol,
         isin=purchase.isin,
         asset_name=purchase.name,
-        asset_class=None,
+        asset_class=_class_of(_held_as(fetched, purchase)),
         current_value=purchase.value,
     )
     comp, why_not = _composition_of(db, position, False)
@@ -1130,7 +1195,7 @@ def weigh_purchase(db: Session, purchase: Purchase) -> dict:
         "source": comp["source"] if inside else None,
         "fetched_at": comp["fetched_at"] if inside else None,
         "moves": {
-            axis: _moves(before[axis], after[axis]) if inside else []
+            axis: _moves(before[axis], after[axis], _MATCHED_BY.get(axis, _same)) if inside else []
             for axis in ("countries", "sectors", "currencies", "companies")
         },
         "already_held_through_other_positions": [
@@ -1222,23 +1287,16 @@ def weigh_change(db: Session, purchase: Purchase | None = None, sale: Sale | Non
     considered = None
     bought = None
     if purchase is not None:
+        held = _held_as(fetched, purchase)
         position = _Considered(
             symbol=purchase.symbol, isin=purchase.isin, asset_name=purchase.name,
-            asset_class=None, current_value=purchase.value,
+            asset_class=_class_of(held), current_value=purchase.value,
         )
         # More of a fund already held is weighed with the composition its
         # position was just read with: the cache keeps it under the position's
         # key (its ticker), and a purchase named by its ISIN would otherwise
         # ask every source again for a file already in hand.
-        same = [
-            (comp, why)
-            for p, comp, why in fetched
-            if comp is not None
-            and (
-                (purchase.isin and (p.isin or "").strip().upper() == purchase.isin.strip().upper())
-                or (purchase.symbol and _lookup_key(p) == purchase.symbol)
-            )
-        ]
+        same = [(comp, why) for _, comp, why in held if comp is not None]
         comp, why_not = same[0] if same else _composition_of(db, position, False)
         considered = (position, comp, why_not)
         inside = comp is not None and bool(comp["countries"] or comp["sectors"])
@@ -1264,7 +1322,7 @@ def weigh_change(db: Session, purchase: Purchase | None = None, sale: Sale | Non
         "bought": bought,
         "sold": sold,
         "moves": {
-            axis: _moves(before[axis], after[axis])
+            axis: _moves(before[axis], after[axis], _MATCHED_BY.get(axis, _same))
             for axis in ("countries", "sectors", "currencies", "companies")
         },
         "coverage_before_pct": before["coverage_pct"],

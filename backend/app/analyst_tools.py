@@ -363,8 +363,10 @@ REGISTRY: dict[str, tools.Tool] = {
             description=(
                 "What the funds held are made of underneath, for the investments "
                 "as a whole: the country, sector and currency weights, the largest "
-                "companies, the companies inside more than one position (a "
-                "company's stock only, never its bonds), and what could not be "
+                "companies and the companies inside more than one position (a "
+                "company's shares: a line its source calls debt is left out, and "
+                "a line its source says nothing of is left out when its position "
+                "is recorded as Bonds, counted otherwise), and what could not be "
                 "looked inside. More than the figures' summary of it gives."
             ),
             arguments=LookThroughArgs,

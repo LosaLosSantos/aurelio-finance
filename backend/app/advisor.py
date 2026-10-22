@@ -1057,7 +1057,7 @@ def build_portfolio_context(db: Session) -> str:
         for s in comp["sectors"][:15]:
             lines.append(f"- {s['name']}: {s['pct']:.2f}%")
     if comp["overlap"]:
-        lines.append("### Overlapping top holdings (same stock inside 2+ funds)")
+        lines.append("### Overlapping top holdings (one company's shares inside 2+ positions)")
         for o in comp["overlap"][:12]:
             lines.append(
                 f"- {o['name']}: {o['pct']:.2f}% of the investments via {', '.join(o['funds'])}"

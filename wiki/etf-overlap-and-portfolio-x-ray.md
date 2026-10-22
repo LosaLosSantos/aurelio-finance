@@ -60,22 +60,25 @@ exposure it was bought with.
 The Portfolio page then shows, under "Look-through (real exposure)":
 
 - **Countries**, **Sectors** and **Currency exposure**, each as a percentage of the portfolio;
-- **Issuers**: the companies whose shares you hold, through every fund and directly, as a
+- **Companies**: the companies whose shares you hold, through every fund and directly, as a
   percentage of the portfolio;
 - a grid of asset class by region;
-- **Overlap**: the same company's shares inside two or more of your funds, and through which
-  ones.
+- **Overlap**: the same company's shares inside two or more of your positions, and through
+  which ones.
 
 A share you hold directly counts as one holding of itself, with its own country and sector.
 In the demo, the SAP shares held directly and the SAP inside the MSCI World fund meet on one
-line under Issuers: names are matched without their legal form, so "SAP SE" and "SAP" are one
+line under Companies: names are matched without their legal form, so "SAP SE" and "SAP" are one
 company, and so are "NVIDIA CORP" and "NVIDIA Corp" from two different issuers' files.
 
 A bond fund's file lists its issuers' bonds under the issuers' names, so by name alone a
 company's bonds in a bond fund and its shares in an equity fund would read as one stock held
-twice. Where a fund's file says what each line is, only its shares count under Issuers and
-Overlap; its bonds, cash and futures still count in the countries and sectors. A line whose
-file says nothing of what it is counts as a share.
+twice. Where a fund's file says what each line is, only its shares count under Companies and
+Overlap; its bonds, cash and futures still count in the countries and sectors. Where nothing
+says what a line is (a published top ten, for instance), the class you recorded the position
+under decides: a fund recorded as Bonds names no company, and any other counts its lines as
+shares. A bond fund recorded under Stocks & ETF can therefore still put a government among the
+companies when its source does not say what its lines are.
 
 ## What can it not see?
 

@@ -2541,7 +2541,8 @@ class FxRateRead(BaseModel):
 
 
 class AllocationSlice(BaseModel):
-    """One country/sector with its weight (percent, 0-100)."""
+    """One country, sector, currency or company with its weight (percent,
+    0-100)."""
 
     model_config = API_OUT
 
@@ -2550,7 +2551,9 @@ class AllocationSlice(BaseModel):
 
 
 class OverlapItem(BaseModel):
-    """A stock held inside 2+ funds: combined portfolio weight and the funds."""
+    """One company's shares held inside two or more positions, a share held
+    directly counting as one: their combined weight in the portfolio, and the
+    positions."""
 
     model_config = API_OUT
 
@@ -2591,7 +2594,8 @@ class CompositionRow(BaseModel):
 
 class PortfolioComposition(BaseModel):
     """The portfolio's REAL exposure: per-position resolution rows plus
-    aggregated country/sector weights and cross-fund holding overlap.
+    aggregated country, sector, currency and company weights, and the
+    companies held through more than one position.
     `coverage_pct` = share of the portfolio the look-through decomposed."""
 
     model_config = API_OUT
@@ -2602,8 +2606,12 @@ class PortfolioComposition(BaseModel):
     companies: list[AllocationSlice] = Field(
         default=[],
         description=(
-            "Single-company exposure through the funds — the same data `overlap` "
-            "is derived from, but complete instead of only the shared names."
+            "Each company whose shares are held, through the funds and directly, "
+            "with its weight: the same lines the overlap is read from, every one "
+            "of them. A line counts as a company's shares when its source says so, "
+            "or, when the source says nothing of what it is, when its position is "
+            "not recorded as Bonds; so a bond fund recorded otherwise, read from a "
+            "source that does not say, still puts its issuers here."
         ),
     )
     currencies: list[AllocationSlice] = Field(

@@ -938,7 +938,7 @@ function LookThroughSection() {
       note="From the issuers’ own files where they publish them, justETF and Yahoo otherwise. Cached 15 days."
       explain={{
         question: "What is the look-through?",
-        text: "What is really inside your funds: countries, sectors, and the issuers you hold through more than one of them.",
+        text: "What is really inside your funds: countries, sectors, and the companies you hold through more than one of them.",
       }}
     >
       {/* Nothing held, nothing to look inside: one line says what this
@@ -1099,7 +1099,7 @@ function LookThroughSection() {
               noData={data.undecomposed_pct}
             />
             <AllocationList
-              title="Issuers (% of portfolio)"
+              title="Companies (% of portfolio)"
               items={data.companies ?? []}
             />
             <AllocationList
@@ -1120,7 +1120,7 @@ function LookThroughSection() {
           {data.overlap.length > 0 && (
             <div className={cardClass + " p-4"}>
               <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
-                Overlap: same stock inside 2+ funds
+                Overlap: one company's shares inside 2+ positions
               </h4>
               {/* Say what this is measured on: the sources publish a top-10 per
                   fund, so a stock held by both but ranked 11th in one of them is
