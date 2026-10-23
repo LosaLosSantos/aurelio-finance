@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import time
 import types
 from dataclasses import dataclass, field
 
@@ -81,17 +82,25 @@ class Listing:
 class FakeYahoo:
     """The listings Yahoo knows, and every chart request asked of it as
     (symbol, parameters). A symbol it does not list is answered as Yahoo
-    answers one: 404, "No data found"."""
+    answers one: 404, "No data found".
 
-    def __init__(self) -> None:
+    `delay`, in seconds, is how long a request for a history waits before it
+    is answered (one carrying events: a dividend window, a dated close), as
+    Yahoo takes about a second whatever the size (brief AF); a time zone is
+    answered at once, as the reader's own cache holds them (brief BG)."""
+
+    def __init__(self, delay: float = 0.0) -> None:
         self.listings: dict[str, Listing] = {}
         self.asked: list[tuple[str, dict]] = []
+        self.delay = delay
 
     def answer(self, url: str, params: dict):
         if "/v8/finance/chart/" not in url:
             raise AssertionError(f"the fake answers charts only, and was asked {url}")
         symbol = url.rsplit("/", 1)[-1]
         self.asked.append((symbol, dict(params)))
+        if self.delay and "events" in params:
+            time.sleep(self.delay)
         listing = self.listings.get(symbol)
         if listing is None:
             status, body = 404, {
@@ -106,14 +115,14 @@ class FakeYahoo:
         )
 
 
-def install(monkeypatch, tmp_path) -> FakeYahoo:
+def install(monkeypatch, tmp_path, delay: float = 0.0) -> FakeYahoo:
     """The real yfinance from here on answers from a `FakeYahoo`, its time zone
     cache in `tmp_path` rather than the reader's own folder."""
     import yfinance as yf
     from yfinance import data as yfdata
 
     yf.set_tz_cache_location(str(tmp_path / "yf-cache"))
-    fake = FakeYahoo()
+    fake = FakeYahoo(delay)
 
     def get(self, url, params=None, timeout=30):
         return fake.answer(url, params or {})

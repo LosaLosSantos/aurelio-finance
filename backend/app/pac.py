@@ -19,7 +19,9 @@ fills — e.g. withholding tax is NOT deducted) and the user can correct them.
 Yahoo is asked for a ticker's dividend history until it answers, and then not
 again that day: every later catch-up works from the answer it gave
 (`_dividend_history`). The whole history the first time a ticker is followed;
-after that, a window reaching back to its earliest situation.
+after that, a window reaching back to its earliest situation. The day's
+windows are asked before the loop that writes, eight at a time
+(`_ask_at_once`), and the loop writes what each comes to, as before.
 
 Currencies: a plan's contribution is in the plan's currency, each target's
 price in its listing's, and a dividend per share in the currency Yahoo names
@@ -56,6 +58,7 @@ import datetime
 import json
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -789,6 +792,7 @@ def _dividend_history(
     need: str,
     reach: str,
     answers: dict[str, prices.DividendWindow | prices.PriceError],
+    asked: dict[str, tuple[datetime.date, prices.DividendWindow | prices.PriceError]],
 ) -> prices.DividendWindow:
     """Every dividend Yahoo has listed for `symbol` since `reach`, or longer,
     asked for until Yahoo answers and then not again that day.
@@ -810,29 +814,31 @@ def _dividend_history(
     without raising) and a `PriceError` (the fetch failed) are not, so the
     next catch-up asks again. Within one catch-up the outcome, whichever it is,
     is reused from `answers`, so a fund held at two accounts is asked about
-    once."""
+    once.
+
+    The window itself is the one `_ask_at_once` asked before the loop, in
+    `asked`, when it was asked from the day it would be asked from now; when
+    it was not (another catch-up kept an answer in between), it is asked
+    here."""
     if symbol not in answers:
         kept = _kept(db, symbol)
         held = None if kept is None else kept.get("since")
-        reaches = kept is not None and (held is None or held <= reach)
-        if kept is not None and kept["on"] == today and reaches:
+        since = _since(kept, today, need, reach)
+        if since is None:
             # Yahoo's answer of today, as it was kept.
             answer = prices.DividendWindow(answered=True, dividends=kept["dividends"])
         else:
-            if kept is None:
-                since = datetime.date.min
-            else:
-                start = need if reaches else reach
-                since = min(datetime.date.fromisoformat(start), datetime.date.fromisoformat(kept["on"]))
             if _unanswered_today(db, symbol, today):
                 # Yahoo said nothing of it today while the market answered.
                 answers[symbol] = prices.DividendWindow(answered=False, dividends=[])
                 return answers[symbol]
-            try:
-                fetched = prices.get_dividends_since(symbol, since)
-            except prices.PriceError as exc:
-                answers[symbol] = exc
-                raise
+            day, window = asked.get(symbol, (None, None))
+            if day != since:
+                window = _window(symbol, since)
+            if isinstance(window, prices.PriceError):
+                answers[symbol] = window
+                raise window
+            fetched = window
             if not fetched.answered and prices.market_reachable():
                 _remember_unanswered(db, symbol, today)
             answer = fetched
@@ -862,6 +868,94 @@ def _merge(kept: dict | None, fetched: prices.DividendWindow, since: datetime.da
         d for d in kept["dividends"] if isinstance(d, dict) and isinstance(d.get("date"), str) and d["date"] <= lo
     ]
     return sorted([*before, *fetched.dividends], key=lambda d: d["date"])
+
+
+def _since(kept: dict | None, today: str, need: str, reach: str) -> datetime.date | None:
+    """The day Yahoo is asked from about a ticker, given the answer kept about
+    it (`_dividend_history` says why each): None when today's kept answer
+    reaches `reach` and serves; the whole history, `datetime.date.min`, when
+    nothing is kept; otherwise `need`, or `reach` when the kept history does
+    not reach it, or the day of the answer before when that is earlier."""
+    held = None if kept is None else kept.get("since")
+    reaches = kept is not None and (held is None or held <= reach)
+    if kept is not None and kept["on"] == today and reaches:
+        return None
+    if kept is None:
+        return datetime.date.min
+    start = need if reaches else reach
+    return min(datetime.date.fromisoformat(start), datetime.date.fromisoformat(kept["on"]))
+
+
+# How many of the day's dividend windows are asked of Yahoo at once (brief BG,
+# the reader's D1). They were asked one after another inside the loop that
+# writes, and Yahoo takes about a second for each whatever its size (brief AF:
+# 44.7 s for 22 tickers), so the day's first catch-up took about as many
+# seconds as tickers followed, and the banner waited for all of them. Measured
+# 2026-10-23 with Yahoo faked one second an answer, 24 invented shares: the
+# windows 25.0 s one after another and 4.3 s eight at a time, the whole
+# catch-up 27.2 s against 6.8 s. Eight is half of the 16 the daily price batch
+# sent Yahoo at once in the same run (yfinance's own threads, for the 24
+# symbols).
+_WINDOWS_AT_ONCE = 8
+
+# The name the threads asking them carry, so what runs on them can be found.
+_WINDOW_THREADS = "dividend-window"
+
+
+def _window(symbol: str, since: datetime.date) -> prices.DividendWindow | prices.PriceError:
+    """Yahoo's window for `symbol` from `since`, or the `PriceError` that says
+    why there is none. What a thread of `_ask_at_once` runs: nothing in it
+    touches the database."""
+    try:
+        return prices.get_dividends_since(symbol, since)
+    except prices.PriceError as exc:
+        return exc
+
+
+def _ask_at_once(
+    db: Session, symbols: list[str], today: str, need: dict[str, str], reach: dict[str, str]
+) -> dict[str, tuple[datetime.date, prices.DividendWindow | prices.PriceError]]:
+    """Every window the loop of `execute_dividends` will ask Yahoo for, asked
+    before it by the loop's own rules (`_since`, `_unanswered_today`), in the
+    loop's order: {symbol: (the day it was asked from, its window or the
+    `PriceError`)}. Nothing here writes: the loop writes what each window comes
+    to, in its own order, as it always did.
+
+    On this thread, one after another, until one comes back answered; then the
+    rest at most `_WINDOWS_AT_ONCE` at a time on threads of their own.
+    yfinance keeps every ticker's time zone in an SQLite file that each thread
+    opens on a connection of its own, and while that file is being created a
+    new connection can be refused: "database is locked", raised as peewee sets
+    the file's journal mode (measured 2026-10-23 with Yahoo faked: on a fresh
+    file, windows lost in 13 of 30 trials, once 15 of 16; on a file that
+    exists, 0 of 30). yfinance reads the time zone, which opens the file,
+    before it asks Yahoo anything, so a window that came back answered had
+    that read on this thread and the file exists before any other thread
+    connects. A window that failed may have failed before the read (a blank
+    symbol, or one shaped like an ISIN Yahoo does not know: the file was then
+    missing in 10 trials of 10), so the next one is asked here too, and when
+    none answers every window was asked here, one after another, as before."""
+    due: dict[str, datetime.date] = {}
+    for symbol in symbols:
+        since = _since(_kept(db, symbol), today, need[symbol], reach[symbol])
+        if since is not None and not _unanswered_today(db, symbol, today):
+            due[symbol] = since
+    asked: dict[str, tuple[datetime.date, prices.DividendWindow | prices.PriceError]] = {}
+    rest = list(due)
+    while rest:
+        symbol = rest.pop(0)
+        window = _window(symbol, due[symbol])
+        asked[symbol] = (due[symbol], window)
+        if isinstance(window, prices.DividendWindow) and window.answered:
+            break
+    if rest:
+        with ThreadPoolExecutor(
+            max_workers=min(_WINDOWS_AT_ONCE, len(rest)), thread_name_prefix=_WINDOW_THREADS
+        ) as pool:
+            windows = list(pool.map(lambda symbol: _window(symbol, due[symbol]), rest))
+        for symbol, window in zip(rest, windows):
+            asked[symbol] = (due[symbol], window)
+    return asked
 
 
 def _follows_dividends(h: models.Holding) -> bool:
@@ -899,7 +993,8 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
     withholding tax) and marked estimated — correct them with the net credit.
     Positions known only from the ledger are skipped: the dist/acc policy
     lives on snapshot holdings. Yahoo's answer about a ticker's history is
-    kept for the rest of the day it was given (`_dividend_history`).
+    kept for the rest of the day it was given (`_dividend_history`), and the
+    day's windows are asked before the loop, eight at a time (`_ask_at_once`).
 
     A dividend the reader has entered themselves is not recorded beside it
     (brief AZ): their entry dated in the dividend's window is recognised as it
@@ -972,12 +1067,19 @@ def execute_dividends(db: Session, as_of: datetime.date | None = None) -> dict:
             need[sym] = min(need.get(sym, latest), latest)
             reach[sym] = min(reach.get(sym, year_before), year_before)
     balances = crud.get_latest_balance_days(db, today)
+    # Every window the loop below asks Yahoo for, asked before it (brief BG):
+    # the loop takes each from here and writes what it comes to, in its order.
+    asked = _ask_at_once(
+        db, list(dict.fromkeys(s for symbols in followed.values() for s in symbols)), today, need, reach
+    )
     for inst_id, symbols in followed.items():
         snaps = situations[inst_id]
         balance = balances.get(inst_id)
         for symbol, latest_holding in symbols.items():
             try:
-                window = _dividend_history(db, symbol, today, need[symbol], reach[symbol], answers)
+                window = _dividend_history(
+                    db, symbol, today, need[symbol], reach[symbol], answers, asked
+                )
             except prices.PriceError as exc:
                 skipped.append({"label": symbol, "occurrence": None, "reason": str(exc)})
                 continue
