@@ -168,11 +168,38 @@ function textOf(m: Message): string {
 function Thought({ text, thinking, answered }: { text: string; thinking: boolean; answered: boolean }) {
   const [manual, setManual] = useState<boolean | null>(null);
   const open = manual ?? (thinking && !answered);
+  /* While the model is still thinking the box follows its end, by the
+     transcript's own rule (`followStream.ts`): pinned to the newest line until
+     the reader scrolls up in it, left where they put it then, and followed
+     again once they are back at the end. It used to stay on its first five
+     lines (measured in brief BH's P0, Edge at 1440 and 390: `scrollTop` 0 in
+     every sample of a 30-line think), and at max a turn thought for 9 and 11
+     minutes. A thought reopened afterwards opens at its top, to be read. */
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef<Follow>(FOLLOWING);
+  const live = open && thinking && !answered;
+  function boxNow(): Pane | null {
+    const el = boxRef.current;
+    if (!el) return null;
+    return { top: Math.round(el.scrollTop), height: el.scrollHeight, client: el.clientHeight };
+  }
+  useEffect(() => {
+    const el = boxRef.current;
+    const now = boxNow();
+    if (!live || !el || !now) return;
+    const { state, scrollTo } = onContent(followRef.current, now);
+    followRef.current = state;
+    if (scrollTo !== null) el.scrollTop = scrollTo;
+  }, [text, live]);
   return (
     <div className="mb-2">
       <button
         type="button"
-        onClick={() => setManual(!open)}
+        onClick={() => {
+          // Opened again while it thinks: at its end, followed as before.
+          followRef.current = FOLLOWING;
+          setManual(!open);
+        }}
         aria-expanded={open}
         className="inline-flex cursor-pointer items-center gap-1.5 text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint hover:text-ink-soft"
       >
@@ -181,7 +208,14 @@ function Thought({ text, thinking, answered }: { text: string; thinking: boolean
         <span aria-hidden="true">{open ? "−" : "+"}</span>
       </button>
       {open && (
-        <div className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l border-hair pl-3 text-xs leading-relaxed text-ink-faint">
+        <div
+          ref={boxRef}
+          onScroll={() => {
+            const now = boxNow();
+            if (now) followRef.current = onScroll(followRef.current, now);
+          }}
+          className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l border-hair pl-3 text-xs leading-relaxed text-ink-faint"
+        >
           {text}
         </div>
       )}
