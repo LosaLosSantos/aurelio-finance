@@ -652,19 +652,21 @@ HEAVY: dict[str, Heavy] = {
                 "max",
                 {"effort": "max"},
                 128_000,
-                "Max thinks the most: on three questions it took 9 to 11½ minutes and $1.16 "
-                "to $1.40 of reasoning and writing, and twice it ended on a card without a "
-                "word; normal took about a minute and $0.09 to $0.12. Measured Oct 27 and "
-                "29, 2026.",
+                "Max thinks the most: it answered two questions in 9 and 17 minutes, for "
+                "$1.16 and $2.18 of reasoning and writing; normal took about a minute and "
+                "$0.09 to $0.12. Measured Oct 27 and 29, 2026.",
             ),
         ),
         "Measured on Oct 27 and 29, 2026, the prompt the same at every position: on a "
         "twelve-month plan high answered in 77 seconds and normal in 53, on a choice for "
         "10,000 euros in 71 and 74, and what each reasoned and wrote cost $0.14 and "
-        "$0.09, then $0.12 and $0.12. Max took 9 to 11½ minutes and $1.16 to $1.40 on "
-        "three questions, and on two of them it proposed a card before writing a word, "
-        "which ended the turn there. In a new conversation the first question's prompt "
-        "costs $0.14 to $0.16 at any position; once it is cached, about $0.02.",
+        "$0.09, then $0.12 and $0.12. Max answered a three-line summary in 9 minutes for "
+        "$1.16 and the choice for 10,000 euros in 17 minutes for $2.18. Each of the "
+        "three times it proposed a card it did so before writing a word, and the app "
+        "then asks it once more for its words, which took 7 of those 17 minutes and "
+        "$0.90 of the $2.18; on the twelve-month plan it had reasoned 11½ minutes and "
+        "$1.40 before its card. In a new conversation the first question's prompt costs "
+        "$0.14 to $0.16 at any position; once it is cached, about $0.02.",
     ),
 }
 
@@ -1703,6 +1705,25 @@ LAST_TOOL_ROUND_NOTICE = (
     "announce a card you are not calling for."
 )
 
+# What the round after a card is told when a turn at high or max put the card
+# up without a word to the reader (brief BH): the card's call is answered as
+# waiting, and this goes last, a user message after the results as the notice
+# above goes, on a round offered no tools. Like that notice it is the offline
+# suite's to prove it is sent and a model's to heed; nothing depends on more,
+# since the round can only write.
+WORDS_AFTER_A_CARD = (
+    "ONE THING ABOUT THIS ROUND. What you called is up as a card for the reader "
+    "to confirm or reject, and you have not written them a word yet. Write your "
+    "answer now: what they asked, and what the card proposes and why. This round "
+    "offers no tools."
+)
+
+
+def _wrote(blocks: list[dict]) -> bool:
+    """Whether the answer so far has a word for the reader: a text block with
+    something in it. A thought, a tool's line or a card is not one."""
+    return any(b.get("kind") == "text" and b.get("text", "").strip() for b in blocks)
+
 
 def _asked(
     completion: int,
@@ -2001,14 +2022,22 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
         searched = 0
         # How many messages the round before this one sent.
         sent = 0
+        # Set once a round at high or max has put up a card without a word to
+        # the reader: the round after it is the last, with no tools, for the
+        # words (WORDS_AFTER_A_CARD).
+        words_after = False
         for completion in range(1, allowed + 1):
             # The last round is asked with no tools, so it can only write. That
             # is the whole of the old error path, deleted rather than caught.
-            last = completion == allowed
+            last = completion == allowed or words_after
             calls: list[advisor.ToolCall] = []
             said: list[str] = []
             system, asked = _asked(
-                completion, turn.model, messages, rounds=allowed, warn=turn.decision is None
+                completion,
+                turn.model,
+                messages,
+                rounds=allowed,
+                warn=turn.decision is None and not words_after,
             )
             # On a question's turn the round before the last reads up to where
             # the round before it ended, and keeps nothing new (its question,
@@ -2081,6 +2110,8 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
             # its instrument, the record it changes, or itself. At most
             # CARDS_PER_ANSWER, and none twice.
             drawn: list[str] = []
+            # The round's cards with the calls that drew them.
+            carded: list[tuple[advisor.ToolCall, dict]] = []
             for place, call in enumerate(calls):
                 ran = None
                 touches = ""
@@ -2096,6 +2127,7 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 if card is not None:
                     proposed = True
                     drawn.append(_named(call) or touches or card["card_id"])
+                    carded.append((call, card))
                     blocks.append(card)
                     yield schemas.ChatCard(card=schemas.ChatCardBlock(**tools.present(card)))
                     continue
@@ -2127,6 +2159,24 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                     blocks.append(found)
                     yield schemas.ChatSources(query=found["query"], pages=found["pages"])
                 messages.append(tools.result_message(call, outcome))
+            if proposed and turn.heavier and not _wrote(blocks):
+                # A card and not a word to the reader, at high or max: asked
+                # once more, with no tools, for the words, the card already up
+                # and answered as waiting (brief BH). In its paid P0 (run 4,
+                # 2026-10-27) Opus 5.5 at max reasoned 44,844 tokens, then
+                # called the analysis's card before writing ("Ora devo chiamare
+                # run_analysis prima di dare la risposta finale"), and the
+                # reader got the card alone after eleven minutes, though the
+                # system prompt already says "say what you are proposing and
+                # then stop"; on 2026-10-29 it did the same in both turns at
+                # max that proposed a card, and this round gave the words of
+                # one of them, reasoning anew for 7 more minutes and $0.95
+                # (what it reasoned before is dropped, the reader's D4 (b)).
+                # Below high the turn ends on the card as it did.
+                messages.extend(tools.result_message(call, _card_state(card)) for call, card in carded)
+                messages.append({"role": "user", "content": WORDS_AFTER_A_CARD})
+                words_after = True
+                continue
             if proposed:
                 # The turn ends on the card, and ends DONE. The confirmation is
                 # a new request against the stored conversation, so nothing is

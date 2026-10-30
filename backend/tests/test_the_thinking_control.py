@@ -689,3 +689,97 @@ def test_a_402_says_the_lower_position_only_at_high_and_max(
     events = _events(_ask(client, OPUS, thinking))
     assert events[-1]["kind"] == "error", events[-1]
     assert (LOWER in events[-1]["detail"]) is lower
+
+
+# --- A turn at high or max never ends on a card with no word (brief BH) -----------------
+
+# Brief BH's paid P0 (run 4, 2026-10-27): Opus 5.5 at max reasoned 44,844 tokens,
+# called the analysis's card before writing a word, and the loop ends a turn on a
+# card, so the reader got the card and nothing else. At high and max such a turn
+# is asked once more, with no tools, for its words; below them it ends as it did.
+
+
+def _says_then_calls(text: str, name: str, arguments: dict, call_id: str) -> tuple[int, bytes]:
+    """A round that writes words and then asks for one tool, in one stream."""
+    tool = {
+        "index": 0,
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+    return _stream(
+        _chunk({"content": text}), _chunk({"tool_calls": [tool]}), _chunk({}, "tool_calls"), USAGE
+    )
+
+
+def _stored_blocks(client) -> list[dict]:
+    conversation = client.get("/api/chat/conversations").json()[0]
+    stored = client.get(f"/api/chat/conversations/{conversation['id']}").json()
+    return stored["messages"][-1]["blocks"]
+
+
+@pytest.mark.parametrize("position", ["high", "max"])
+def test_a_card_with_no_word_at_high_or_max_is_followed_by_one_round_for_the_words(
+    client, openrouter, position
+):
+    reasoning, ceiling = OPUS_SENDS[position]
+    openrouter.script = [
+        _calls("run_analysis", {}, "call_card"),
+        _says("The plan, month by month."),
+    ]
+    events = _events(_ask(client, OPUS, position, content="Plan my next twelve months."))
+    kinds = [e["kind"] for e in events]
+    assert kinds[-1] == "done", events[-1]
+    assert [k for k in kinds if k in ("card", "delta")] == ["card", "delta"]
+    assert "".join(e["text"] for e in events if e["kind"] == "delta") == "The plan, month by month."
+    rounds = _chat_bodies(openrouter.bodies)
+    assert len(rounds) == 2
+    assert "tools" in rounds[0] and "tools" not in rounds[1]
+    assert [(body["reasoning"], body["max_tokens"]) for body in rounds] == [(reasoning, ceiling)] * 2
+    # What the round for the words reads: the card's call, answered as still
+    # waiting for the reader, and then the app's note, last.
+    read = rounds[1]["messages"]
+    asked = next(m for m in read if m.get("tool_calls"))
+    assert [c["id"] for c in asked["tool_calls"]] == ["call_card"]
+    answered = next(m for m in read if m.get("role") == "tool")
+    assert answered["tool_call_id"] == "call_card"
+    assert json.loads(answered["content"])["outcome"] == "pending"
+    assert read[-1] == {"role": "user", "content": chat.WORDS_AFTER_A_CARD}
+    assert read.index(answered) < len(read) - 1
+    # Stored as the reader saw it: the card, then the words.
+    blocks = _stored_blocks(client)
+    assert [b["kind"] for b in blocks if b["kind"] in ("card", "text")] == ["card", "text"]
+
+
+@pytest.mark.parametrize("position", [None, "normal", "light"])
+def test_below_high_a_card_with_no_word_ends_the_turn_as_before(client, openrouter, position):
+    openrouter.script = [_calls("run_analysis", {}, "call_card"), _says("Never asked.")]
+    events = _events(_ask(client, OPUS, position, content="Plan my next twelve months."))
+    assert events[-1]["kind"] == "done", events[-1]
+    assert [e["kind"] for e in events if e["kind"] in ("card", "delta")] == ["card"]
+    assert len(_chat_bodies(openrouter.bodies)) == 1
+    assert len(openrouter.script) == 1, "the second answer was never asked for"
+
+
+def test_at_max_a_card_after_words_in_its_own_round_ends_the_turn_as_before(client, openrouter):
+    openrouter.script = [
+        _says_then_calls("Here is the plan.", "run_analysis", {}, "call_card"),
+        _says("Never asked."),
+    ]
+    events = _events(_ask(client, OPUS, "max", content="Plan my next twelve months."))
+    assert events[-1]["kind"] == "done", events[-1]
+    assert [e["kind"] for e in events if e["kind"] in ("card", "delta")] == ["delta", "card"]
+    assert len(_chat_bodies(openrouter.bodies)) == 1
+    assert len(openrouter.script) == 1
+
+
+def test_at_max_a_card_after_words_in_an_earlier_round_ends_the_turn_as_before(client, openrouter):
+    openrouter.script = [
+        _says_then_calls("First the funds.", "get_look_through", {}, "call_1"),
+        _calls("run_analysis", {}, "call_card"),
+        _says("Never asked."),
+    ]
+    events = _events(_ask(client, OPUS, "max", content="Plan my next twelve months."))
+    assert events[-1]["kind"] == "done", events[-1]
+    assert len(_chat_bodies(openrouter.bodies)) == 2
+    assert len(openrouter.script) == 1
