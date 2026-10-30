@@ -1706,11 +1706,24 @@ _IN_FLIGHT = "openrouter_in_flight_budget"
 _AFFORDS = re.compile(r"requested up to (\d+) tokens, but can only afford (\d+)")
 
 
-def _short_of_credit(error, body: dict) -> tuple[str, str]:
+# What a 402 on a request above normal on the Thinking control adds to what the
+# reader can do (brief BH): each of the three sources it names is a request's
+# hold that did not fit (its input and its `max_tokens` at the output price),
+# and high's and max's ceilings are four and fifteen times the chat's own. In
+# brief BH's paid P0 the in-flight budget, "a fraction of your current credit
+# balance, up to a fixed ceiling" (OpenRouter's page on limits), refused a
+# request at 32,768 after the run's own spending had shrunk it.
+LOWER_POSITION = "A lower Thinking position holds less while it runs."
+
+
+def _short_of_credit(error, body: dict, heavier: bool = False) -> tuple[str, str]:
     """What a 402 means for the reader and what they can do about it, by its
     source: the key's limit, the account's credit, the account's requests
     still running, or a 402 that names none. With the tokens the request may
-    write and those that can be paid for, when OpenRouter gives them."""
+    write and those that can be paid for, when OpenRouter gives them; and,
+    for a request above normal on the Thinking control (`heavier`), that a
+    lower position holds less (LOWER_POSITION), on the three named sources."""
+    lower = f" {LOWER_POSITION}" if heavier else ""
     metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
     source = metadata.get("limit_source")
     found = _AFFORDS.search(str(body.get("message") or ""))
@@ -1727,13 +1740,14 @@ def _short_of_credit(error, body: dict) -> tuple[str, str]:
         return (
             "what the API key may still spend under its limit does not cover this "
             "request" + figures("the key"),
-            "Raise or remove the key's limit on openrouter.ai (Settings, Keys), then ask again.",
+            "Raise or remove the key's limit on openrouter.ai (Settings, Keys), then ask again."
+            + lower,
         )
     if source == _CREDITS:
         return (
             "the credit on the account behind the API key does not cover this request"
             + figures("the credit"),
-            "Add credit on openrouter.ai (Settings, Credits), then ask again.",
+            "Add credit on openrouter.ai (Settings, Credits), then ask again." + lower,
         )
     if source == _IN_FLIGHT:
         wait = str(error.response.headers.get("retry-after", "")).strip()
@@ -1741,7 +1755,8 @@ def _short_of_credit(error, body: dict) -> tuple[str, str]:
         return (
             "the requests still running on the account, or just finished, are using "
             "what OpenRouter lets it spend at once",
-            f"Wait {when}, then ask again; adding credit on openrouter.ai raises that amount.",
+            f"Wait {when}, then ask again; adding credit on openrouter.ai raises that amount."
+            + lower,
         )
     return (
         "the API key or the account behind it does not have the credit this request "
@@ -1795,7 +1810,9 @@ def _words_of(raw: object) -> str:
     return "" if raw is None else " ".join(str(raw).split())
 
 
-def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
+def _refused(
+    error: Exception, model: str, chat: bool = False, ceiling: int | None = None
+) -> AdvisorError:
     """What the reader is told when a call to OpenRouter fails: what happened,
     what they can do about it, and what OpenRouter said, last.
 
@@ -1815,7 +1832,9 @@ def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
     SDK's words.
 
     `chat` is whether the call answers the chat, where another model is one
-    menu away; the analysis's models are set in backend/.env.
+    menu away; the analysis's models are set in backend/.env. `ceiling` is the
+    `max_tokens` a chat request named: above CHAT_MAX_TOKENS it was asked at
+    high or max, and a 402 then says that a lower position holds less.
     """
     openai = sdk()
     if isinstance(error, openai.APITimeoutError):
@@ -1836,7 +1855,9 @@ def _refused(error: Exception, model: str, chat: bool = False) -> AdvisorError:
     said = str(body.get("message") or error.message).strip().rstrip(".")
     status = error.status_code
     if status == 402:
-        means, remedy = _short_of_credit(error, body)
+        means, remedy = _short_of_credit(
+            error, body, heavier=ceiling is not None and ceiling > CHAT_MAX_TOKENS
+        )
     else:
         means, remedy = _REFUSAL_MEANS.get(status), _remedy(status, chat)
     refused = (
@@ -2329,6 +2350,7 @@ def stream_llm(
     cache_at: tuple[int, ...] | None = None,
     kept_to: int | None = None,
     reasoning: dict | None = None,
+    max_tokens: int | None = None,
 ) -> Iterator[tuple[str, str | ToolCall | Usage]]:
     """The streaming sibling of `call_llm`: yields the answer as it is written,
     one `(kind, piece)` pair at a time, for a whole conversation rather than a
@@ -2387,6 +2409,12 @@ def stream_llm(
     request is the one it was before the control existed. Every round of a
     turn gets the same, the round with no tools included.
 
+    `max_tokens` is the most the reply may write, its reasoning included:
+    None asks with the chat's own CHAT_MAX_TOKENS, as every round did before
+    brief BH; a position above normal on the Thinking control names its own
+    (`chat.HEAVY`), and a 402 on such a request also says that a lower
+    position holds less while it runs (`_refused`).
+
     Raises AdvisorError — before the first piece if nothing is configured or
     the call is refused, in the middle if the stream breaks. A stream that
     thinks but never answers is an empty response; a stream that asks for a
@@ -2430,6 +2458,7 @@ def stream_llm(
     nobody will see."""
     client = _client()
     model = resolve_model(model)
+    ceiling = CHAT_MAX_TOKENS if max_tokens is None else max_tokens
     system: str | list[dict] = system_prompt
     asked = messages
     # The session, the top-level marker and the reasoning object are not
@@ -2457,12 +2486,12 @@ def stream_llm(
             messages=[{"role": "system", "content": system}, *asked],
             stream=True,
             stream_options={"include_usage": True},
-            max_tokens=CHAT_MAX_TOKENS,
+            max_tokens=ceiling,
             **({"tools": tools} if tools else {}),
             **({"extra_body": extra} if extra else {}),
         )
     except Exception as exc:
-        raise _refused(exc, model, chat=True) from exc
+        raise _refused(exc, model, chat=True, ceiling=ceiling) from exc
 
     produced = False
     # index -> the call being assembled. A dict rather than a list: `index` is
@@ -2528,7 +2557,7 @@ def stream_llm(
         if received is not None:
             yield ("usage", received)
         raise _unfinished(
-            ended, native, None, wrote=produced, ceiling=CHAT_MAX_TOKENS, per="a reply"
+            ended, native, None, wrote=produced, ceiling=ceiling, per="a reply"
         )
     for index in sorted(building):
         produced = True

@@ -557,8 +557,22 @@ DEFAULT_READS = ("OPENROUTER_CHAT_MODEL", "OPENROUTER_MODEL")
 # deeper position was measured too and left out by the reader (D1 (b)): it
 # changed no answer, and cost GPT-6.1 Sol Pro thirty seconds.
 #
-# The analysis never takes this setting (the reader's D2): its roles ask as
-# they always did (`advisor.call_llm`, `call_round`).
+# Brief BH (2026-10-27 to 29): on Opus 5.5 alone, two positions above normal,
+# "high" (`effort: high`) and "max" (`effort: max`), the reader's D1 (a), so
+# its control reads light, normal, high, max (`HEAVY`). Effort is a willingness
+# and `max_tokens` the only limit (Anthropic's page on effort), so each carries
+# its own ceiling on every round of a turn. Measured through the app's own
+# loop on the demo (brief BH's paid P0, its part A and R2 on the built app,
+# $7.083910 in all), the most a round wrote was 6,941 tokens at high and
+# 45,077 at max, of the 65,536 it was then allowed: so high asks 32,768 and
+# max 128,000, Opus 5.5's whole output, which no answer the reader has paid
+# the thinking for can pass. While a request
+# runs OpenRouter holds its input and its ceiling at the output price against
+# the account (about $0.66 to $0.72 at high, $2.56 to $2.82 at max), which a
+# 402 then names, with what to do (`advisor._short_of_credit`).
+#
+# The analysis never takes this setting (the reader's D2, and D2 (a) in brief
+# BH): its roles ask as they always did (`advisor.call_llm`, `call_round`).
 
 
 @dataclass(frozen=True)
@@ -602,26 +616,122 @@ THINKING: dict[str, Lighter] = {
 }
 
 
+@dataclass(frozen=True)
+class Heavier:
+    """A position above normal: its word, the reasoning object it sends, the
+    most each round of a turn may write, and the line the panel shows under
+    the control while it is chosen."""
+
+    word: str
+    reasoning: dict
+    max_tokens: int
+    line: str
+
+
+@dataclass(frozen=True)
+class Heavy:
+    """A model's positions above normal, in the control's order, and what was
+    measured of them, with the day, as the panel's "?" says it."""
+
+    positions: tuple[Heavier, ...]
+    measured: str
+
+
+HEAVY: dict[str, Heavy] = {
+    "anthropic/claude-opus-5.5": Heavy(
+        (
+            Heavier(
+                "high",
+                {"effort": "high"},
+                32_768,
+                "High may think longer: on two questions it answered in 77 and 71 seconds, "
+                "normal in 53 and 74, for $0.12 to $0.14 of reasoning and writing against "
+                "$0.09 to $0.12. Measured Oct 27 and 29, 2026.",
+            ),
+            Heavier(
+                "max",
+                {"effort": "max"},
+                128_000,
+                "Max thinks the most: on three questions it took 9 to 11½ minutes and $1.16 "
+                "to $1.40 of reasoning and writing, and twice it ended on a card without a "
+                "word; normal took about a minute and $0.09 to $0.12. Measured Oct 27 and "
+                "29, 2026.",
+            ),
+        ),
+        "Measured on Oct 27 and 29, 2026, the prompt the same at every position: on a "
+        "twelve-month plan high answered in 77 seconds and normal in 53, on a choice for "
+        "10,000 euros in 71 and 74, and what each reasoned and wrote cost $0.14 and "
+        "$0.09, then $0.12 and $0.12. Max took 9 to 11½ minutes and $1.16 to $1.40 on "
+        "three questions, and on two of them it proposed a card before writing a word, "
+        "which ended the turn there. In a new conversation the first question's prompt "
+        "costs $0.14 to $0.16 at any position; once it is cached, about $0.02.",
+    ),
+}
+
+
 class ThinkingNotOffered(Exception):
     """A Thinking position the model does not have. Refused before anything is
     stored or written, so a question or a card's answer sent with it changes
     nothing (the router's 422)."""
 
 
-def reasoning_for(model: str, thinking: str | None) -> dict | None:
-    """What a turn on `model` sends for the reader's Thinking position: None
-    for normal (or none given), the model's lighter reasoning object for its
-    own lighter word. Raises ThinkingNotOffered for any other position."""
-    if thinking in (None, "normal"):
-        return None
+def positions(model: str) -> list[str]:
+    """Every position of `model`'s Thinking control, normal among them, in the
+    order the control lists them; empty for a model without one. With
+    positions above normal it lists from the least reasoning to the most;
+    without, normal first and then the lighter one, as it always did."""
     lighter = THINKING.get(model)
     if lighter is None:
+        return []
+    heavy = HEAVY.get(model)
+    if heavy is None:
+        return ["normal", lighter.word]
+    return [lighter.word, "normal", *(p.word for p in heavy.positions)]
+
+
+def position_for(model: str, thinking: str | None) -> Lighter | Heavier | None:
+    """The position a turn on `model` asks with for the reader's Thinking
+    position: None for normal (or none given), else the model's own position
+    of that word. Raises ThinkingNotOffered for one it does not have."""
+    if thinking in (None, "normal"):
+        return None
+    offered = positions(model)
+    if not offered:
         raise ThinkingNotOffered(f"{model} offers no Thinking setting; ask without one.")
-    if thinking != lighter.word:
+    if thinking not in offered:
         raise ThinkingNotOffered(
-            f'{model} offers Thinking normal or {lighter.word}, not "{thinking}".'
+            f'{model} offers Thinking {", ".join(offered[:-1])} or {offered[-1]}, not "{thinking}".'
         )
-    return lighter.reasoning
+    lighter = THINKING[model]
+    if thinking == lighter.word:
+        return lighter
+    return next(p for p in HEAVY[model].positions if p.word == thinking)
+
+
+def _asks_with(position: Lighter | Heavier | None) -> dict:
+    """The fields of a PreparedTurn that say what each of its rounds sends for
+    the reader's position: none for normal, the reasoning object for the
+    lighter one, and for one above normal its ceiling too."""
+    if position is None:
+        return {}
+    if isinstance(position, Heavier):
+        return {"reasoning": position.reasoning, "max_tokens": position.max_tokens, "heavier": True}
+    return {"reasoning": position.reasoning}
+
+
+def _thinking(model: str) -> schemas.ChatThinking | None:
+    """The menu's entry for `model`'s Thinking control, or None without one."""
+    lighter = THINKING.get(model)
+    if lighter is None:
+        return None
+    heavy = HEAVY.get(model)
+    return schemas.ChatThinking(
+        lighter=lighter.word,
+        measured=lighter.measured,
+        positions=positions(model),
+        lines={p.word: p.line for p in heavy.positions} if heavy else {},
+        heavier_measured=heavy.measured if heavy else None,
+    )
 
 
 def default_model() -> str:
@@ -666,11 +776,7 @@ def available_models(db: Session) -> schemas.ChatModelsRead:
                     s, listing, model_list.where_set(s, DEFAULT_READS) if s == default else model_list.PICKED
                 ),
                 searches=bool(tools.web_search(s)),
-                thinking=(
-                    schemas.ChatThinking(lighter=THINKING[s].word, measured=THINKING[s].measured)
-                    if s in THINKING
-                    else None
-                ),
+                thinking=_thinking(s),
             )
             for s in ordered
         ],
@@ -826,9 +932,15 @@ class PreparedTurn:
     # stored. Sent as `decided` right after `start`.
     decided: dict | None = None
     # What every round of the turn sends as OpenRouter's reasoning object, from
-    # the reader's Thinking position (`reasoning_for`); None for normal, which
+    # the reader's Thinking position (`position_for`); None for normal, which
     # sends nothing.
     reasoning: dict | None = None
+    # The most each round of the turn may write, from the same position: None
+    # for normal and the lighter one, which ask with the chat's own
+    # `advisor.CHAT_MAX_TOKENS`; high's or max's own (brief BH).
+    max_tokens: int | None = None
+    # Whether that position is above normal, high or max.
+    heavier: bool = False
 
 
 def _wire(stored: list[models.ChatMessage], now: screen.Screen | None = None) -> list[dict]:
@@ -1056,7 +1168,7 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
     turns that into its 404), and ThinkingNotOffered for a Thinking position
     the model does not have, before anything is stored."""
     model = advisor.resolve_model(request.model or default_model())
-    reasoning = reasoning_for(model, request.thinking)
+    position = position_for(model, request.thinking)
     conv = None
     if request.conversation_id is not None:
         conv = crud.get_chat_conversation(db, request.conversation_id)
@@ -1079,7 +1191,7 @@ def prepare(db: Session, request: schemas.ChatRequest) -> PreparedTurn:
         model=model,
         page_label=here.label if here is not None else None,
         now=here,
-        reasoning=reasoning,
+        **_asks_with(position),
     )
 
 
@@ -1215,7 +1327,7 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
     first of all, before the card is read or anything written: a decision
     sent with a Thinking position its model does not have decides nothing."""
     model = advisor.resolve_model(decision.model or default_model())
-    reasoning = reasoning_for(model, decision.thinking)
+    position = position_for(model, decision.thinking)
     found = crud.find_chat_card(db, card_id)
     if found is None:
         raise CardGone(card_id)
@@ -1235,7 +1347,7 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
             conversation_id=message.conversation.id,
             user_message_id=None,
             model=model,
-            reasoning=reasoning,
+            **_asks_with(position),
             pending=Pending(
                 card_id=card_id,
                 tool=card["tool"],
@@ -1277,7 +1389,7 @@ def resume(db: Session, card_id: str, decision: schemas.ChatCardDecision) -> Pre
         conversation_id=message.conversation.id,
         user_message_id=None,
         model=model,
-        reasoning=reasoning,
+        **_asks_with(position),
         decision=card_id,
         decided=decided,
     )
@@ -1916,10 +2028,12 @@ def stream(turn: PreparedTurn) -> Iterator[schemas.ChatEvent]:
                 # none follows it.
                 cache_at=None if last else kept,
                 kept_to=kept_to,
-                # The Thinking control's lighter position, on every round;
-                # passed only when set, so a turn at normal calls exactly as
-                # it did before the control.
+                # The Thinking control's position, on every round, its ceiling
+                # with it above normal (brief BH); each passed only when set,
+                # so a turn at normal calls exactly as it did before the
+                # control.
                 **({"reasoning": turn.reasoning} if turn.reasoning is not None else {}),
+                **({"max_tokens": turn.max_tokens} if turn.max_tokens is not None else {}),
             ):
                 if kind == "thought":
                     _say(blocks, "thought", piece)

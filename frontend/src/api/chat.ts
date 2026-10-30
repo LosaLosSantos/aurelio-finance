@@ -97,8 +97,8 @@ export async function streamChat(
     content: string;
     model: string | null;
     page: ChatPage | null;
-    // The Thinking control's lighter word, or null for normal (brief BF).
-    thinking: "light" | "off" | null;
+    // The Thinking control's chosen word, or null for normal (briefs BF, BH).
+    thinking: "light" | "off" | "high" | "max" | null;
   },
   handlers: StreamHandlers,
   signal: AbortSignal,
@@ -159,8 +159,8 @@ export async function decideCard(
   body: {
     decision: "confirm" | "reject";
     model: string | null;
-    // The Thinking control's lighter word, or null for normal (brief BF).
-    thinking: "light" | "off" | null;
+    // The Thinking control's chosen word, or null for normal (briefs BF, BH).
+    thinking: "light" | "off" | "high" | "max" | null;
   },
   handlers: StreamHandlers,
   signal: AbortSignal,

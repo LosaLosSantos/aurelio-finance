@@ -135,6 +135,35 @@ One limit, chosen on purpose: when a round of the chat calls a tool, what the mo
 in that round is shown and kept with the answer, and is not sent back to the model with the
 tool's result.
 
+## Can it think harder on a hard question?
+
+On Claude Opus 5.5, yes. Its **Thinking** control also offers **high** and **max**, above
+normal, so it reads light, normal, high, max; the other models keep their two positions. High
+sends OpenRouter's `effort: high` and lets each round of an answer write up to 32,768 tokens,
+its reasoning included; max sends `effort: max` and allows 128,000, Opus 5.5's whole output,
+so an answer is never cut after its thinking was paid for. Under the control, a line says what
+the chosen one was measured to take.
+
+Measured on October 27 and 29, 2026, through the app with the demo household, on questions
+harder than a look-through, each cell the time and what the model reasoned and wrote cost:
+
+| Question | normal | high | max |
+|---|---|---|---|
+| A twelve-month plan | 53 s, $0.09 | 77 s, $0.14 | 11½ minutes and $1.40, then a card without a word |
+| A choice for 10,000 euros | 74 s, $0.12 | 71 s, $0.12 | 10 minutes and $1.28, then a card without a word |
+| A three-line summary of the plan | | | 9 minutes, $1.16 |
+
+A question's prompt costs the same at every position: $0.14 to $0.16 the first time in a
+conversation, about $0.02 once it is cached. High gave the advice normal gave and once added
+the mortgage's remaining term. Twice max proposed a card before writing a word, and the turn
+ended there.
+
+While a question runs, OpenRouter sets aside what its longest possible answer would cost:
+about $0.66 to $0.72 at high and $2.56 to $2.82 at max. When your key or your credit cannot
+cover that, OpenRouter refuses the question before it starts, and the chat says so, and that a
+lower position holds less. A Stop ends what you see; OpenRouter stops the model, and its
+billing, only on the providers that support it.
+
 ## Can it search the web?
 
 Yes, when a question needs it, for instance what a company has reported lately. One search

@@ -3081,8 +3081,9 @@ ChatPage = Annotated[
 
 # The positions of the chat's Thinking control (brief BF): normal, what a model
 # does when nothing is said, or the one lighter position it has, said "light"
-# where it reasons less and "off" where it stops (`chat.THINKING`).
-ThinkingPosition = Literal["normal", "light", "off"]
+# where it reasons less and "off" where it stops (`chat.THINKING`); and, on
+# Opus 5.5 alone, "high" and "max" above normal (brief BH, `chat.HEAVY`).
+ThinkingPosition = Literal["normal", "light", "off", "high", "max"]
 
 
 class ChatRequest(BaseModel):
@@ -3112,8 +3113,9 @@ class ChatRequest(BaseModel):
         default=None,
         description=(
             "The chat's Thinking control: normal, or null, sends nothing; light or "
-            "off is the model's lighter position (`ChatModel.thinking`), refused "
-            "with a 422 when the model offers no such position"
+            "off is the model's lighter position, high or max one above normal "
+            "(`ChatModel.thinking`), refused with a 422 when the model offers no "
+            "such position"
         ),
     )
 
@@ -3160,8 +3162,9 @@ class ChatConversationDetail(ChatConversationRead):
 
 
 class ChatThinking(BaseModel):
-    """A model's lighter position on the chat's Thinking control, and what was
-    measured of it."""
+    """A model's positions on the chat's Thinking control, and what was
+    measured of them: its lighter one (brief BF), and on Opus 5.5 the two above
+    normal with the line the panel shows under the control (brief BH)."""
 
     model_config = API_OUT
 
@@ -3175,6 +3178,24 @@ class ChatThinking(BaseModel):
     measured: str = Field(
         ...,
         description="What that position did against normal, measured, with the day",
+    )
+    positions: list[ThinkingPosition] = Field(
+        ...,
+        description="Every position of the control, normal among them, in the order it lists them",
+    )
+    lines: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "The line the panel shows under the control while a position is chosen, "
+            "by position; only the positions above normal have one"
+        ),
+    )
+    heavier_measured: str | None = Field(
+        default=None,
+        description=(
+            "What the positions above normal did, measured, with the day; null for a "
+            "model with none"
+        ),
     )
 
 

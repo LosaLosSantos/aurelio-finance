@@ -2468,7 +2468,7 @@ export interface components {
              * Thinking
              * @description The Thinking control for the follow-up, as on a question; refused with a 422 before anything is written when the model offers no such position
              */
-            thinking?: ("normal" | "light" | "off") | null;
+            thinking?: ("normal" | "light" | "off" | "high" | "max") | null;
         };
         /**
          * ChatCardField
@@ -2834,9 +2834,9 @@ export interface components {
             page?: (components["schemas"]["ChatPageDashboard"] | components["schemas"]["ChatPagePortfolio"] | components["schemas"]["ChatPageProfile"] | components["schemas"]["ChatPageRecords"] | components["schemas"]["ChatPageAccount"] | components["schemas"]["ChatPageSituation"] | components["schemas"]["ChatPageRealAsset"] | components["schemas"]["ChatPageDebt"] | components["schemas"]["ChatPageAnalyses"] | components["schemas"]["ChatPageAnalysis"]) | null;
             /**
              * Thinking
-             * @description The chat's Thinking control: normal, or null, sends nothing; light or off is the model's lighter position (`ChatModel.thinking`), refused with a 422 when the model offers no such position
+             * @description The chat's Thinking control: normal, or null, sends nothing; light or off is the model's lighter position, high or max one above normal (`ChatModel.thinking`), refused with a 422 when the model offers no such position
              */
-            thinking?: ("normal" | "light" | "off") | null;
+            thinking?: ("normal" | "light" | "off" | "high" | "max") | null;
         };
         /**
          * ChatSources
@@ -2970,10 +2970,16 @@ export interface components {
         };
         /**
          * ChatThinking
-         * @description A model's lighter position on the chat's Thinking control, and what was
-         *     measured of it.
+         * @description A model's positions on the chat's Thinking control, and what was
+         *     measured of them: its lighter one (brief BF), and on Opus 5.5 the two above
+         *     normal with the line the panel shows under the control (brief BH).
          */
         ChatThinking: {
+            /**
+             * Heavier Measured
+             * @description What the positions above normal did, measured, with the day; null for a model with none
+             */
+            heavier_measured: string | null;
             /**
              * Lighter
              * @description "off" where the model was measured to stop reasoning, "light" where it reasons less and cannot stop
@@ -2981,10 +2987,22 @@ export interface components {
              */
             lighter: "light" | "off";
             /**
+             * Lines
+             * @description The line the panel shows under the control while a position is chosen, by position; only the positions above normal have one
+             */
+            lines: {
+                [key: string]: string;
+            };
+            /**
              * Measured
              * @description What that position did against normal, measured, with the day
              */
             measured: string;
+            /**
+             * Positions
+             * @description Every position of the control, normal among them, in the order it lists them
+             */
+            positions: ("normal" | "light" | "off" | "high" | "max")[];
         };
         /**
          * ChatThought

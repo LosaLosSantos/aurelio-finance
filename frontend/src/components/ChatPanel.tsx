@@ -40,9 +40,10 @@ import { menuFace, modelNotices, modelsHelp, optionLabel, pickToSend } from "./m
 import {
   type Choices,
   type Position,
-  lighterOf,
+  lineOf,
   positionLabel,
   positionOf,
+  positionsOf,
   readChoices,
   thinkingHelp,
   thinkingToSend,
@@ -1013,10 +1014,12 @@ export default function ChatPanel({
   const currentModel = pickToSend(model, models) ?? models?.default ?? "";
   const notices = modelNotices(currentModel, models);
   const face = menuFace(currentModel, models, todayISO());
-  // The Thinking control for that model: shown only when it has a lighter
-  // position (brief BF).
-  const lighter = lighterOf(currentModel, models);
+  // The Thinking control for that model: shown only when it has positions
+  // (brief BF), four on Opus 5.5, with a line under it while high or max is
+  // chosen (brief BH).
+  const positions = positionsOf(currentModel, models);
   const position = positionOf(thinking, currentModel, models);
+  const thinkingLine = lineOf(currentModel, position, models);
   const thinkingSays = thinkingHelp(currentModel, models);
   // What the panel's "?" says, read once: what a question is sent with, the
   // keys, and what is known of each model. The select's tooltip used to say it
@@ -1278,12 +1281,15 @@ export default function ChatPanel({
                     )}
                   </select>
                 </span>
-                {/* The Thinking control (brief BF): normal, or the one lighter
-                    position the model has, kept per model in the tab. Shown
-                    only for a model that has one. A face like the model pill's,
-                    the select laid over it as the control, so the keyboard and
-                    a screen reader meet a select named "Thinking". */}
-                {lighter && (
+                {/* The Thinking control (brief BF): the model's positions in
+                    the menu's order, normal and its lighter one, and on Opus
+                    5.5 high and max too (brief BH), kept per model in the tab.
+                    Shown only for a model that has one. A face like the model
+                    pill's, the select laid over it as the control, so the
+                    keyboard and a screen reader meet a select named
+                    "Thinking", described by the line under the row while high
+                    or max is chosen. */}
+                {positions && (
                   <span className="relative flex shrink-0 items-center gap-1 rounded-full border border-hair px-2.5 py-1 text-xs text-ink-soft transition focus-within:border-olive hover:border-rule hover:text-ink">
                     <span aria-hidden="true" className="whitespace-nowrap">
                       {positionLabel(position)}
@@ -1295,10 +1301,14 @@ export default function ChatPanel({
                         setThinking(withPosition(thinking, currentModel, e.target.value as Position))
                       }
                       aria-label="Thinking"
+                      aria-describedby={thinkingLine ? "thinking-line" : undefined}
                       className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                     >
-                      <option value="normal">{positionLabel("normal")}</option>
-                      <option value={lighter}>{positionLabel(lighter)}</option>
+                      {positions.map((p) => (
+                        <option key={p} value={p}>
+                          {positionLabel(p)}
+                        </option>
+                      ))}
                     </select>
                   </span>
                 )}
@@ -1323,6 +1333,14 @@ export default function ChatPanel({
                 </button>
               )}
             </div>
+            {/* What high or max was measured to take, under the control while
+                one of them is chosen (brief BH): said before the question is
+                sent, since a turn at max can think for minutes. */}
+            {thinkingLine && (
+              <p id="thinking-line" className="px-3 pb-2 text-[0.7rem] leading-snug text-ink-soft">
+                {thinkingLine}
+              </p>
+            )}
           </div>
           <p className="mt-2 text-center text-[0.65rem] leading-snug text-ink-faint">
             Educational information, not regulated financial advice.

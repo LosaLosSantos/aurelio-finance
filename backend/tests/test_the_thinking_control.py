@@ -16,6 +16,13 @@ written; the web search keeps its own setting; the analysis takes nothing
 from the control (the reader's D2); and the round's reasoning does not go
 back with its calls (the reader's D4, a stated limit).
 
+Brief BH (2026-10-29): Opus 5.5 has four positions, light, normal, high and
+max (the reader's D1 (a)), high sending `effort: high` with a ceiling of
+32,768 tokens on every round and max `effort: max` with 128,000, Opus 5.5's
+whole output; normal is still the request of before, the other models are
+unchanged, a 402 at high or max says a lower position holds less, and the
+analysis still takes nothing from the control (the reader's D2 (a)).
+
 Through the app's own client with only its transport replaced, and the real
 `stream_llm`, `call_llm` and `call_round`: the rule is about the bytes sent.
 """
@@ -276,6 +283,8 @@ def test_the_lighter_position_goes_on_every_round_of_a_question(client, openrout
     rounds = _chat_bodies(openrouter.bodies)
     assert len(rounds) == chat.MAX_COMPLETIONS_PER_TURN == 7
     assert [body["reasoning"] for body in rounds] == [reasoning] * 7
+    # The lighter position keeps the chat's own ceiling (brief BH).
+    assert [body["max_tokens"] for body in rounds] == [8192] * 7
     assert "tools" not in rounds[-1] and all("tools" in body for body in rounds[:-1])
 
 
@@ -304,8 +313,12 @@ def test_a_cards_turn_carries_it_on_each_of_its_rounds(client, openrouter):
     "model, thinking, said",
     [
         (SONNET, "light", "anthropic/claude-sonnet-4.6 offers no Thinking setting; ask without one."),
-        (OPUS, "off", 'anthropic/claude-opus-5.5 offers Thinking normal or light, not "off".'),
+        (OPUS, "off", 'anthropic/claude-opus-5.5 offers Thinking light, normal, high or max, not "off".'),
         (K3, "light", 'moonshotai/kimi-k3 offers Thinking normal or off, not "light".'),
+        # The heavier words, on the models that do not have them (brief BH).
+        (GPT, "high", 'openai/gpt-6.1-sol-pro offers Thinking normal or light, not "high".'),
+        (K26, "max", 'moonshotai/kimi-k2.6 offers Thinking normal or off, not "max".'),
+        (SONNET, "max", "anthropic/claude-sonnet-4.6 offers no Thinking setting; ask without one."),
     ],
 )
 def test_a_position_the_model_does_not_have_is_refused_before_anything_is_stored(
@@ -335,7 +348,22 @@ def test_a_card_answered_with_a_position_its_model_does_not_have_decides_nothing
     )
     assert response.status_code == 422
     assert response.json()["detail"] == (
-        'anthropic/claude-opus-5.5 offers Thinking normal or light, not "off".'
+        'anthropic/claude-opus-5.5 offers Thinking light, normal, high or max, not "off".'
+    )
+    assert openrouter.bodies == [], "no step of the analysis was asked"
+    assert _outcomes(client) == ["pending"]
+
+
+def test_a_card_answered_with_max_on_a_model_without_it_decides_nothing(client, openrouter):
+    """Brief BH: max on a model whose control has no max, on a card's answer."""
+    card = _propose_analysis(client, openrouter, GPT)
+    response = client.post(
+        f"/api/chat/cards/{card['card_id']}",
+        json={"decision": "confirm", "model": GPT, "thinking": "max"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        'openai/gpt-6.1-sol-pro offers Thinking normal or light, not "max".'
     )
     assert openrouter.bodies == [], "no step of the analysis was asked"
     assert _outcomes(client) == ["pending"]
@@ -436,3 +464,228 @@ def test_the_reasoning_does_not_go_back_with_the_calls(client, openrouter):
     second = _chat_bodies(openrouter.bodies)[1]
     asked = next(m for m in second["messages"] if m.get("tool_calls"))
     assert set(asked) == {"role", "content", "tool_calls"}
+
+
+# --- High and max on Opus 5.5 (brief BH) ------------------------------------------------
+
+# Opus 5.5's positions in the control's order, and what each sends on every round
+# of a turn: its reasoning object and its ceiling. Written out from the reader's
+# decision (brief BH, D1 (a)) rather than read from the code under test.
+OPUS_POSITIONS = ["light", "normal", "high", "max"]
+OPUS_SENDS = {
+    "light": ({"effort": "low"}, 8192),
+    "high": ({"effort": "high"}, 32768),
+    "max": ({"effort": "max"}, 128000),
+}
+
+# The sentence a 402 at high or max adds to what the reader can do.
+LOWER = "A lower Thinking position holds less while it runs."
+
+FITS = """It fits.
+
+VERDICT: FITS"""
+
+
+def test_the_menu_offers_opus_four_positions_and_a_line_under_high_and_max(client, openrouter):
+    menu = client.get("/api/chat/models").json()
+    opus = next(m for m in menu["models"] if m["slug"] == OPUS)["thinking"]
+    assert opus["positions"] == OPUS_POSITIONS
+    assert set(opus["lines"]) == {"high", "max"}
+    assert all(line.strip() for line in opus["lines"].values())
+    assert opus["heavier_measured"]
+    # Its lighter position is said as it was.
+    assert opus["lighter"] == "light" and opus["measured"]
+
+
+def test_every_other_model_offers_what_it_offered(client, openrouter):
+    """Normal and the one lighter position, in the order the control always
+    listed them, with no line under it and nothing heavier measured."""
+    menu = client.get("/api/chat/models").json()
+    offered = {m["slug"]: m["thinking"] for m in menu["models"]}
+    for slug, (word, _) in LIGHTER.items():
+        if slug == OPUS:
+            continue
+        assert offered[slug]["positions"] == ["normal", word], slug
+        assert offered[slug]["lines"] == {}, slug
+        assert offered[slug]["heavier_measured"] is None, slug
+    assert offered[SONNET] is None
+
+
+@pytest.mark.parametrize("position", ["light", "high", "max"])
+def test_each_opus_position_sends_its_effort_and_its_ceiling_on_every_round(
+    client, openrouter, position
+):
+    """Six rounds that ask for a tool, then the round with no tools: all seven
+    carry the position's reasoning object and its ceiling."""
+    reasoning, ceiling = OPUS_SENDS[position]
+    openrouter.script = [
+        *[_calls("get_look_through", {}, f"call_{n}") for n in range(1, 7)],
+        _says("Nothing is held to look through."),
+    ]
+    events = _events(_ask(client, OPUS, position))
+    assert events[-1]["kind"] == "done", events[-1]
+    rounds = _chat_bodies(openrouter.bodies)
+    assert len(rounds) == 7
+    assert [body["reasoning"] for body in rounds] == [reasoning] * 7
+    assert [body["max_tokens"] for body in rounds] == [ceiling] * 7
+
+
+def test_normal_on_opus_is_the_request_of_before(client, openrouter):
+    """No reasoning, the chat's own 8,192 on every round, and the same keys as
+    a round sent before the control."""
+    openrouter.script = [
+        _calls("get_look_through", {}, "call_1"),
+        _says("Nothing is held to look through."),
+    ]
+    _events(_ask(client, OPUS, "normal"))
+    rounds = _chat_bodies(openrouter.bodies)
+    assert [body["max_tokens"] for body in rounds] == [8192, 8192]
+    assert all("reasoning" not in body for body in rounds)
+    assert set(rounds[0]) == {
+        "model", "messages", "stream", "stream_options", "max_tokens", "tools",
+        "session_id", "cache_control",
+    }
+
+
+def test_a_cards_turn_at_max_carries_its_effort_and_its_ceiling_on_each_round(
+    client, openrouter
+):
+    """The reply to a rejected card, asked at max: its round with tools and
+    its round with none."""
+    card = _propose_analysis(client, openrouter, OPUS)
+    openrouter.script = [
+        _calls("get_look_through", {}, "call_after"),
+        _says("Understood: no analysis now."),
+    ]
+    response = client.post(
+        f"/api/chat/cards/{card['card_id']}",
+        json={"decision": "reject", "model": OPUS, "thinking": "max"},
+    )
+    assert _events(response)[-1]["kind"] == "done"
+    rounds = _chat_bodies(openrouter.bodies)
+    assert len(rounds) == chat.DECISION_ROUNDS == 2
+    assert [body["reasoning"] for body in rounds] == [{"effort": "max"}] * 2
+    assert [body["max_tokens"] for body in rounds] == [128000] * 2
+
+
+def test_an_answer_cut_at_max_says_its_own_ceiling(client, openrouter):
+    openrouter.script = [_stream(_chunk({"content": "The first half"}), _chunk({}, "length"), USAGE)]
+    events = _events(_ask(client, OPUS, "max"))
+    assert events[-1]["kind"] == "error", events[-1]
+    assert events[-1]["detail"] == (
+        "The model stopped before finishing its answer: it reached its length limit, the "
+        "128,000 tokens the app allows a reply, its reasoning included (OpenRouter reported "
+        "length)."
+    )
+
+
+def test_the_analysis_takes_nothing_from_max(client, openrouter):
+    """The reader's D2 (a): a run confirmed from a turn at max asks each of its
+    steps as it always did, with the step's own ceiling, and only the chat's
+    reply after it is at max."""
+    card = _propose_analysis(client, openrouter, OPUS)
+    openrouter.script = [
+        _answers("The numbers."),
+        _answers(FITS),
+        _answers("What this means for you."),
+        _says("The analyzer says it fits."),
+    ]
+    response = client.post(
+        f"/api/chat/cards/{card['card_id']}",
+        json={"decision": "confirm", "model": OPUS, "thinking": "max"},
+    )
+    assert _events(response)[-1]["kind"] == "done"
+    steps = [b for b in openrouter.bodies if not b.get("stream")]
+    assert len(steps) == 3
+    assert all("reasoning" not in body for body in steps)
+    assert [body["max_tokens"] for body in steps] == [16384] * 3
+    assert [(b["reasoning"], b["max_tokens"]) for b in _chat_bodies(openrouter.bodies)] == [
+        ({"effort": "max"}, 128000)
+    ]
+
+
+def test_the_web_search_keeps_its_own_ceiling_at_max(client, openrouter):
+    openrouter.script = [
+        _calls("search_web", {"query": "UCITS world index funds"}, "call_search"),
+        _searched(),
+        _says("Two of them are on record."),
+    ]
+    events = _events(_ask(client, OPUS, "max", content="Find me a world index fund."))
+    assert events[-1]["kind"] == "done", events[-1]
+    search = next(b for b in openrouter.bodies if b["model"] == websearch.SEARCH_MODEL)
+    assert (search["reasoning"], search["max_tokens"]) == ({"effort": "low"}, 1024)
+
+
+def test_the_reasoning_does_not_go_back_at_max_either(client, openrouter):
+    """The reader's D4 (b) holds at max: the round after a call is sent the
+    calls and the words only."""
+    openrouter.script = [
+        _calls("get_look_through", {}, "call_1", thought="First the funds."),
+        _says("Nothing is held to look through."),
+    ]
+    _events(_ask(client, OPUS, "max"))
+    second = _chat_bodies(openrouter.bodies)[1]
+    asked = next(m for m in second["messages"] if m.get("tool_calls"))
+    assert set(asked) == {"role", "content", "tool_calls"}
+
+
+# Each 402 source as OpenRouter's page on limits names it, with invented figures.
+CREDITS_402 = {
+    "error": {
+        "code": 402,
+        "message": (
+            "This request requires more credits, or fewer max_tokens. You requested up to "
+            "128000 tokens, but can only afford 9050."
+        ),
+        "metadata": {"reason": "weight_exceeds_budget", "limit_source": "openrouter_credits"},
+    }
+}
+IN_FLIGHT_402 = {
+    "error": {
+        "code": 402,
+        "message": "Invented words about requests in flight.",
+        "metadata": {"reason": "in_flight_budget_exhausted", "limit_source": "openrouter_in_flight_budget"},
+    }
+}
+KEY_LIMIT_402 = {
+    "error": {
+        "code": 402,
+        "message": "Invented words about the key's limit.",
+        "metadata": {"limit_source": "openrouter_key_limit"},
+    }
+}
+
+
+def test_a_402_for_the_credit_at_max_says_a_lower_position_holds_less(client, openrouter):
+    openrouter.script = [(402, CREDITS_402)]
+    events = _events(_ask(client, OPUS, "max"))
+    assert events[-1] == {
+        "kind": "error",
+        "detail": (
+            f"OpenRouter refused the call to {OPUS} with 402: the credit on the account behind "
+            "the API key does not cover this request, which may write up to 128,000 tokens while "
+            "the credit can pay for 9,050. Add credit on openrouter.ai (Settings, Credits), then "
+            f"ask again. {LOWER} OpenRouter said: This request requires more credits, or fewer "
+            "max_tokens. You requested up to 128000 tokens, but can only afford 9050."
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "thinking, body, lower",
+    [
+        (None, CREDITS_402, False),
+        ("light", CREDITS_402, False),
+        ("high", IN_FLIGHT_402, True),
+        ("high", KEY_LIMIT_402, True),
+        ("max", IN_FLIGHT_402, True),
+        ("normal", KEY_LIMIT_402, False),
+    ],
+)
+def test_a_402_says_the_lower_position_only_at_high_and_max(
+    client, openrouter, thinking, body, lower
+):
+    openrouter.script = [(402, body)]
+    events = _events(_ask(client, OPUS, thinking))
+    assert events[-1]["kind"] == "error", events[-1]
+    assert (LOWER in events[-1]["detail"]) is lower
